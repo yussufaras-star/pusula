@@ -88,6 +88,15 @@ CREATE TABLE IF NOT EXISTS blocked_identifiers (
     PRIMARY KEY (id_type, id_value)
 );
 
+-- blocked_domains: e-posta kimliklerinde tamamen yok sayılacak
+-- domainler (ör. şirket içi adresler). Sadece e-posta için geçerlidir;
+-- telefonda domain kontrolü yoktur.
+CREATE TABLE IF NOT EXISTS blocked_domains (
+    domain      text PRIMARY KEY,  -- küçük harf, @ olmadan: "rexven.com"
+    note        text,
+    created_at  timestamptz DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS idx_identities_thread ON identities (thread_id);
 
 -- reps: satış temsilcileri (Zoho kullanıcıları).
