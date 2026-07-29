@@ -56,3 +56,36 @@ CREATE TABLE IF NOT EXISTS sync_state (
 CREATE INDEX IF NOT EXISTS idx_events_thread_occurred ON events (thread_id, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_events_rep_occurred ON events (rep_id, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_commitments_status_due ON commitments (status, due_at);
+
+-- identities: kalıcı thread kimliği ile dış kimlikler arasındaki eşleme.
+-- Zoho lead -> contact dönüşümünde ID değişse de hat kopmaz; aynı telefon,
+-- e-posta veya Zoho ID'si her zaman aynı thread'e çözülür.
+CREATE TABLE IF NOT EXISTS identities (
+    id             bigserial PRIMARY KEY,
+    thread_id      text NOT NULL REFERENCES threads (thread_id),
+    id_type        text NOT NULL,  -- zoho_lead | zoho_contact | phone | email
+    id_value       text NOT NULL,  -- normalize edilmiş hali
+    first_seen_at  timestamptz DEFAULT now(),
+    last_seen_at   timestamptz DEFAULT now(),
+    UNIQUE (id_type, id_value)
+);
+
+-- thread_merges: iki hattın birleştirilme kaydı (denetim izi).
+CREATE TABLE IF NOT EXISTS thread_merges (
+    id                bigserial PRIMARY KEY,
+    winner_thread_id  text NOT NULL,
+    loser_thread_id   text NOT NULL,
+    reason            text,  -- hangi kimlik eşleşmesi tetikledi
+    merged_at         timestamptz DEFAULT now()
+);
+
+-- blocked_identifiers: kimlik çözümlemede tamamen yok sayılacak
+-- tanımlayıcılar (ör. santral numarası, ortak ofis e-postası).
+CREATE TABLE IF NOT EXISTS blocked_identifiers (
+    id_type   text NOT NULL,
+    id_value  text NOT NULL,
+    note      text,
+    PRIMARY KEY (id_type, id_value)
+);
+
+CREATE INDEX IF NOT EXISTS idx_identities_thread ON identities (thread_id);
