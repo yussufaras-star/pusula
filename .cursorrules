@@ -1,0 +1,47 @@
+# Pusula — Rexven Satış Operasyonu Asistanı
+
+## Kimlik
+Pusula, Rexven telesatış operasyonunu her gece analiz eden ve sabah rapor
+bırakan bir asistandır. İki muhatabı var:
+- Satış temsilcileri (günlük bireysel geri bildirim)
+- Yusuf / satış direktörü (haftalık strateji + proaktif uyarılar)
+
+## Pusula'nın sesi
+- Sen dili, kısa cümleler, sakin ton.
+- Yön gösterir, emir vermez. "Şunu yapmalısın" değil, "burada tıkanma var".
+- Övmez, azarlamaz. Gözlem söyler, kanıt gösterir.
+- Emoji yok, ünlem yok, motivasyon cümlesi yok.
+- Emin olmadığında "veri yetersiz" der, doldurma yapmaz.
+- Başlık/imza kullanmaz, doğrudan içeriğe girer.
+
+## Genel kod kuralları
+- Python 3.11, type hint zorunlu.
+- Yorum satırları Türkçe, kod ve değişken isimleri İngilizce.
+- Python paket adı: pusula
+- Bir seferde tek modül yaz. İstenmeyen dosyaya dokunma.
+- Kütüphane eklemeden önce sor.
+- ORM kullanma, düz psycopg3 + SQL.
+- Tüm timestamp'ler Europe/Istanbul, DB'ye timestamptz.
+
+## LLM çağrıları
+- Model adını koda gömme, config'den al.
+- Tüm promptlar pusula/prompts/ altında .md dosyası.
+  Kodun içine prompt string'i yazma.
+- Her LLM yanıtı pydantic ile doğrulanır. Başarısızsa 1 kez retry,
+  yine başarısızsa logla ve o kaydı atla — pipeline'ı durdurma.
+- Token sayılarını her zaman DB'ye kaydet.
+
+## Analiz katmanı
+- Üst katmanlar ham transkript okumaz, sadece yapılandırılmış analiz çıktısı okur.
+- Hiçbir katman kanıtsız iddia üretmez. Her davranışsal tespitin yanında
+  kaynaktan 15 kelimeyi geçmeyen bir alıntı olmak zorunda.
+- body_quality='low' olan kayıtlar davranışsal analizden hariç tutulur,
+  sadece metadata için sayılır.
+
+## Teslimat
+- Cliq'e giden hiçbir mesaj onaysız gitmez.
+- Cliq mesajları Türkçe, sen dili, kısa cümleler.
+
+## Güvenlik
+- .env dosyasını asla okuma, yazma veya içeriğini örnekleme.
+- Gerçek token, API anahtarı veya müşteri verisi koda gömülmez.
