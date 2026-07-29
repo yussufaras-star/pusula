@@ -1,9 +1,10 @@
 """Zoho bağlantısını doğrulayan smoke script.
 
-Üç kontrol yapar ve sonucu ekrana basar:
+Dört kontrol yapar ve sonucu ekrana basar:
 1. Access token alınabiliyor mu (token yazdırılmaz, sadece OK denir).
 2. COQL ile Leads modülünden 5 kayıt: id + Full_Name.
-3. Users modülünden aktif kullanıcılar: id + full_name.
+3. Users modülünden aktif kullanıcılar: id + full_name + rol + profil.
+4. Roller (/crm/v7/settings/roles): id + name + reporting_to.
 
 Kullanım: python scripts/zoho_smoke.py
 .env dosyası otomatik yüklenir.
@@ -56,7 +57,21 @@ def main() -> int:
         return 1
     print(f"aktif kullanıcılar: OK ({len(users)} kişi)")
     for user in users:
-        print(f"  {user.get('id')}  {user.get('full_name')}")
+        role = (user.get("role") or {}).get("name")
+        profile = (user.get("profile") or {}).get("name")
+        print(f"  {user.get('id')}  {user.get('full_name')}  rol={role}  profil={profile}")
+
+    # 4. Roller. Yanıt şeması: {"roles": [...]}; reporting_to null olabilir.
+    try:
+        response = _request("GET", "/crm/v7/settings/roles")
+        roles = response.json().get("roles", []) if response.status_code != 204 else []
+    except ZohoCrmError as exc:
+        print(f"roller: HATA — {exc}")
+        return 1
+    print(f"roller: OK ({len(roles)} rol)")
+    for role in roles:
+        reporting_to = (role.get("reporting_to") or {}).get("name")
+        print(f"  {role.get('id')}  {role.get('name')}  reporting_to={reporting_to}")
 
     return 0
 
