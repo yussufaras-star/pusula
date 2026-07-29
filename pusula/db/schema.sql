@@ -113,9 +113,9 @@ CREATE TABLE IF NOT EXISTS reps (
     zoho_role          text,
     zoho_profile       text,
     category           text NOT NULL DEFAULT 'other'
-        CHECK (category IN ('core_telesales', 'consultancy', 'management', 'other')),
+        CHECK (category IN ('sales', 'consultancy', 'management', 'other')),
     category_override  text  -- doluysa haritayı ezer
-        CHECK (category_override IN ('core_telesales', 'consultancy', 'management', 'other')),
+        CHECK (category_override IN ('sales', 'consultancy', 'management', 'other')),
     active             boolean NOT NULL DEFAULT true,
     created_at         timestamptz DEFAULT now(),
     updated_at         timestamptz DEFAULT now()
@@ -124,7 +124,7 @@ CREATE TABLE IF NOT EXISTS reps (
 -- Şema, category_override'dan önce kurulmuş veritabanlarında da
 -- idempotent uygulanabilsin diye kolon ayrıca ALTER ile eklenir.
 ALTER TABLE reps ADD COLUMN IF NOT EXISTS category_override text
-    CHECK (category_override IN ('core_telesales', 'consultancy', 'management', 'other'));
+    CHECK (category_override IN ('sales', 'consultancy', 'management', 'other'));
 
 -- role_category_map: Zoho rol adı -> kategori eşlemesi.
 -- reps.category her sync'te bu haritadan yeniden hesaplanır;
@@ -132,7 +132,23 @@ ALTER TABLE reps ADD COLUMN IF NOT EXISTS category_override text
 CREATE TABLE IF NOT EXISTS role_category_map (
     zoho_role   text PRIMARY KEY,
     category    text NOT NULL
-        CHECK (category IN ('core_telesales', 'consultancy', 'management', 'other')),
+        CHECK (category IN ('sales', 'consultancy', 'management', 'other')),
     note        text,
     created_at  timestamptz DEFAULT now()
 );
+
+-- 'core_telesales' -> 'sales' geçişi: değer kümesinin eski haliyle
+-- kurulmuş veritabanlarında kısıtlar tazelenir ve veri taşınır.
+-- Yeni kurulumda ve tekrarlanan uygulamada etkisiz (idempotent).
+ALTER TABLE reps DROP CONSTRAINT IF EXISTS reps_category_check;
+ALTER TABLE reps DROP CONSTRAINT IF EXISTS reps_category_override_check;
+ALTER TABLE role_category_map DROP CONSTRAINT IF EXISTS role_category_map_category_check;
+UPDATE reps SET category = 'sales' WHERE category = 'core_telesales';
+UPDATE reps SET category_override = 'sales' WHERE category_override = 'core_telesales';
+UPDATE role_category_map SET category = 'sales' WHERE category = 'core_telesales';
+ALTER TABLE reps ADD CONSTRAINT reps_category_check
+    CHECK (category IN ('sales', 'consultancy', 'management', 'other'));
+ALTER TABLE reps ADD CONSTRAINT reps_category_override_check
+    CHECK (category_override IN ('sales', 'consultancy', 'management', 'other'));
+ALTER TABLE role_category_map ADD CONSTRAINT role_category_map_category_check
+    CHECK (category IN ('sales', 'consultancy', 'management', 'other'));
