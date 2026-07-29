@@ -20,8 +20,9 @@ _PHONE_JUNK_RE = re.compile(r"[ \-().]")
 
 
 def _is_valid_turkish_national(digits: str) -> bool:
-    # Ulusal numara 10 hane; alan kodu 2-4 (sabit hat) veya 5 (mobil) ile başlar.
-    return len(digits) == 10 and digits.isdigit() and digits[0] in "2345"
+    """Ulusal numara 10 hane; ilk hane: 2-4 sabit hat, 5 mobil,
+    8 kurumsal (850), 9 rezerve."""
+    return len(digits) == 10 and digits.isdigit() and digits[0] in "234589"
 
 
 def normalize_phone(raw: str) -> str | None:
