@@ -44,6 +44,12 @@ def test_normalize_phone_foreign() -> None:
     assert normalize_phone("+44 20-7946 0958") == "+442079460958"
 
 
+@pytest.mark.parametrize("raw", ["8505323576", "0850 532 35 76", "+90 850 532 35 76"])
+def test_normalize_phone_corporate_850(raw: str) -> None:
+    # 850'li kurumsal numaralar geçerli sayılır.
+    assert normalize_phone(raw) == "+908505323576"
+
+
 # --- resolve_thread (DB gerekli) ---
 
 
@@ -56,7 +62,7 @@ def db() -> Iterator[psycopg.Connection]:
         conn.execute(SCHEMA_PATH.read_text())
         conn.execute(
             "TRUNCATE identities, thread_merges, blocked_identifiers,"
-            " commitments, events, threads CASCADE"
+            " blocked_domains, commitments, events, threads CASCADE"
         )
         yield conn
 
@@ -149,3 +155,33 @@ def test_resolve_ignores_blocked_identifier(db: psycopg.Connection) -> None:
         "SELECT count(*) FROM identities WHERE id_type = 'phone'"
     ).fetchone()
     assert count == (1,)
+
+
+def test_resolve_ignores_blocked_domain(db: psycopg.Connection) -> None:
+    db.execute(
+        "INSERT INTO blocked_domains (domain, note) VALUES ('rexven.com', 'şirket içi')"
+    )
+
+    # Bloklu domaindeki e-posta yok sayılır: identities'e yazılmaz.
+    first = resolve_thread(email="Ali@Rexven.com", phone="0532 123 45 67")
+    count = db.execute(
+        "SELECT count(*) FROM identities WHERE id_type = 'email'"
+    ).fetchone()
+    assert count == (0,)
+
+    # Aynı bloklu e-posta tek başına gelirse eşleşme kuramaz, yeni hat açar.
+    second = resolve_thread(email="ali@rexven.com")
+    assert second != first
+
+
+def test_resolve_processes_non_blocked_domain_email(db: psycopg.Connection) -> None:
+    db.execute("INSERT INTO blocked_domains (domain) VALUES ('rexven.com')")
+
+    # Domaini listede olmayan e-posta normal işlenir.
+    thread_id = resolve_thread(email="Ali@Example.com")
+    row = db.execute(
+        "SELECT thread_id FROM identities"
+        " WHERE id_type = 'email' AND id_value = 'ali@example.com'"
+    ).fetchone()
+    assert row == (thread_id,)
+    assert resolve_thread(email="ali@example.com") == thread_id
