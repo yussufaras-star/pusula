@@ -89,3 +89,22 @@ CREATE TABLE IF NOT EXISTS blocked_identifiers (
 );
 
 CREATE INDEX IF NOT EXISTS idx_identities_thread ON identities (thread_id);
+
+-- reps: satış temsilcileri (Zoho kullanıcıları).
+-- category alanını Zoho'dan gelen rol BELİRLEMEZ, elle yönetilir.
+-- Bilinçli karar: Zoho rol/profil adları operasyonel gerçeği
+-- yansıtmayabilir; kimin çekirdek telesatışta kimin danışmanlıkta
+-- olduğu elle atanır. zoho_role ve zoho_profile sadece referans
+-- amaçlıdır, filtre olarak kullanılmaz.
+CREATE TABLE IF NOT EXISTS reps (
+    rep_id        text PRIMARY KEY,  -- Zoho user id
+    full_name     text NOT NULL,
+    email         text,
+    zoho_role     text,  -- referans amaçlı, filtre olarak kullanılmaz
+    zoho_profile  text,
+    category      text NOT NULL DEFAULT 'other'
+        CHECK (category IN ('core_telesales', 'consultancy', 'management', 'other')),
+    active        boolean NOT NULL DEFAULT true,
+    created_at    timestamptz DEFAULT now(),
+    updated_at    timestamptz DEFAULT now()
+);
