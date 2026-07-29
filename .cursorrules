@@ -45,3 +45,5 @@ bırakan bir asistandır. İki muhatabı var:
 ## Güvenlik
 - .env dosyasını asla okuma, yazma veya içeriğini örnekleme.
 - Gerçek token, API anahtarı veya müşteri verisi koda gömülmez.
+- Görev almadan önce ROADMAP.md'yi oku. Sıradaki adımın hangisi olduğunu
+  ve kapsam dışı bırakılanları bil.
