@@ -1,7 +1,7 @@
 # Pusula — Yol Haritası
 
 ## Amaç
-Rexven telesatış operasyonunun çok kanallı verisini toplayıp iki çıktı üretmek:
+Rexven satış operasyonunun çok kanallı verisini toplayıp iki çıktı üretmek:
 temsilcilere günlük davranışsal geri bildirim, direktöre haftalık strateji
 ve proaktif uyarı.
 
