@@ -8,7 +8,10 @@ LLM yok; tüm mantık bu dosyadaki koddur.
 """
 
 import re
+from typing import Any
 from uuid import uuid4
+
+import psycopg
 
 from pusula.db import client
 
@@ -17,8 +20,9 @@ _PHONE_JUNK_RE = re.compile(r"[ \-().]")
 
 
 def _is_valid_turkish_national(digits: str) -> bool:
-    # Ulusal numara 10 hane; alan kodu 2-4 (sabit hat) veya 5 (mobil) ile başlar.
-    return len(digits) == 10 and digits.isdigit() and digits[0] in "2345"
+    """Ulusal numara 10 hane; ilk hane: 2-4 sabit hat, 5 mobil,
+    8 kurumsal (850), 9 rezerve."""
+    return len(digits) == 10 and digits.isdigit() and digits[0] in "234589"
 
 
 def normalize_phone(raw: str) -> str | None:
@@ -60,6 +64,24 @@ def normalize_phone(raw: str) -> str | None:
     else:
         return None
     return "+90" + national if _is_valid_turkish_national(national) else None
+
+
+def _is_blocked(conn: psycopg.Connection[Any], id_type: str, id_value: str) -> bool:
+    """Tanımlayıcı çözümlemede yok sayılmalı mı.
+
+    Önce blocked_identifiers'a bakılır. E-posta kimliğinde birebir
+    eşleşme yoksa @ sonrasındaki domain blocked_domains'de aranır.
+    İkisinden biri eşleşirse kimlik yok sayılır. Telefonda domain
+    kontrolü yoktur.
+    """
+    if client.is_identifier_blocked(conn, id_type, id_value):
+        return True
+    if id_type != "email":
+        return False
+    # normalize_email zaten küçük harfe çevirdi; domain listedeki biçimde.
+    domain = id_value.rpartition("@")[2]
+    query = "SELECT 1 FROM blocked_domains WHERE domain = %s"
+    return conn.execute(query, (domain,)).fetchone() is not None
 
 
 def normalize_email(raw: str) -> str | None:
@@ -110,7 +132,7 @@ def resolve_thread(
         active_pairs = [
             (id_type, id_value)
             for id_type, id_value in pairs
-            if not client.is_identifier_blocked(conn, id_type, id_value)
+            if not _is_blocked(conn, id_type, id_value)
         ]
 
         # b) Mevcut eşleşmeleri topla (hangi kimlik hangi thread'e çıkıyor).
