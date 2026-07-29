@@ -1,0 +1,4 @@
+# Pusula bağımlılıkları. anthropic ve fastapi ilgili modüller yazılınca eklenecek.
+psycopg[binary]==3.3.4
+psycopg-pool==3.3.1
+pydantic==2.13.4
