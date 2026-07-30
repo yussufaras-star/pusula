@@ -39,3 +39,9 @@ implemented). The runnable pieces today are the `pytest` suite and
   secrets (`ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_REFRESH_TOKEN`,
   `ZOHO_ACCOUNTS_DOMAIN`, `ZOHO_API_DOMAIN`). Without them it exits cleanly with
   "Eksik ortam değişkenleri".
+- **Zoho is intentionally not reachable from the cloud environment.** By a
+  deliberate decision, Zoho credentials live only on the local machine and are
+  not added as cloud secrets. Do not request Zoho secrets or try to verify the
+  live Zoho path from a cloud agent — running `scripts/zoho_smoke.py` here is
+  expected to stop at the "Eksik ortam değişkenleri" check. Verify the Zoho
+  client locally instead.
