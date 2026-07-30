@@ -12,6 +12,7 @@ sorgular config.get_org_id() ile aktif org'a kapsamlanır.
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Any
 
 import psycopg
@@ -94,6 +95,32 @@ def set_sync_state(state: SyncState) -> None:
         conn.execute(
             query, (get_org_id(), state.source_name, state.last_synced_at, state.last_cursor)
         )
+
+
+def touch_thread(thread_id: str, channel: str, occurred_at: datetime | None) -> None:
+    """threads.last_touch_at ve touch_count_by_channel'ı günceller.
+
+    last_touch_at geriye gitmez (greatest); kanal sayacı bir artar.
+    occurred_at None ise last_touch_at'e dokunulmaz, sadece sayaç artar.
+    """
+    query = """
+        UPDATE threads SET
+            last_touch_at = greatest(last_touch_at, %(occurred_at)s),
+            touch_count_by_channel = jsonb_set(
+                coalesce(touch_count_by_channel, '{}'::jsonb),
+                ARRAY[%(channel)s],
+                to_jsonb(coalesce((touch_count_by_channel ->> %(channel)s)::int, 0) + 1)
+            )
+        WHERE org_id = %(org_id)s AND thread_id = %(thread_id)s
+    """
+    params = {
+        "org_id": get_org_id(),
+        "thread_id": thread_id,
+        "channel": channel,
+        "occurred_at": occurred_at,
+    }
+    with _get_pool().connection() as conn:
+        conn.execute(query, params)
 
 
 # --- Kimlik çözümleme yardımcıları (identity.py kullanır) ---
