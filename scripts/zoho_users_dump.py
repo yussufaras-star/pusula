@@ -31,21 +31,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import psycopg
 from dotenv import load_dotenv
 
+from pusula.config import get_org_id
 from pusula.zoho import ZohoAuthError, ZohoCrmError
 from pusula.zoho.crm import _request
 
 # category türetilmiş alandır: haritadan hesaplanır, override ezer.
 # category_override ve active bilinçli olarak güncellenmez.
 _UPSERT_QUERY = """
-    INSERT INTO reps (rep_id, full_name, email, zoho_role, zoho_profile, category)
+    INSERT INTO reps (org_id, rep_id, full_name, email, zoho_role, zoho_profile, category)
     VALUES (
-        %(rep_id)s, %(full_name)s, %(email)s, %(zoho_role)s, %(zoho_profile)s,
+        %(org_id)s, %(rep_id)s, %(full_name)s, %(email)s, %(zoho_role)s, %(zoho_profile)s,
         coalesce(
-            (SELECT category FROM role_category_map WHERE zoho_role = %(zoho_role)s),
+            (SELECT category FROM role_category_map
+             WHERE org_id = %(org_id)s AND zoho_role = %(zoho_role)s),
             'other'
         )
     )
-    ON CONFLICT (rep_id) DO UPDATE SET
+    ON CONFLICT (org_id, rep_id) DO UPDATE SET
         full_name = EXCLUDED.full_name,
         email = EXCLUDED.email,
         zoho_role = EXCLUDED.zoho_role,
@@ -58,8 +60,9 @@ _UPSERT_QUERY = """
 _UNMAPPED_ROLES_QUERY = """
     SELECT r.zoho_role, count(*)
     FROM reps r
-    LEFT JOIN role_category_map m ON m.zoho_role = r.zoho_role
-    WHERE r.zoho_role IS NOT NULL AND m.zoho_role IS NULL
+    LEFT JOIN role_category_map m
+        ON m.org_id = r.org_id AND m.zoho_role = r.zoho_role
+    WHERE r.org_id = %s AND r.zoho_role IS NOT NULL AND m.zoho_role IS NULL
     GROUP BY r.zoho_role
     ORDER BY count(*) DESC, r.zoho_role
 """
@@ -113,14 +116,18 @@ def upsert_reps(
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
         raise RuntimeError("DATABASE_URL ortam değişkeni tanımlı değil")
+    org_id = get_org_id()
     with psycopg.connect(database_url) as conn:
         before = dict(
-            conn.execute("SELECT rep_id, category FROM reps").fetchall()
+            conn.execute(
+                "SELECT rep_id, category FROM reps WHERE org_id = %s", (org_id,)
+            ).fetchall()
         )
         for user in users:
             conn.execute(
                 _UPSERT_QUERY,
                 {
+                    "org_id": org_id,
                     "rep_id": user.get("id"),
                     "full_name": user.get("full_name"),
                     "email": user.get("email"),
@@ -129,14 +136,16 @@ def upsert_reps(
                 },
             )
         after = conn.execute(
-            "SELECT rep_id, full_name, category FROM reps ORDER BY full_name"
+            "SELECT rep_id, full_name, category FROM reps"
+            " WHERE org_id = %s ORDER BY full_name",
+            (org_id,),
         ).fetchall()
         category_changes = [
             (rep_id, full_name, before[rep_id], category)
             for rep_id, full_name, category in after
             if rep_id in before and before[rep_id] != category
         ]
-        unmapped_roles = conn.execute(_UNMAPPED_ROLES_QUERY).fetchall()
+        unmapped_roles = conn.execute(_UNMAPPED_ROLES_QUERY, (org_id,)).fetchall()
     return category_changes, unmapped_roles
 
 

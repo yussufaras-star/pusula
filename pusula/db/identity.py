@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import psycopg
 
+from pusula.config import get_org_id
 from pusula.db import client
 
 # Boşluk, tire, parantez ve nokta telefon girdisinden temizlenir.
@@ -80,8 +81,8 @@ def _is_blocked(conn: psycopg.Connection[Any], id_type: str, id_value: str) -> b
         return False
     # normalize_email zaten küçük harfe çevirdi; domain listedeki biçimde.
     domain = id_value.rpartition("@")[2]
-    query = "SELECT 1 FROM blocked_domains WHERE domain = %s"
-    return conn.execute(query, (domain,)).fetchone() is not None
+    query = "SELECT 1 FROM blocked_domains WHERE org_id = %s AND domain = %s"
+    return conn.execute(query, (get_org_id(), domain)).fetchone() is not None
 
 
 def normalize_email(raw: str) -> str | None:
