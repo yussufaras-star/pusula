@@ -10,6 +10,9 @@ eklendikçe kayıt defterinin dolması için buradan import edilmelidir.
 from pusula.ingest.base import Ingester, IngestError, IngestResult, RawRecord
 from pusula.ingest.registry import all_ingesters, get, register
 
+# Somut ingester'lar import edilince @register çalışır.
+from pusula.ingest.crm_calls import CrmCallsIngester as _CrmCallsIngester  # noqa: F401
+
 __all__ = [
     "Ingester",
     "IngestError",
