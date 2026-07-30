@@ -8,7 +8,7 @@ aynıdır.
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # schema.sql'deki CHECK kısıtlarıyla birebir aynı değer kümeleri
 Channel = Literal["call", "email", "whatsapp", "meeting", "note", "task"]
@@ -31,6 +31,14 @@ class Event(BaseModel):
     body_quality: BodyQuality | None = None
     meta: dict[str, Any] | None = None
     created_at: datetime | None = None
+
+    # Geçici kimlik alanları: DB'ye YAZILMAZ (exclude=True), sadece
+    # resolve_thread için kullanılır. Ingester'ın to_event'i ham
+    # kayıttan çıkarıp doldurur (bkz. ingest/base.py).
+    phone: str | None = Field(default=None, exclude=True)
+    email: str | None = Field(default=None, exclude=True)
+    zoho_lead_id: str | None = Field(default=None, exclude=True)
+    zoho_contact_id: str | None = Field(default=None, exclude=True)
 
 
 class Thread(BaseModel):
