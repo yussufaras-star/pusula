@@ -185,3 +185,25 @@ def test_resolve_processes_non_blocked_domain_email(db: psycopg.Connection) -> N
     ).fetchone()
     assert row == (thread_id,)
     assert resolve_thread(email="ali@example.com") == thread_id
+
+
+def test_resolve_is_org_scoped(db: psycopg.Connection) -> None:
+    # Başka org'un blok kayıtları rexven'i etkilemez; ORG_ID tanımlı
+    # olmadığında tüm kayıtlar varsayılan org'a (rexven) yazılır.
+    db.execute(
+        "INSERT INTO blocked_identifiers (org_id, id_type, id_value)"
+        " VALUES ('other_org', 'phone', '+905321234567')"
+    )
+    db.execute(
+        "INSERT INTO blocked_domains (org_id, domain) VALUES ('other_org', 'example.com')"
+    )
+
+    thread_id = resolve_thread(phone="0532 123 45 67", email="ali@example.com")
+    rows = db.execute(
+        "SELECT org_id, id_type FROM identities WHERE thread_id = %s ORDER BY id_type",
+        (thread_id,),
+    ).fetchall()
+    assert rows == [("rexven", "email"), ("rexven", "phone")]
+    assert db.execute(
+        "SELECT org_id FROM threads WHERE thread_id = %s", (thread_id,)
+    ).fetchone() == ("rexven",)

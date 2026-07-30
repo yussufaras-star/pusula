@@ -1,11 +1,53 @@
 -- Pusula veritabanı şeması.
--- Tüm timestamp'ler timestamptz; uygulama katmanı Europe/Istanbul kullanır.
+-- Tüm timestamp'ler timestamptz; uygulama katmanı org'un timezone'unu
+-- (bugün Europe/Istanbul) kullanır.
+--
+-- org_id: çok kiracılılık BUGÜN kurulmuyor; tüm veri tablolarında
+-- org_id taşınması, ileride başka satış operasyonlarının aynı şemayla
+-- çalışabilmesi için. Varsayılan 'rexven'; uygulama katmanı değeri
+-- pusula/config.py'den (ORG_ID) okur.
+--
+-- Dosya hem sıfırdan hem mevcut veritabanına uygulanabilir: CREATE'ler
+-- son hâli tanımlar, sondaki geçiş blokları eski kurulumları aynı hâle
+-- getirir (idempotent).
+
+-- orgs: Pusula'yı kullanan organizasyonlar.
+CREATE TABLE IF NOT EXISTS orgs (
+    org_id      text PRIMARY KEY,
+    name        text NOT NULL,
+    timezone    text NOT NULL DEFAULT 'Europe/Istanbul',
+    created_at  timestamptz DEFAULT now()
+);
+
+-- segments: org'un huni segmentleri (ör. hot_core / Sıcak Çekirdek).
+-- Tanımlar koda değil veriye yazılır; seed dosyasıyla yüklenir.
+CREATE TABLE IF NOT EXISTS segments (
+    org_id      text NOT NULL,
+    key         text NOT NULL,  -- 'hot_core'
+    label       text NOT NULL,  -- 'Sıcak Çekirdek'
+    sort_order  int NOT NULL,
+    PRIMARY KEY (org_id, key)
+);
+
+-- bug_codes: davranışsal hata kodu kataloğu (ROADMAP'teki 0x kodları).
+-- description LLM'e verilecek tanımdır; kodlar koda gömülmez.
+CREATE TABLE IF NOT EXISTS bug_codes (
+    org_id       text NOT NULL,
+    code         text NOT NULL,  -- '0x0001'
+    scope        text NOT NULL CHECK (scope IN ('intra_call', 'cross_channel')),
+    title        text NOT NULL,  -- kısa ad
+    description  text NOT NULL,  -- LLM'e verilecek tanım
+    active       boolean NOT NULL DEFAULT true,
+    created_at   timestamptz DEFAULT now(),
+    PRIMARY KEY (org_id, code)
+);
 
 -- events: tüm kanallardan gelen ham olay kayıtları.
--- (channel, source_ref) tekilliği ile aynı kaynak kaydın iki kez
--- yazılması engellenir (idempotent ingest).
+-- (org_id, channel, source_ref) tekilliği ile aynı kaynak kaydın iki
+-- kez yazılması engellenir (idempotent ingest).
 CREATE TABLE IF NOT EXISTS events (
     id            bigserial PRIMARY KEY,
+    org_id        text NOT NULL DEFAULT 'rexven',
     thread_id     text,
     channel       text CHECK (channel IN ('call', 'email', 'whatsapp', 'meeting', 'note', 'task')),
     direction     text CHECK (direction IN ('inbound', 'outbound', 'internal')),
@@ -16,25 +58,30 @@ CREATE TABLE IF NOT EXISTS events (
     body_quality  text CHECK (body_quality IN ('low', 'medium', 'high')),
     meta          jsonb,
     created_at    timestamptz DEFAULT now(),
-    UNIQUE (channel, source_ref)
+    UNIQUE (org_id, channel, source_ref)
 );
 
 -- threads: müşteri/aday bazında konuşma zinciri özeti ve durumu.
+-- segment, org'un segments tablosundaki bir key'e referans verir.
 CREATE TABLE IF NOT EXISTS threads (
-    thread_id               text PRIMARY KEY,
+    org_id                  text NOT NULL DEFAULT 'rexven',
+    thread_id               text NOT NULL,
     segment                 text,
     owner_rep_id            text,
     first_touch_at          timestamptz,
     last_touch_at           timestamptz,
     touch_count_by_channel  jsonb,
     state                   jsonb,
-    created_at              timestamptz DEFAULT now()
+    created_at              timestamptz DEFAULT now(),
+    PRIMARY KEY (org_id, thread_id),
+    FOREIGN KEY (org_id, segment) REFERENCES segments (org_id, key)
 );
 
 -- commitments: konuşmalardan çıkarılan taahhütler ve akıbetleri.
 -- quote: taahhüdün kaynaktaki kanıt alıntısı.
 CREATE TABLE IF NOT EXISTS commitments (
     id                  bigserial PRIMARY KEY,
+    org_id              text NOT NULL DEFAULT 'rexven',
     thread_id           text,
     source_event_id     bigint REFERENCES events (id),
     text                text,
@@ -45,12 +92,14 @@ CREATE TABLE IF NOT EXISTS commitments (
     created_at          timestamptz DEFAULT now()
 );
 
--- sync_state: kaynak bazında senkronizasyon imleci.
+-- sync_state: org + kaynak bazında senkronizasyon imleci.
 CREATE TABLE IF NOT EXISTS sync_state (
-    source_name     text PRIMARY KEY,
+    org_id          text NOT NULL DEFAULT 'rexven',
+    source_name     text NOT NULL,
     last_synced_at  timestamptz,
     last_cursor     text,
-    updated_at      timestamptz
+    updated_at      timestamptz,
+    PRIMARY KEY (org_id, source_name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_thread_occurred ON events (thread_id, occurred_at);
@@ -59,20 +108,23 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status_due ON commitments (status, du
 
 -- identities: kalıcı thread kimliği ile dış kimlikler arasındaki eşleme.
 -- Zoho lead -> contact dönüşümünde ID değişse de hat kopmaz; aynı telefon,
--- e-posta veya Zoho ID'si her zaman aynı thread'e çözülür.
+-- e-posta veya Zoho ID'si her zaman aynı org içindeki aynı thread'e çözülür.
 CREATE TABLE IF NOT EXISTS identities (
     id             bigserial PRIMARY KEY,
-    thread_id      text NOT NULL REFERENCES threads (thread_id),
+    org_id         text NOT NULL DEFAULT 'rexven',
+    thread_id      text NOT NULL,
     id_type        text NOT NULL,  -- zoho_lead | zoho_contact | phone | email
     id_value       text NOT NULL,  -- normalize edilmiş hali
     first_seen_at  timestamptz DEFAULT now(),
     last_seen_at   timestamptz DEFAULT now(),
-    UNIQUE (id_type, id_value)
+    UNIQUE (org_id, id_type, id_value),
+    FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id)
 );
 
 -- thread_merges: iki hattın birleştirilme kaydı (denetim izi).
 CREATE TABLE IF NOT EXISTS thread_merges (
     id                bigserial PRIMARY KEY,
+    org_id            text NOT NULL DEFAULT 'rexven',
     winner_thread_id  text NOT NULL,
     loser_thread_id   text NOT NULL,
     reason            text,  -- hangi kimlik eşleşmesi tetikledi
@@ -82,19 +134,22 @@ CREATE TABLE IF NOT EXISTS thread_merges (
 -- blocked_identifiers: kimlik çözümlemede tamamen yok sayılacak
 -- tanımlayıcılar (ör. santral numarası, ortak ofis e-postası).
 CREATE TABLE IF NOT EXISTS blocked_identifiers (
+    org_id    text NOT NULL DEFAULT 'rexven',
     id_type   text NOT NULL,
     id_value  text NOT NULL,
     note      text,
-    PRIMARY KEY (id_type, id_value)
+    PRIMARY KEY (org_id, id_type, id_value)
 );
 
 -- blocked_domains: e-posta kimliklerinde tamamen yok sayılacak
 -- domainler (ör. şirket içi adresler). Sadece e-posta için geçerlidir;
 -- telefonda domain kontrolü yoktur.
 CREATE TABLE IF NOT EXISTS blocked_domains (
-    domain      text PRIMARY KEY,  -- küçük harf, @ olmadan: "rexven.com"
+    org_id      text NOT NULL DEFAULT 'rexven',
+    domain      text NOT NULL,  -- küçük harf, @ olmadan: "rexven.com"
     note        text,
-    created_at  timestamptz DEFAULT now()
+    created_at  timestamptz DEFAULT now(),
+    PRIMARY KEY (org_id, domain)
 );
 
 CREATE INDEX IF NOT EXISTS idx_identities_thread ON identities (thread_id);
@@ -107,7 +162,8 @@ CREATE INDEX IF NOT EXISTS idx_identities_thread ON identities (thread_id);
 -- category_override ve active elle yönetilir, sync asla dokunmaz.
 -- zoho_profile sadece referans amaçlıdır, filtre olarak kullanılmaz.
 CREATE TABLE IF NOT EXISTS reps (
-    rep_id             text PRIMARY KEY,  -- Zoho user id
+    org_id             text NOT NULL DEFAULT 'rexven',
+    rep_id             text NOT NULL,  -- Zoho user id
     full_name          text NOT NULL,
     email              text,
     zoho_role          text,
@@ -118,7 +174,8 @@ CREATE TABLE IF NOT EXISTS reps (
         CHECK (category_override IN ('sales', 'consultancy', 'management', 'other')),
     active             boolean NOT NULL DEFAULT true,
     created_at         timestamptz DEFAULT now(),
-    updated_at         timestamptz DEFAULT now()
+    updated_at         timestamptz DEFAULT now(),
+    PRIMARY KEY (org_id, rep_id)
 );
 
 -- Şema, category_override'dan önce kurulmuş veritabanlarında da
@@ -130,11 +187,13 @@ ALTER TABLE reps ADD COLUMN IF NOT EXISTS category_override text
 -- reps.category her sync'te bu haritadan yeniden hesaplanır;
 -- haritada olmayan roller 'other' sayılır ve sync uyarı basar.
 CREATE TABLE IF NOT EXISTS role_category_map (
-    zoho_role   text PRIMARY KEY,
+    org_id      text NOT NULL DEFAULT 'rexven',
+    zoho_role   text NOT NULL,
     category    text NOT NULL
         CHECK (category IN ('sales', 'consultancy', 'management', 'other')),
     note        text,
-    created_at  timestamptz DEFAULT now()
+    created_at  timestamptz DEFAULT now(),
+    PRIMARY KEY (org_id, zoho_role)
 );
 
 -- 'core_telesales' -> 'sales' geçişi: değer kümesinin eski haliyle
@@ -152,3 +211,61 @@ ALTER TABLE reps ADD CONSTRAINT reps_category_override_check
     CHECK (category_override IN ('sales', 'consultancy', 'management', 'other'));
 ALTER TABLE role_category_map ADD CONSTRAINT role_category_map_category_check
     CHECK (category IN ('sales', 'consultancy', 'management', 'other'));
+
+-- org_id geçişi: org_id'siz kurulmuş veritabanlarında kolonlar eklenir
+-- (mevcut satırlar 'rexven' olur) ve PK/UNIQUE/FK kısıtları org_id'yi
+-- içerecek şekilde yeniden kurulur. Sıfırdan kurulumda CREATE'ler zaten
+-- son hâli verdiği için blok aynı kısıtları yeniden kurar; veri kaybı
+-- veya davranış değişikliği yoktur (idempotent).
+ALTER TABLE events              ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
+ALTER TABLE threads             ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
+ALTER TABLE commitments         ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
+ALTER TABLE sync_state          ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
+ALTER TABLE identities          ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
+ALTER TABLE thread_merges       ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
+ALTER TABLE blocked_identifiers ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
+ALTER TABLE blocked_domains     ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
+ALTER TABLE reps                ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
+ALTER TABLE role_category_map   ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
+
+-- threads PK'sı değişeceği için ona bağımlı FK önce bırakılır.
+ALTER TABLE identities DROP CONSTRAINT IF EXISTS identities_thread_id_fkey;
+ALTER TABLE identities DROP CONSTRAINT IF EXISTS identities_org_id_thread_id_fkey;
+
+-- threads: PK (org_id, thread_id) + segment FK'sı.
+ALTER TABLE threads DROP CONSTRAINT IF EXISTS threads_org_id_segment_fkey;
+ALTER TABLE threads DROP CONSTRAINT IF EXISTS threads_pkey;
+ALTER TABLE threads ADD CONSTRAINT threads_pkey PRIMARY KEY (org_id, thread_id);
+ALTER TABLE threads ADD CONSTRAINT threads_org_id_segment_fkey
+    FOREIGN KEY (org_id, segment) REFERENCES segments (org_id, key);
+
+-- identities: tekillik ve threads FK'sı org bazlı.
+ALTER TABLE identities DROP CONSTRAINT IF EXISTS identities_id_type_id_value_key;
+ALTER TABLE identities DROP CONSTRAINT IF EXISTS identities_org_id_id_type_id_value_key;
+ALTER TABLE identities ADD CONSTRAINT identities_org_id_id_type_id_value_key
+    UNIQUE (org_id, id_type, id_value);
+ALTER TABLE identities ADD CONSTRAINT identities_org_id_thread_id_fkey
+    FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id);
+
+-- events: ingest tekilliği org bazlı.
+ALTER TABLE events DROP CONSTRAINT IF EXISTS events_channel_source_ref_key;
+ALTER TABLE events DROP CONSTRAINT IF EXISTS events_org_id_channel_source_ref_key;
+ALTER TABLE events ADD CONSTRAINT events_org_id_channel_source_ref_key
+    UNIQUE (org_id, channel, source_ref);
+
+-- Kalan PK genişletmeleri (bunlara referans veren FK yok).
+ALTER TABLE sync_state DROP CONSTRAINT IF EXISTS sync_state_pkey;
+ALTER TABLE sync_state ADD CONSTRAINT sync_state_pkey
+    PRIMARY KEY (org_id, source_name);
+ALTER TABLE blocked_identifiers DROP CONSTRAINT IF EXISTS blocked_identifiers_pkey;
+ALTER TABLE blocked_identifiers ADD CONSTRAINT blocked_identifiers_pkey
+    PRIMARY KEY (org_id, id_type, id_value);
+ALTER TABLE blocked_domains DROP CONSTRAINT IF EXISTS blocked_domains_pkey;
+ALTER TABLE blocked_domains ADD CONSTRAINT blocked_domains_pkey
+    PRIMARY KEY (org_id, domain);
+ALTER TABLE reps DROP CONSTRAINT IF EXISTS reps_pkey;
+ALTER TABLE reps ADD CONSTRAINT reps_pkey
+    PRIMARY KEY (org_id, rep_id);
+ALTER TABLE role_category_map DROP CONSTRAINT IF EXISTS role_category_map_pkey;
+ALTER TABLE role_category_map ADD CONSTRAINT role_category_map_pkey
+    PRIMARY KEY (org_id, zoho_role);

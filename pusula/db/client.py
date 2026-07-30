@@ -5,7 +5,8 @@
 - Kimlik çözümleme yardımcıları: identity.py'nin kullandığı, tek
   transaction içinde çalışabilmek için Connection parametresi alan
   fonksiyonlar ve transaction() context manager'ı.
-Bağlantı bilgisi DATABASE_URL ortam değişkeninden okunur.
+Bağlantı bilgisi DATABASE_URL ortam değişkeninden okunur. Tüm
+sorgular config.get_org_id() ile aktif org'a kapsamlanır.
 """
 
 import os
@@ -18,6 +19,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 from psycopg_pool import ConnectionPool
 
+from pusula.config import get_org_id
 from pusula.db.models import Event, SyncState
 
 # Havuz ilk kullanımda açılır; import anında bağlantı kurulmaz.
@@ -35,19 +37,21 @@ def _get_pool() -> ConnectionPool:
 def insert_event(event: Event) -> int | None:
     """Olayı events tablosuna yazar.
 
-    (channel, source_ref) çakışmasında hiçbir şey yapmaz (idempotent
-    ingest). Yeni kayıt yazıldıysa id, çakışma olduysa None döner.
+    (org_id, channel, source_ref) çakışmasında hiçbir şey yapmaz
+    (idempotent ingest). Yeni kayıt yazıldıysa id, çakışma olduysa
+    None döner.
     """
     query = """
         INSERT INTO events (
-            thread_id, channel, direction, rep_id, occurred_at,
+            org_id, thread_id, channel, direction, rep_id, occurred_at,
             source_ref, body, body_quality, meta
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (channel, source_ref) DO NOTHING
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (org_id, channel, source_ref) DO NOTHING
         RETURNING id
     """
     params = (
+        get_org_id(),
         event.thread_id,
         event.channel,
         event.direction,
@@ -65,25 +69,31 @@ def insert_event(event: Event) -> int | None:
 
 def get_sync_state(source_name: str) -> SyncState | None:
     """Kaynağın senkron durumunu döner; kayıt yoksa None."""
-    query = "SELECT * FROM sync_state WHERE source_name = %s"
+    query = """
+        SELECT source_name, last_synced_at, last_cursor, updated_at
+        FROM sync_state
+        WHERE org_id = %s AND source_name = %s
+    """
     with _get_pool().connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
-            row = cur.execute(query, (source_name,)).fetchone()
+            row = cur.execute(query, (get_org_id(), source_name)).fetchone()
     return SyncState(**row) if row is not None else None
 
 
 def set_sync_state(state: SyncState) -> None:
     """Kaynağın senkron durumunu yazar (upsert). updated_at DB'de atanır."""
     query = """
-        INSERT INTO sync_state (source_name, last_synced_at, last_cursor, updated_at)
-        VALUES (%s, %s, %s, now())
-        ON CONFLICT (source_name) DO UPDATE SET
+        INSERT INTO sync_state (org_id, source_name, last_synced_at, last_cursor, updated_at)
+        VALUES (%s, %s, %s, %s, now())
+        ON CONFLICT (org_id, source_name) DO UPDATE SET
             last_synced_at = EXCLUDED.last_synced_at,
             last_cursor = EXCLUDED.last_cursor,
             updated_at = now()
     """
     with _get_pool().connection() as conn:
-        conn.execute(query, (state.source_name, state.last_synced_at, state.last_cursor))
+        conn.execute(
+            query, (get_org_id(), state.source_name, state.last_synced_at, state.last_cursor)
+        )
 
 
 # --- Kimlik çözümleme yardımcıları (identity.py kullanır) ---
@@ -100,22 +110,31 @@ def transaction() -> Iterator[psycopg.Connection[Any]]:
 
 def is_identifier_blocked(conn: psycopg.Connection[Any], id_type: str, id_value: str) -> bool:
     """Tanımlayıcı blocked_identifiers'da mı."""
-    query = "SELECT 1 FROM blocked_identifiers WHERE id_type = %s AND id_value = %s"
-    return conn.execute(query, (id_type, id_value)).fetchone() is not None
+    query = """
+        SELECT 1 FROM blocked_identifiers
+        WHERE org_id = %s AND id_type = %s AND id_value = %s
+    """
+    return conn.execute(query, (get_org_id(), id_type, id_value)).fetchone() is not None
 
 
 def find_identity_thread_id(
     conn: psycopg.Connection[Any], id_type: str, id_value: str
 ) -> str | None:
     """Tanımlayıcının bağlı olduğu thread_id'yi döner; kayıt yoksa None."""
-    query = "SELECT thread_id FROM identities WHERE id_type = %s AND id_value = %s"
-    row = conn.execute(query, (id_type, id_value)).fetchone()
+    query = """
+        SELECT thread_id FROM identities
+        WHERE org_id = %s AND id_type = %s AND id_value = %s
+    """
+    row = conn.execute(query, (get_org_id(), id_type, id_value)).fetchone()
     return row[0] if row is not None else None
 
 
 def create_thread(conn: psycopg.Connection[Any], thread_id: str) -> None:
     """threads tablosuna yeni bir satır açar; created_at DB'de atanır."""
-    conn.execute("INSERT INTO threads (thread_id) VALUES (%s)", (thread_id,))
+    conn.execute(
+        "INSERT INTO threads (org_id, thread_id) VALUES (%s, %s)",
+        (get_org_id(), thread_id),
+    )
 
 
 def upsert_identity(
@@ -123,13 +142,13 @@ def upsert_identity(
 ) -> None:
     """Tanımlayıcıyı thread'e bağlar; varsa last_seen_at'i günceller."""
     query = """
-        INSERT INTO identities (thread_id, id_type, id_value)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (id_type, id_value) DO UPDATE SET
+        INSERT INTO identities (org_id, thread_id, id_type, id_value)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (org_id, id_type, id_value) DO UPDATE SET
             thread_id = EXCLUDED.thread_id,
             last_seen_at = now()
     """
-    conn.execute(query, (thread_id, id_type, id_value))
+    conn.execute(query, (get_org_id(), thread_id, id_type, id_value))
 
 
 def pick_oldest_thread(conn: psycopg.Connection[Any], thread_ids: list[str]) -> str:
@@ -139,11 +158,11 @@ def pick_oldest_thread(conn: psycopg.Connection[Any], thread_ids: list[str]) -> 
     """
     query = """
         SELECT thread_id FROM threads
-        WHERE thread_id = ANY(%s)
+        WHERE org_id = %s AND thread_id = ANY(%s)
         ORDER BY created_at ASC, thread_id ASC
         LIMIT 1
     """
-    row = conn.execute(query, (thread_ids,)).fetchone()
+    row = conn.execute(query, (get_org_id(), thread_ids)).fetchone()
     if row is None:
         raise ValueError(f"threads tablosunda kayıt yok: {thread_ids}")
     return row[0]
@@ -155,8 +174,8 @@ def reassign_thread_rows(
     """Kaybeden thread'in identities, events ve commitments satırlarını taşır."""
     for table in ("identities", "events", "commitments"):
         conn.execute(
-            f"UPDATE {table} SET thread_id = %s WHERE thread_id = %s",
-            (winner_thread_id, loser_thread_id),
+            f"UPDATE {table} SET thread_id = %s WHERE org_id = %s AND thread_id = %s",
+            (winner_thread_id, get_org_id(), loser_thread_id),
         )
 
 
@@ -168,12 +187,15 @@ def record_thread_merge(
 ) -> None:
     """thread_merges tablosuna denetim kaydı düşer."""
     query = """
-        INSERT INTO thread_merges (winner_thread_id, loser_thread_id, reason)
-        VALUES (%s, %s, %s)
+        INSERT INTO thread_merges (org_id, winner_thread_id, loser_thread_id, reason)
+        VALUES (%s, %s, %s, %s)
     """
-    conn.execute(query, (winner_thread_id, loser_thread_id, reason))
+    conn.execute(query, (get_org_id(), winner_thread_id, loser_thread_id, reason))
 
 
 def delete_thread(conn: psycopg.Connection[Any], thread_id: str) -> None:
     """threads satırını siler (merge sonrası kaybeden hat için)."""
-    conn.execute("DELETE FROM threads WHERE thread_id = %s", (thread_id,))
+    conn.execute(
+        "DELETE FROM threads WHERE org_id = %s AND thread_id = %s",
+        (get_org_id(), thread_id),
+    )
