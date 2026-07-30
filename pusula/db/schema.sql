@@ -100,20 +100,55 @@ CREATE TABLE IF NOT EXISTS blocked_domains (
 CREATE INDEX IF NOT EXISTS idx_identities_thread ON identities (thread_id);
 
 -- reps: satış temsilcileri (Zoho kullanıcıları).
--- category alanını Zoho'dan gelen rol BELİRLEMEZ, elle yönetilir.
--- Bilinçli karar: Zoho rol/profil adları operasyonel gerçeği
--- yansıtmayabilir; kimin çekirdek telesatışta kimin danışmanlıkta
--- olduğu elle atanır. zoho_role ve zoho_profile sadece referans
--- amaçlıdır, filtre olarak kullanılmaz.
+-- category TÜRETİLMİŞ bir alandır; her sync'te şöyle hesaplanır:
+--   coalesce(category_override, role_category_map[zoho_role], 'other')
+-- Kural tabanlı eşleme role_category_map'te yaşar; kişi bazında
+-- istisna gerektiğinde category_override doldurulur ve haritayı ezer.
+-- category_override ve active elle yönetilir, sync asla dokunmaz.
+-- zoho_profile sadece referans amaçlıdır, filtre olarak kullanılmaz.
 CREATE TABLE IF NOT EXISTS reps (
-    rep_id        text PRIMARY KEY,  -- Zoho user id
-    full_name     text NOT NULL,
-    email         text,
-    zoho_role     text,  -- referans amaçlı, filtre olarak kullanılmaz
-    zoho_profile  text,
-    category      text NOT NULL DEFAULT 'other'
-        CHECK (category IN ('core_telesales', 'consultancy', 'management', 'other')),
-    active        boolean NOT NULL DEFAULT true,
-    created_at    timestamptz DEFAULT now(),
-    updated_at    timestamptz DEFAULT now()
+    rep_id             text PRIMARY KEY,  -- Zoho user id
+    full_name          text NOT NULL,
+    email              text,
+    zoho_role          text,
+    zoho_profile       text,
+    category           text NOT NULL DEFAULT 'other'
+        CHECK (category IN ('sales', 'consultancy', 'management', 'other')),
+    category_override  text  -- doluysa haritayı ezer
+        CHECK (category_override IN ('sales', 'consultancy', 'management', 'other')),
+    active             boolean NOT NULL DEFAULT true,
+    created_at         timestamptz DEFAULT now(),
+    updated_at         timestamptz DEFAULT now()
 );
+
+-- Şema, category_override'dan önce kurulmuş veritabanlarında da
+-- idempotent uygulanabilsin diye kolon ayrıca ALTER ile eklenir.
+ALTER TABLE reps ADD COLUMN IF NOT EXISTS category_override text
+    CHECK (category_override IN ('sales', 'consultancy', 'management', 'other'));
+
+-- role_category_map: Zoho rol adı -> kategori eşlemesi.
+-- reps.category her sync'te bu haritadan yeniden hesaplanır;
+-- haritada olmayan roller 'other' sayılır ve sync uyarı basar.
+CREATE TABLE IF NOT EXISTS role_category_map (
+    zoho_role   text PRIMARY KEY,
+    category    text NOT NULL
+        CHECK (category IN ('sales', 'consultancy', 'management', 'other')),
+    note        text,
+    created_at  timestamptz DEFAULT now()
+);
+
+-- 'core_telesales' -> 'sales' geçişi: değer kümesinin eski haliyle
+-- kurulmuş veritabanlarında kısıtlar tazelenir ve veri taşınır.
+-- Yeni kurulumda ve tekrarlanan uygulamada etkisiz (idempotent).
+ALTER TABLE reps DROP CONSTRAINT IF EXISTS reps_category_check;
+ALTER TABLE reps DROP CONSTRAINT IF EXISTS reps_category_override_check;
+ALTER TABLE role_category_map DROP CONSTRAINT IF EXISTS role_category_map_category_check;
+UPDATE reps SET category = 'sales' WHERE category = 'core_telesales';
+UPDATE reps SET category_override = 'sales' WHERE category_override = 'core_telesales';
+UPDATE role_category_map SET category = 'sales' WHERE category = 'core_telesales';
+ALTER TABLE reps ADD CONSTRAINT reps_category_check
+    CHECK (category IN ('sales', 'consultancy', 'management', 'other'));
+ALTER TABLE reps ADD CONSTRAINT reps_category_override_check
+    CHECK (category_override IN ('sales', 'consultancy', 'management', 'other'));
+ALTER TABLE role_category_map ADD CONSTRAINT role_category_map_category_check
+    CHECK (category IN ('sales', 'consultancy', 'management', 'other'));

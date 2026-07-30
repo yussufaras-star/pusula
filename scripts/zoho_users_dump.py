@@ -1,14 +1,19 @@
 """Zoho aktif kullanıcılarını çekip ekrana basar ve reps tablosuna yazar.
 
-Üç iş yapar:
+Yaptıkları:
 1. Zoho'dan tüm aktif kullanıcıları çeker; id, full_name, email,
    role.name ve profile.name alanlarını tablo olarak ekrana basar.
-2. Kullanıcıları reps tablosuna upsert eder. rep_id çakışmasında
-   full_name, email, zoho_role, zoho_profile ve updated_at güncellenir;
-   category ve active DEĞİŞMEZ — bunlar elle yönetilen alanlardır
-   (bkz. schema.sql'deki reps açıklaması).
+2. Kullanıcıları reps tablosuna upsert eder. category TÜRETİLMİŞ
+   alandır, her sync'te yeniden hesaplanır:
+     coalesce(category_override, role_category_map[zoho_role], 'other')
+   Çakışmada full_name, email, zoho_role, zoho_profile, category ve
+   updated_at güncellenir; category_override ve active'e ASLA
+   dokunulmaz — elle yönetilen alanlardır.
 3. /crm/v7/settings/roles çıktısını ayrı bir başlıkta listeler
    (id, name, reporting_to).
+4. İki uyarı bölümü basar: haritada olmayan roller ('other' sayılır)
+   ve bu sync'te category'si değişenler (eski -> yeni). Sessiz
+   değişiklik olmaz.
 
 Kullanım: python scripts/zoho_users_dump.py
 .env dosyası otomatik yüklenir; DATABASE_URL gerekir.
@@ -29,16 +34,34 @@ from dotenv import load_dotenv
 from pusula.zoho import ZohoAuthError, ZohoCrmError
 from pusula.zoho.crm import _request
 
-# category ve active bilinçli olarak güncellenmez: elle yönetilen alanlar.
+# category türetilmiş alandır: haritadan hesaplanır, override ezer.
+# category_override ve active bilinçli olarak güncellenmez.
 _UPSERT_QUERY = """
-    INSERT INTO reps (rep_id, full_name, email, zoho_role, zoho_profile)
-    VALUES (%s, %s, %s, %s, %s)
+    INSERT INTO reps (rep_id, full_name, email, zoho_role, zoho_profile, category)
+    VALUES (
+        %(rep_id)s, %(full_name)s, %(email)s, %(zoho_role)s, %(zoho_profile)s,
+        coalesce(
+            (SELECT category FROM role_category_map WHERE zoho_role = %(zoho_role)s),
+            'other'
+        )
+    )
     ON CONFLICT (rep_id) DO UPDATE SET
         full_name = EXCLUDED.full_name,
         email = EXCLUDED.email,
         zoho_role = EXCLUDED.zoho_role,
         zoho_profile = EXCLUDED.zoho_profile,
+        category = coalesce(reps.category_override, EXCLUDED.category),
         updated_at = now()
+"""
+
+# reps'te görülen ama haritada karşılığı olmayan roller (kişi sayısıyla).
+_UNMAPPED_ROLES_QUERY = """
+    SELECT r.zoho_role, count(*)
+    FROM reps r
+    LEFT JOIN role_category_map m ON m.zoho_role = r.zoho_role
+    WHERE r.zoho_role IS NOT NULL AND m.zoho_role IS NULL
+    GROUP BY r.zoho_role
+    ORDER BY count(*) DESC, r.zoho_role
 """
 
 
@@ -74,23 +97,47 @@ def print_table(headers: list[str], rows: list[list[str]]) -> None:
         print("  ".join(row[i].ljust(widths[i]) for i in range(len(headers))))
 
 
-def upsert_reps(users: list[dict[str, Any]]) -> None:
-    """Kullanıcıları reps tablosuna upsert eder (tek transaction)."""
+def upsert_reps(
+    users: list[dict[str, Any]],
+) -> tuple[list[tuple[str, str, str, str]], list[tuple[str, int]]]:
+    """Kullanıcıları reps tablosuna upsert eder (tek transaction).
+
+    category her upsert'te yeniden hesaplanır:
+    coalesce(category_override, role_category_map lookup, 'other').
+
+    Dönüş: (category_changes, unmapped_roles).
+    - category_changes: bu sync'te category'si değişenler,
+      (rep_id, full_name, eski, yeni).
+    - unmapped_roles: haritada karşılığı olmayan roller, (zoho_role, kişi).
+    """
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
         raise RuntimeError("DATABASE_URL ortam değişkeni tanımlı değil")
     with psycopg.connect(database_url) as conn:
+        before = dict(
+            conn.execute("SELECT rep_id, category FROM reps").fetchall()
+        )
         for user in users:
             conn.execute(
                 _UPSERT_QUERY,
-                (
-                    user.get("id"),
-                    user.get("full_name"),
-                    user.get("email"),
-                    (user.get("role") or {}).get("name"),
-                    (user.get("profile") or {}).get("name"),
-                ),
+                {
+                    "rep_id": user.get("id"),
+                    "full_name": user.get("full_name"),
+                    "email": user.get("email"),
+                    "zoho_role": (user.get("role") or {}).get("name"),
+                    "zoho_profile": (user.get("profile") or {}).get("name"),
+                },
             )
+        after = conn.execute(
+            "SELECT rep_id, full_name, category FROM reps ORDER BY full_name"
+        ).fetchall()
+        category_changes = [
+            (rep_id, full_name, before[rep_id], category)
+            for rep_id, full_name, category in after
+            if rep_id in before and before[rep_id] != category
+        ]
+        unmapped_roles = conn.execute(_UNMAPPED_ROLES_QUERY).fetchall()
+    return category_changes, unmapped_roles
 
 
 def main() -> int:
@@ -117,9 +164,10 @@ def main() -> int:
         ],
     )
 
-    # 2. reps tablosuna upsert. category ve active'e dokunulmaz.
+    # 2. reps tablosuna upsert. category haritadan hesaplanır;
+    # category_override ve active'e dokunulmaz.
     try:
-        upsert_reps(users)
+        category_changes, unmapped_roles = upsert_reps(users)
     except (RuntimeError, psycopg.Error) as exc:
         print(f"reps upsert başarısız: {exc}")
         return 1
@@ -143,6 +191,28 @@ def main() -> int:
             for role in roles
         ],
     )
+
+    # 4a. Haritada olmayan roller: 'other' sayıldılar, sessiz kalmasın.
+    print("\nHARİTADA OLMAYAN ROLLER")
+    if unmapped_roles:
+        print_table(
+            ["zoho_role", "kişi"],
+            [[role, str(count)] for role, count in unmapped_roles],
+        )
+        print(
+            "Bu rollerdeki kişiler 'other' olarak işaretlendi"
+            " (category_override doluysa o geçerli)."
+        )
+    else:
+        print("yok")
+
+    # 4b. Bu sync'te kategorisi değişenler: eski -> yeni.
+    print("\nKATEGORİ DEĞİŞENLER")
+    if category_changes:
+        for rep_id, full_name, old_category, new_category in category_changes:
+            print(f"  {full_name} ({rep_id}): {old_category} -> {new_category}")
+    else:
+        print("yok")
 
     return 0
 
