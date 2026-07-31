@@ -172,12 +172,20 @@ def main() -> int:
             return 1
 
     results: list[IngestResult] = []
+    identity_notes: list[str] = []
     had_error = False
     for ingester_cls in ingester_classes:
         ingester = ingester_cls()
         _apply_fetch_options(ingester, args.limit, args.debug_query)
         try:
             results.append(ingester.run(since=since, dry_run=args.dry_run))
+            stats = getattr(ingester, "lead_identity_stats", None)
+            if isinstance(stats, dict):
+                identity_notes.append(
+                    f"kimlik zenginleştirme: {stats.get('leads_seen', stats.get('processed', 0))} lead, "
+                    f"+{stats.get('phones_added', 0)} telefon, "
+                    f"+{stats.get('emails_added', 0)} e-posta"
+                )
         except Exception as exc:
             # Bir kaynağın çökmesi diğerlerini engellemesin.
             had_error = True
@@ -189,6 +197,8 @@ def main() -> int:
         print_table(_RESULT_COLUMNS, [result_row(r) for r in results])
         for result in results:
             print_details(result)
+        for note in identity_notes:
+            print(f"\n{note}")
 
     return 1 if had_error else 0
 

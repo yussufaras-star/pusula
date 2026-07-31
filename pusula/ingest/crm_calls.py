@@ -11,6 +11,8 @@ indirilemez; meta'da referans olarak tutulur.
 
 Delta: COQL where Modified_Time > since. $se_module COQL'de yok;
 What_Id doğrudan zoho_lead_id sayılır (çağrılar lead'e bağlı).
+Caller_ID/Dialled_Number santral-dahili — sadece meta; gerçek telefon
+Lead sync (lead_identity) ile gelir.
 """
 
 from __future__ import annotations
@@ -22,9 +24,9 @@ from typing import Any
 
 from pusula.config import get_org_id
 from pusula.db import client
-from pusula.db.identity import normalize_phone
 from pusula.db.models import Direction, Event
-from pusula.ingest.base import Ingester, RawRecord, to_istanbul
+from pusula.ingest.base import IngestResult, Ingester, RawRecord, to_istanbul
+from pusula.ingest.lead_identity import sync_lead_identities
 from pusula.ingest.registry import register
 from pusula.zoho.crm import coql
 
@@ -51,9 +53,9 @@ FIELD_MAP: dict[str, str] = {
     "what_id": "What_Id",
     "outgoing_call_status": "Outgoing_Call_Status",
     "voice_recording": "Voice_Recording__s",
-    # Gerçekte numara Caller_ID'de; Dialled_Number yedek (çoğunlukla boş).
-    "phone": "Caller_ID",
-    "phone_alt": "Dialled_Number",
+    # Santral/dahili — kimlik çözümlemede KULLANILMAZ, sadece meta.
+    "extension": "Caller_ID",
+    "dialled": "Dialled_Number",
 }
 
 # Call_Type değerleri org'da Türkçe; İngilizce de kabul edilir.
@@ -86,6 +88,37 @@ class CrmCallsIngester(Ingester):
         # run_ingest --debug-query: COQL'i ekrana bas.
         self.debug_query: bool = False
         self.last_coql_query: str | None = None
+        # Bu turda görülen lead id'ler; run sonunda batch zenginleştirilir.
+        self._seen_lead_ids: set[str] = set()
+        self.lead_identity_stats: dict[str, int] | None = None
+
+    def run(self, since: datetime | None = None, dry_run: bool = False) -> IngestResult:
+        """Şablon run + tur sonu lead kimlik batch zenginleştirmesi."""
+        self._seen_lead_ids = set()
+        self.lead_identity_stats = None
+        result = super().run(since=since, dry_run=dry_run)
+        if dry_run:
+            self.lead_identity_stats = {
+                "processed": 0,
+                "phones_added": 0,
+                "emails_added": 0,
+                "errors": 0,
+                "leads_seen": len(self._seen_lead_ids),
+            }
+            return result
+        if self._seen_lead_ids:
+            stats = sync_lead_identities(self._seen_lead_ids)
+            stats["leads_seen"] = len(self._seen_lead_ids)
+            self.lead_identity_stats = stats
+        else:
+            self.lead_identity_stats = {
+                "processed": 0,
+                "phones_added": 0,
+                "emails_added": 0,
+                "errors": 0,
+                "leads_seen": 0,
+            }
+        return result
 
     def fetch(self, since: datetime | None) -> Iterator[RawRecord]:
         """Calls delta: COQL Modified_Time > since; Modified_Time artan.
@@ -165,13 +198,18 @@ class CrmCallsIngester(Ingester):
         outcome = _first_nonempty(call_result, inbound_result, outgoing_status)
 
         direction, raw_call_type = _map_direction(payload.get(f["call_type"]))
-        phone = _extract_phone(payload)
         who = payload.get(f["who_id"])
         what = payload.get(f["what_id"])
 
         zoho_contact_id = _lookup_id(who)
         # $se_module COQL'de yok; çağrılar lead'e bağlı — What_Id = lead.
         zoho_lead_id = _lookup_id(what)
+        if zoho_lead_id is not None:
+            self._seen_lead_ids.add(zoho_lead_id)
+
+        # Caller_ID / Dialled_Number santral-dahili; kimlikte kullanılmaz.
+        extension = payload.get(f["extension"])
+        dialled = payload.get(f["dialled"])
 
         meta: dict[str, Any] = {
             "duration_sec": duration_sec,
@@ -186,6 +224,8 @@ class CrmCallsIngester(Ingester):
             "owner_name": owner.get("name"),
             "outgoing_call_status": outgoing_status,
             "voice_recording": payload.get(f["voice_recording"]),
+            "extension": extension,
+            "dialled": dialled,
         }
         if raw_call_type is not None:
             meta["raw_call_type"] = raw_call_type
@@ -199,7 +239,7 @@ class CrmCallsIngester(Ingester):
             body=payload.get(f["description"]),
             body_quality="high",
             meta=meta,
-            phone=phone,
+            phone=None,
             zoho_lead_id=zoho_lead_id,
             zoho_contact_id=zoho_contact_id,
         )
@@ -328,15 +368,4 @@ def _lookup_id(lookup: Any) -> str | None:
     if isinstance(lookup, dict):
         value = lookup.get("id")
         return str(value) if value else None
-    return None
-
-
-def _extract_phone(payload: dict[str, Any]) -> str | None:
-    """Önce Caller_ID, boşsa Dialled_Number; normalize_phone'dan geçirir."""
-    for key in (FIELD_MAP["phone"], FIELD_MAP["phone_alt"]):
-        raw = payload.get(key)
-        if isinstance(raw, str) and raw.strip():
-            normalized = normalize_phone(raw)
-            if normalized is not None:
-                return normalized
     return None
