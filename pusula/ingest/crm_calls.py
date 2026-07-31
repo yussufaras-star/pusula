@@ -4,9 +4,13 @@ CRM'deki çağrı metadata'sını (temsilci notu, süre, sonuç, kimlik)
 çeker; transkript üretmez. body = Description (temsilci notu),
 body_quality = high.
 
-NOT: FIELD_MAP'teki alan adları henüz canlı ortamda doğrulanmadı.
-scripts/inspect_zoho_module.py --module Calls ile doğrulanıp buradan
-tek yerden düzeltilir. Bu ortamda Zoho credential yok.
+FIELD_MAP canlı Calls inspect ile doğrulandı. Call_Type ve sonuç
+alanları Türkçe değer taşır; eşleme sözlükleri TR+EN kapsar.
+Voice_Recording__s phonebridge URL'sidir — mevcut OAuth ile
+indirilemez; meta'da referans olarak tutulur.
+
+Delta: COQL where Modified_Time > since. $se_module COQL'de yok;
+What_Id doğrudan zoho_lead_id sayılır (çağrılar lead'e bağlı).
 """
 
 from __future__ import annotations
@@ -22,11 +26,12 @@ from pusula.db.identity import normalize_phone
 from pusula.db.models import Direction, Event
 from pusula.ingest.base import Ingester, RawRecord, to_istanbul
 from pusula.ingest.registry import register
-from pusula.zoho.crm import _format_if_modified_since, coql
+from pusula.zoho.crm import coql
 
 logger = logging.getLogger(__name__)
 
-# Zoho Calls API alan adları. Doğrulama sonrası sadece burası değişir.
+# Zoho Calls API alan adları. Mapping düzeltmeleri sadece buradan.
+# $se_module COQL kolonu değildir — select listesine konmaz.
 FIELD_MAP: dict[str, str] = {
     "id": "id",
     "modified_time": "Modified_Time",
@@ -35,20 +40,31 @@ FIELD_MAP: dict[str, str] = {
     "description": "Description",
     "owner": "Owner",
     "duration_sec": "Call_Duration_in_seconds",
+    # Saniye alanı boşsa metin süre (MM:SS / HH:MM:SS).
+    "duration_text": "Call_Duration",
     "call_result": "Call_Result",
+    # Gelen aramalarda Call_Result yerine dolu olabilen özel alan.
+    "inbound_call_result": "Gelen_Arama_Sonucu",
     "subject": "Subject",
     "call_purpose": "Call_Purpose",
-    "se_module": "$se_module",
     "who_id": "Who_Id",
     "what_id": "What_Id",
-    # Outbound: Dialled_Number; inbound yedek: Caller_ID (to_event içinde).
-    "phone": "Dialled_Number",
-    "phone_alt": "Caller_ID",
+    "outgoing_call_status": "Outgoing_Call_Status",
+    "voice_recording": "Voice_Recording__s",
+    # Gerçekte numara Caller_ID'de; Dialled_Number yedek (çoğunlukla boş).
+    "phone": "Caller_ID",
+    "phone_alt": "Dialled_Number",
 }
 
-# COQL $ önekini kabul etmez; REST yanıtındaki $se_module burada se_module.
-_COQL_FIELD_ALIASES: dict[str, str] = {
-    "$se_module": "se_module",
+# Call_Type değerleri org'da Türkçe; İngilizce de kabul edilir.
+_DIRECTION_BY_CALL_TYPE: dict[str, Direction] = {
+    "giden": "outbound",
+    "outbound": "outbound",
+    "gelen": "inbound",
+    "inbound": "inbound",
+    "cevapsız": "inbound",
+    "cevapsiz": "inbound",
+    "missed": "inbound",
 }
 
 
@@ -59,92 +75,125 @@ class CrmCallsIngester(Ingester):
     source_name = "zoho_crm_calls"
     channel = "call"
 
+    def __init__(self) -> None:
+        # rep_id -> (category, active); fetch başında bir kez dolar.
+        self._reps: dict[str, tuple[str, bool]] | None = None
+        # run() skip_reasons / sample_skipped için (base okur).
+        self.last_skip_reason: str | None = None
+        self.last_skip_sample: dict[str, Any] | None = None
+        # run_ingest --limit ile set edilir; None = sınırsız.
+        self.fetch_limit: int | None = None
+        # run_ingest --debug-query: COQL'i ekrana bas.
+        self.debug_query: bool = False
+        self.last_coql_query: str | None = None
+
     def fetch(self, since: datetime | None) -> Iterator[RawRecord]:
-        """Calls'tan Modified_Time > since delta; Call_Start_Time artan.
+        """Calls delta: COQL Modified_Time > since; Modified_Time artan.
 
-        Sayfalama coql içinde otomatik. since None ise tüm kayıtlar.
+        Watermark RawRecord.occurred_at = Modified_Time (filtreyle aynı eksen).
+        Event.occurred_at to_event'te Call_Start_Time kalır.
         """
-        select_fields = []
-        for api_name in FIELD_MAP.values():
-            coql_name = _COQL_FIELD_ALIASES.get(api_name, api_name)
-            if coql_name not in select_fields:
-                select_fields.append(coql_name)
+        self._reps = _load_reps()
 
-        query = f"select {', '.join(select_fields)} from Calls"
+        fields = list(dict.fromkeys(FIELD_MAP.values()))
+        query = f"select {', '.join(fields)} from Calls"
         if since is not None:
-            since_str = _format_if_modified_since(since)
-            query += (
-                f" where {FIELD_MAP['modified_time']} > '{since_str}'"
-            )
-        query += f" order by {FIELD_MAP['call_start_time']} asc"
+            since_str = _format_coql_datetime(since)
+            query += f" where {FIELD_MAP['modified_time']} > '{since_str}'"
+        query += f" order by {FIELD_MAP['modified_time']} asc"
 
+        self.last_coql_query = query
+        logger.debug("zoho_crm_calls COQL: %s", query)
+        if self.debug_query:
+            print(f"COQL: {query}")
+
+        yielded = 0
         for record in coql(query):
             call_id = record.get(FIELD_MAP["id"])
-            start_raw = record.get(FIELD_MAP["call_start_time"])
-            if not call_id or not start_raw:
-                # source_ref / occurred_at olmadan RawRecord kurulamaz;
-                # to_event de aynı koşulla atlar, burada da geç.
-                logger.debug("Calls kaydı id veya Call_Start_Time eksik, atlandı")
+            if not call_id:
+                logger.debug("Calls kaydı id eksik, atlandı")
                 continue
-            occurred_at = _parse_zoho_datetime(start_raw)
+            # Watermark / sıralama ekseni: Modified_Time (since filtresiyle aynı).
+            modified_raw = record.get(FIELD_MAP["modified_time"])
+            occurred_at = _parse_zoho_datetime(modified_raw)
             if occurred_at is None:
-                logger.debug("Calls %s: Call_Start_Time çözülemedi (%r)", call_id, start_raw)
+                occurred_at = _parse_zoho_datetime(
+                    record.get(FIELD_MAP["call_start_time"])
+                )
+            if occurred_at is None:
+                logger.debug("Calls %s: zaman alanı yok, atlandı", call_id)
                 continue
             yield RawRecord(
                 source_ref=str(call_id),
                 occurred_at=occurred_at,
                 payload=record,
             )
+            yielded += 1
+            if self.fetch_limit is not None and yielded >= self.fetch_limit:
+                return
 
     def to_event(self, raw: RawRecord) -> Event | None:
-        """Ham Calls kaydını Event'e çevirir; atlanacaksa None."""
+        """Ham Calls kaydını Event'e çevirir; atlanacaksa None (+ skip reason)."""
+        self.last_skip_reason = None
+        self.last_skip_sample = None
         payload = raw.payload
         f = FIELD_MAP
 
         start_raw = payload.get(f["call_start_time"])
-        if not start_raw:
-            return None
         occurred_at = _parse_zoho_datetime(start_raw)
         if occurred_at is None:
-            return None
+            return self._skip("no_start_time", payload)
 
-        owner = payload.get(f["owner"]) or {}
-        rep_id = owner.get("id") if isinstance(owner, dict) else None
-        if not rep_id or not _is_sales_rep(str(rep_id)):
-            return None
+        owner = payload.get(f["owner"])
+        if not isinstance(owner, dict) or not owner.get("id"):
+            return self._skip("no_rep_id", payload)
+        rep_id = str(owner["id"])
 
-        duration_sec = _parse_duration_sec(payload.get(f["duration_sec"]))
+        reps = self._reps if self._reps is not None else _load_reps()
+        self._reps = reps
+        rep_info = reps.get(rep_id)
+        if rep_info is None:
+            return self._skip("rep_not_found", payload)
+        category, active = rep_info
+        if category != "sales" or not active:
+            return self._skip("rep_not_sales", payload)
+
+        duration_sec, duration_source = _resolve_duration(payload)
         call_result = payload.get(f["call_result"])
-        result_empty = call_result is None or str(call_result).strip() == ""
-        if duration_sec == 0 and result_empty:
-            return None
+        inbound_result = payload.get(f["inbound_call_result"])
+        outgoing_status = payload.get(f["outgoing_call_status"])
+        outcome = _first_nonempty(call_result, inbound_result, outgoing_status)
 
-        direction = _map_direction(payload.get(f["call_type"]))
+        direction, raw_call_type = _map_direction(payload.get(f["call_type"]))
         phone = _extract_phone(payload)
         who = payload.get(f["who_id"])
         what = payload.get(f["what_id"])
-        se_module = payload.get(f["se_module"]) or payload.get("se_module")
 
         zoho_contact_id = _lookup_id(who)
-        zoho_lead_id: str | None = None
-        if isinstance(se_module, str) and se_module == "Leads":
-            zoho_lead_id = _lookup_id(what)
+        # $se_module COQL'de yok; çağrılar lead'e bağlı — What_Id = lead.
+        zoho_lead_id = _lookup_id(what)
 
         meta: dict[str, Any] = {
             "duration_sec": duration_sec,
+            "duration_source": duration_source,
+            "outcome": outcome,
             "call_result": call_result,
+            "gelen_arama_sonucu": inbound_result,
             "subject": payload.get(f["subject"]),
             "call_purpose": payload.get(f["call_purpose"]),
-            "se_module": se_module,
-            "who_id": zoho_contact_id,
-            "what_id": _lookup_id(what),
-            "owner_name": owner.get("name") if isinstance(owner, dict) else None,
+            "who_id": who,
+            "what_id": what,
+            "owner_name": owner.get("name"),
+            "outgoing_call_status": outgoing_status,
+            "voice_recording": payload.get(f["voice_recording"]),
         }
+        if raw_call_type is not None:
+            meta["raw_call_type"] = raw_call_type
 
         return Event(
             channel="call",
             direction=direction,
-            rep_id=str(rep_id),
+            rep_id=rep_id,
             occurred_at=occurred_at,
             source_ref=raw.source_ref,
             body=payload.get(f["description"]),
@@ -154,6 +203,42 @@ class CrmCallsIngester(Ingester):
             zoho_lead_id=zoho_lead_id,
             zoho_contact_id=zoho_contact_id,
         )
+
+    def _skip(self, reason: str, payload: dict[str, Any]) -> Event | None:
+        """Atlamanın sebebini ve teşhis örneğini base.run için işaretler."""
+        self.last_skip_reason = reason
+        self.last_skip_sample = _skip_sample(payload)
+        return None
+
+
+def _skip_sample(payload: dict[str, Any]) -> dict[str, Any]:
+    """Kişisel veri olmadan atlanan kayıt teşhis alanları."""
+    owner = payload.get(FIELD_MAP["owner"])
+    owner_id = owner.get("id") if isinstance(owner, dict) else None
+    owner_name = owner.get("name") if isinstance(owner, dict) else None
+    start = payload.get(FIELD_MAP["call_start_time"])
+    return {
+        "id": payload.get(FIELD_MAP["id"]),
+        "Call_Start_Time_present": bool(start),
+        "Owner.id": owner_id,
+        "Owner.name": owner_name,
+        "Call_Duration_in_seconds": payload.get(FIELD_MAP["duration_sec"]),
+        "Call_Duration": payload.get(FIELD_MAP["duration_text"]),
+        "Call_Result": payload.get(FIELD_MAP["call_result"]),
+        "Outgoing_Call_Status": payload.get(FIELD_MAP["outgoing_call_status"]),
+        "Call_Type": payload.get(FIELD_MAP["call_type"]),
+    }
+
+
+def _load_reps() -> dict[str, tuple[str, bool]]:
+    """Tüm rep_id → (category, active) eşlemesini tek sorguda çeker."""
+    query = """
+        SELECT rep_id, category, active FROM reps
+        WHERE org_id = %s
+    """
+    with client.transaction() as conn:
+        rows = conn.execute(query, (get_org_id(),)).fetchall()
+    return {str(row[0]): (str(row[1]), bool(row[2])) for row in rows}
 
 
 def _parse_zoho_datetime(value: Any) -> datetime | None:
@@ -169,26 +254,73 @@ def _parse_zoho_datetime(value: Any) -> datetime | None:
         return None
 
 
-def _parse_duration_sec(value: Any) -> int:
-    """Call_Duration_in_seconds değerini int saniyeye çevirir; yoksa 0."""
-    if value is None or value == "":
-        return 0
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return 0
+def _format_coql_datetime(value: datetime) -> str:
+    """Zoho COQL tarih biçimi: yyyy-MM-ddTHH:mm:ss+03:00."""
+    value = to_istanbul(value)
+    offset = value.strftime("%z")  # +0300
+    if len(offset) == 5:
+        offset = f"{offset[:3]}:{offset[3:]}"
+    return value.strftime("%Y-%m-%dT%H:%M:%S") + offset
 
 
-def _map_direction(call_type: Any) -> Direction | None:
-    """Outbound → outbound; Inbound/Missed → inbound."""
-    if not isinstance(call_type, str):
+def _resolve_duration(payload: dict[str, Any]) -> tuple[int | None, str]:
+    """Süreyi saniye + kaynağa çevirir.
+
+    Önce Call_Duration_in_seconds; yoksa Call_Duration metnini
+    (MM:SS / HH:MM:SS) parse eder. İkisi de yoksa (None, "unknown").
+    """
+    raw_sec = payload.get(FIELD_MAP["duration_sec"])
+    if raw_sec is not None and raw_sec != "":
+        try:
+            return int(float(raw_sec)), "seconds_field"
+        except (TypeError, ValueError):
+            pass
+
+    parsed = _parse_duration_text(payload.get(FIELD_MAP["duration_text"]))
+    if parsed is not None:
+        return parsed, "text_parsed"
+    return None, "unknown"
+
+
+def _parse_duration_text(value: Any) -> int | None:
+    """'MM:SS' veya 'HH:MM:SS' metnini saniyeye çevirir."""
+    if not isinstance(value, str) or not value.strip():
         return None
-    normalized = call_type.strip().lower()
-    if normalized == "outbound":
-        return "outbound"
-    if normalized in ("inbound", "missed"):
-        return "inbound"
+    parts = value.strip().split(":")
+    if len(parts) not in (2, 3) or not all(p.isdigit() for p in parts):
+        return None
+    nums = [int(p) for p in parts]
+    if len(nums) == 2:
+        minutes, seconds = nums
+        return minutes * 60 + seconds
+    hours, minutes, seconds = nums
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _first_nonempty(*values: Any) -> Any | None:
+    """İlk dolu (None/boş string olmayan) değeri döner."""
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
     return None
+
+
+def _map_direction(call_type: Any) -> tuple[Direction, str | None]:
+    """Call_Type → direction; bilinmeyende outbound + ham değer.
+
+    Dönüş: (direction, raw_call_type). raw_call_type sadece eşleme
+    bulunamadığında dolu; meta'ya yazılır.
+    """
+    if not isinstance(call_type, str) or not call_type.strip():
+        return "outbound", None
+    raw = call_type.strip()
+    mapped = _DIRECTION_BY_CALL_TYPE.get(raw.casefold())
+    if mapped is not None:
+        return mapped, None
+    return "outbound", raw
 
 
 def _lookup_id(lookup: Any) -> str | None:
@@ -200,7 +332,7 @@ def _lookup_id(lookup: Any) -> str | None:
 
 
 def _extract_phone(payload: dict[str, Any]) -> str | None:
-    """Dialled_Number, yoksa Caller_ID; normalize_phone'dan geçirir."""
+    """Önce Caller_ID, boşsa Dialled_Number; normalize_phone'dan geçirir."""
     for key in (FIELD_MAP["phone"], FIELD_MAP["phone_alt"]):
         raw = payload.get(key)
         if isinstance(raw, str) and raw.strip():
@@ -208,15 +340,3 @@ def _extract_phone(payload: dict[str, Any]) -> str | None:
             if normalized is not None:
                 return normalized
     return None
-
-
-def _is_sales_rep(rep_id: str) -> bool:
-    """reps tablosunda var ve category == 'sales' mi."""
-    query = """
-        SELECT 1 FROM reps
-        WHERE org_id = %s AND rep_id = %s AND category = 'sales'
-        LIMIT 1
-    """
-    with client.transaction() as conn:
-        row = conn.execute(query, (get_org_id(), rep_id)).fetchone()
-    return row is not None

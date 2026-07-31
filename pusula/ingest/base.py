@@ -36,6 +36,8 @@ _MAX_CONSECUTIVE_FAILURES = 20
 _MAX_ERRORS = 10
 # dry_run'da döndürülecek örnek Event sayısı.
 _MAX_SAMPLE_EVENTS = 5
+# dry_run'da atlanan kayıtlardan tutulacak örnek sayısı.
+_MAX_SAMPLE_SKIPPED = 3
 
 
 class IngestError(RuntimeError):
@@ -68,6 +70,9 @@ class IngestResult(BaseModel):
 
     dry_run'da inserted "yazılacak olan" sayısıdır; DB'ye gidilmediği
     için duplicated hep 0 kalır ve sample_events ilk 5 Event'i taşır.
+    skip_reasons: to_event'in last_skip_reason ile bildirdiği sebepler.
+    sample_skipped: dry_run'da sample_events boşken teşhis için ilk
+    atlanan kayıt özetleri (ingester last_skip_sample doldurur).
     """
 
     source_name: str
@@ -81,6 +86,8 @@ class IngestResult(BaseModel):
     watermark_after: datetime | None = None
     errors: list[str] = Field(default_factory=list)  # ilk 10 hata mesajı
     sample_events: list[Event] = Field(default_factory=list)  # sadece dry_run
+    skip_reasons: dict[str, int] = Field(default_factory=dict)
+    sample_skipped: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class Ingester(ABC):
@@ -166,6 +173,15 @@ class Ingester(ABC):
 
             if event is None:
                 result.skipped += 1
+                reason = getattr(self, "last_skip_reason", None)
+                if isinstance(reason, str) and reason:
+                    result.skip_reasons[reason] = result.skip_reasons.get(reason, 0) + 1
+                if dry_run and len(result.sample_skipped) < _MAX_SAMPLE_SKIPPED:
+                    sample = getattr(self, "last_skip_sample", None)
+                    if isinstance(sample, dict):
+                        result.sample_skipped.append(sample)
+                self.last_skip_reason = None
+                self.last_skip_sample = None
                 last_processed_at = raw.occurred_at
                 continue
 
