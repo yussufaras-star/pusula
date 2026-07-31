@@ -61,7 +61,8 @@ FIELD_MAP: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # Picklist eşlemeleri (modül sabitleri). Anahtarlar casefold.
 # Call_Type → direction koda gömülü (az ve sabit).
-# Outcome → call_outcomes tablosundan cache (ham değer koda gömülmez).
+# Outcome → call_outcomes (Call_Result → Gelen_Arama_Sonucu).
+# Call status → call_statuses (Outgoing_Call_Status; teknik, satış sonucu değil).
 # Bilinmeyen değer: WARNING (bir kez) + varsayılana DÜŞME; kayıt ATLANMAZ.
 # ---------------------------------------------------------------------------
 
@@ -75,10 +76,10 @@ DIRECTION_BY_CALL_TYPE: dict[str, Direction] = {
     "missed": "inbound",
 }
 
+# Satış sonucu: Outgoing_Call_Status dahil DEĞİL.
 OUTCOME_FIELD_KEYS: tuple[str, ...] = (
     "call_result",
     "inbound_call_result",
-    "outgoing_call_status",
 )
 
 
@@ -94,9 +95,13 @@ class CrmCallsIngester(Ingester):
         self._reps: dict[str, tuple[str, bool]] | None = None
         # raw_value.casefold() -> {outcome_key, category, is_progress}
         self._outcomes: dict[str, dict[str, Any]] | None = None
-        # Bilinmeyen outcome: bir kez uyar, adet tut.
+        # raw_value.casefold() -> {status_key}
+        self._statuses: dict[str, dict[str, Any]] | None = None
+        # Bilinmeyen picklist: bir kez uyar, adet tut.
         self._warned_outcomes: set[str] = set()
+        self._warned_statuses: set[str] = set()
         self.unknown_outcomes: dict[str, int] = {}
+        self.unknown_statuses: dict[str, int] = {}
         # run() skip_reasons / sample_skipped için (base okur).
         self.last_skip_reason: str | None = None
         self.last_skip_sample: dict[str, Any] | None = None
@@ -114,12 +119,19 @@ class CrmCallsIngester(Ingester):
         self._seen_lead_ids = set()
         self.lead_identity_stats = None
         self._warned_outcomes = set()
+        self._warned_statuses = set()
         self.unknown_outcomes = {}
+        self.unknown_statuses = {}
         result = super().run(since=since, dry_run=dry_run)
         if self.unknown_outcomes:
             logger.info(
                 "bilinmeyen outcome: %s",
                 {k: v for k, v in sorted(self.unknown_outcomes.items())},
+            )
+        if self.unknown_statuses:
+            logger.info(
+                "bilinmeyen call_status: %s",
+                {k: v for k, v in sorted(self.unknown_statuses.items())},
             )
         if dry_run:
             self.lead_identity_stats = {
@@ -152,6 +164,7 @@ class CrmCallsIngester(Ingester):
         """
         self._reps = _load_reps()
         self._outcomes = _load_call_outcomes()
+        self._statuses = _load_call_statuses()
 
         fields = list(dict.fromkeys(FIELD_MAP.values()))
         query = f"select {', '.join(fields)} from Calls"
@@ -223,6 +236,7 @@ class CrmCallsIngester(Ingester):
         outcome_key, raw_outcome = self._resolve_outcome(
             *(payload.get(f[key]) for key in OUTCOME_FIELD_KEYS)
         )
+        status_key, raw_status = self._resolve_call_status(outgoing_status)
 
         direction, raw_call_type = _map_direction(payload.get(f["call_type"]))
         who = payload.get(f["who_id"])
@@ -242,6 +256,7 @@ class CrmCallsIngester(Ingester):
             "duration_sec": duration_sec,
             "duration_source": duration_source,
             "outcome_key": outcome_key,
+            "call_status": status_key if status_key is not None else raw_status,
             "call_result": call_result,
             "gelen_arama_sonucu": inbound_result,
             "subject": payload.get(f["subject"]),
@@ -249,13 +264,14 @@ class CrmCallsIngester(Ingester):
             "who_id": who,
             "what_id": what,
             "owner_name": owner.get("name"),
-            "outgoing_call_status": outgoing_status,
             "voice_recording": payload.get(f["voice_recording"]),
             "extension": extension,
             "dialled": dialled,
         }
         if outcome_key is None and raw_outcome is not None:
             meta["raw_outcome"] = raw_outcome
+        if status_key is None and raw_status is not None:
+            meta["raw_call_status"] = raw_status
         if raw_call_type is not None:
             meta["raw_call_type"] = raw_call_type
 
@@ -274,10 +290,10 @@ class CrmCallsIngester(Ingester):
         )
 
     def _resolve_outcome(self, *candidates: Any) -> tuple[str | None, str | None]:
-        """Outcome alanlarından ilk dolu → (outcome_key, ham).
+        """Call_Result → Gelen_Arama_Sonucu → (outcome_key, ham).
 
-        call_outcomes cache'inden okur. Bilinmeyende WARNING (bir kez),
-        outcome_key=None, ham değer döner; kayıt atlanmaz.
+        Outgoing_Call_Status burada yok (teknik durum). Bilinmeyende
+        WARNING (bir kez), outcome_key=None; kayıt atlanmaz.
         """
         raw = _first_nonempty(*candidates)
         if raw is None:
@@ -292,6 +308,22 @@ class CrmCallsIngester(Ingester):
         if text not in self._warned_outcomes:
             self._warned_outcomes.add(text)
             logger.warning("bilinmeyen outcome picklist değeri: %r", text)
+        return None, text
+
+    def _resolve_call_status(self, raw: Any) -> tuple[str | None, str | None]:
+        """Outgoing_Call_Status → (status_key, ham); satış sonucu değil."""
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            return None, None
+        text = str(raw).strip()
+        statuses = self._statuses if self._statuses is not None else _load_call_statuses()
+        self._statuses = statuses
+        row = statuses.get(text.casefold())
+        if row is not None:
+            return str(row["status_key"]), text
+        self.unknown_statuses[text] = self.unknown_statuses.get(text, 0) + 1
+        if text not in self._warned_statuses:
+            self._warned_statuses.add(text)
+            logger.warning("bilinmeyen call_status picklist değeri: %r", text)
         return None, text
 
     def _skip(self, reason: str, payload: dict[str, Any]) -> Event | None:
@@ -349,6 +381,24 @@ def _load_call_outcomes() -> dict[str, dict[str, Any]]:
             "raw_value": str(raw_value),
         }
     return result
+
+
+def _load_call_statuses() -> dict[str, dict[str, Any]]:
+    """call_statuses tablosunu raw_value.casefold() anahtarıyla cache'ler."""
+    query = """
+        SELECT raw_value, status_key
+        FROM call_statuses
+        WHERE org_id = %s
+    """
+    with client.transaction() as conn:
+        rows = conn.execute(query, (get_org_id(),)).fetchall()
+    return {
+        str(raw_value).casefold(): {
+            "status_key": str(status_key),
+            "raw_value": str(raw_value),
+        }
+        for raw_value, status_key in rows
+    }
 
 
 def _parse_zoho_datetime(value: Any) -> datetime | None:

@@ -173,7 +173,7 @@ def main() -> int:
 
     results: list[IngestResult] = []
     identity_notes: list[str] = []
-    unknown_picklists: list[tuple[str, dict[str, int]]] = []
+    unknown_picklists: list[tuple[str, str, dict[str, int]]] = []
     had_error = False
     for ingester_cls in ingester_classes:
         ingester = ingester_cls()
@@ -187,9 +187,16 @@ def main() -> int:
                     f"+{stats.get('phones_added', 0)} telefon, "
                     f"+{stats.get('emails_added', 0)} e-posta"
                 )
-            unknown = getattr(ingester, "unknown_outcomes", None)
-            if isinstance(unknown, dict) and unknown:
-                unknown_picklists.append((ingester_cls.source_name, dict(unknown)))
+            unknown_outcomes = getattr(ingester, "unknown_outcomes", None)
+            if isinstance(unknown_outcomes, dict) and unknown_outcomes:
+                unknown_picklists.append(
+                    (ingester_cls.source_name, "outcome", dict(unknown_outcomes))
+                )
+            unknown_statuses = getattr(ingester, "unknown_statuses", None)
+            if isinstance(unknown_statuses, dict) and unknown_statuses:
+                unknown_picklists.append(
+                    (ingester_cls.source_name, "call_status", dict(unknown_statuses))
+                )
         except Exception as exc:
             # Bir kaynağın çökmesi diğerlerini engellemesin.
             had_error = True
@@ -205,8 +212,8 @@ def main() -> int:
             print(f"\n{note}")
         if unknown_picklists:
             print("\nBİLİNMEYEN PICKLIST DEĞERLERİ")
-            for source_name, counts in unknown_picklists:
-                print(f"  ({source_name})")
+            for source_name, kind, counts in unknown_picklists:
+                print(f"  ({source_name} / {kind})")
                 for value, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
                     print(f"    {value!r}: {count}")
 

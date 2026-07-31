@@ -298,3 +298,12 @@ CREATE TABLE IF NOT EXISTS call_outcomes (
     sort_order    int,
     PRIMARY KEY (org_id, raw_value)
 );
+
+-- call_statuses: Outgoing_Call_Status teknik durum (satış sonucu değil).
+-- Örn. 'Tamamlandı' = connected. call_outcomes ile karıştırılmaz.
+CREATE TABLE IF NOT EXISTS call_statuses (
+    org_id      text NOT NULL DEFAULT 'rexven',
+    raw_value   text NOT NULL,
+    status_key  text NOT NULL,  -- connected | no_answer | failed | unknown
+    PRIMARY KEY (org_id, raw_value)
+);
