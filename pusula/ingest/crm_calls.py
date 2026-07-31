@@ -58,8 +58,13 @@ FIELD_MAP: dict[str, str] = {
     "dialled": "Dialled_Number",
 }
 
-# Call_Type değerleri org'da Türkçe; İngilizce de kabul edilir.
-_DIRECTION_BY_CALL_TYPE: dict[str, Direction] = {
+# ---------------------------------------------------------------------------
+# Picklist eşlemeleri (modül sabitleri). Anahtarlar casefold.
+# Bilinmeyen değer: WARNING + varsayılana DÜŞME.
+# ---------------------------------------------------------------------------
+
+# Call_Type → direction (TR + EN).
+DIRECTION_BY_CALL_TYPE: dict[str, Direction] = {
     "giden": "outbound",
     "outbound": "outbound",
     "gelen": "inbound",
@@ -68,6 +73,30 @@ _DIRECTION_BY_CALL_TYPE: dict[str, Direction] = {
     "cevapsiz": "inbound",
     "missed": "inbound",
 }
+
+# Outcome alanlarından gelen bilinen değerler → kanonik etiket.
+# Kaynak sırası: Call_Result → Gelen_Arama_Sonucu → Outgoing_Call_Status.
+OUTCOME_BY_VALUE: dict[str, str] = {
+    "tamamlandı": "Tamamlandı",
+    "completed": "Tamamlandı",
+    "planlandı": "Planlandı",
+    "scheduled": "Planlandı",
+    "iptal": "İptal",
+    "cancelled": "İptal",
+    "canceled": "İptal",
+    "meşgul": "Meşgul",
+    "busy": "Meşgul",
+    "yanıt yok": "Yanıt Yok",
+    "no answer": "Yanıt Yok",
+    "cevapsız": "Cevapsız",
+    "missed": "Cevapsız",
+}
+
+OUTCOME_FIELD_KEYS: tuple[str, ...] = (
+    "call_result",
+    "inbound_call_result",
+    "outgoing_call_status",
+)
 
 
 @register
@@ -195,7 +224,9 @@ class CrmCallsIngester(Ingester):
         call_result = payload.get(f["call_result"])
         inbound_result = payload.get(f["inbound_call_result"])
         outgoing_status = payload.get(f["outgoing_call_status"])
-        outcome = _first_nonempty(call_result, inbound_result, outgoing_status)
+        outcome = _resolve_outcome(
+            *(payload.get(f[key]) for key in OUTCOME_FIELD_KEYS)
+        )
 
         direction, raw_call_type = _map_direction(payload.get(f["call_type"]))
         who = payload.get(f["who_id"])
@@ -348,19 +379,37 @@ def _first_nonempty(*values: Any) -> Any | None:
     return None
 
 
-def _map_direction(call_type: Any) -> tuple[Direction, str | None]:
-    """Call_Type → direction; bilinmeyende outbound + ham değer.
+def _map_direction(call_type: Any) -> tuple[Direction | None, str | None]:
+    """Call_Type → direction.
 
-    Dönüş: (direction, raw_call_type). raw_call_type sadece eşleme
-    bulunamadığında dolu; meta'ya yazılır.
+    Bilinmeyen picklist: WARNING, direction=None, raw_call_type=ham değer.
+    Sessizce outbound varsayılmaz.
     """
     if not isinstance(call_type, str) or not call_type.strip():
-        return "outbound", None
+        return None, None
     raw = call_type.strip()
-    mapped = _DIRECTION_BY_CALL_TYPE.get(raw.casefold())
+    mapped = DIRECTION_BY_CALL_TYPE.get(raw.casefold())
     if mapped is not None:
         return mapped, None
-    return "outbound", raw
+    logger.warning("bilinmeyen Call_Type picklist değeri: %r", raw)
+    return None, raw
+
+
+def _resolve_outcome(*candidates: Any) -> str | None:
+    """Outcome alanlarından ilk dolu değeri kanonikleştirir.
+
+    Sıra: Call_Result → Gelen_Arama_Sonucu → Outgoing_Call_Status.
+    Bilinen değer OUTCOME_BY_VALUE'dan gelir; bilinmeyende WARNING + ham.
+    """
+    raw = _first_nonempty(*candidates)
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    mapped = OUTCOME_BY_VALUE.get(text.casefold())
+    if mapped is not None:
+        return mapped
+    logger.warning("bilinmeyen outcome picklist değeri: %r", text)
+    return text
 
 
 def _lookup_id(lookup: Any) -> str | None:

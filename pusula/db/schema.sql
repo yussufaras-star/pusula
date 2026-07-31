@@ -269,3 +269,18 @@ ALTER TABLE reps ADD CONSTRAINT reps_pkey
 ALTER TABLE role_category_map DROP CONSTRAINT IF EXISTS role_category_map_pkey;
 ALTER TABLE role_category_map ADD CONSTRAINT role_category_map_pkey
     PRIMARY KEY (org_id, zoho_role);
+
+-- zoho_schema_snapshot: CRM alan metadata anlık görüntüsü.
+-- scripts/zoho_schema_check.py ile karşılaştırılır; picklist kayması
+-- (yeniden adlandırma vb.) sessizce bozulmasın diye drift raporu üretir.
+CREATE TABLE IF NOT EXISTS zoho_schema_snapshot (
+    org_id           text NOT NULL DEFAULT 'rexven',
+    module           text NOT NULL,
+    api_name         text NOT NULL,
+    field_label      text,
+    data_type        text,
+    is_custom        boolean,
+    picklist_values  jsonb,  -- picklist ise [{display_value, actual_value}, ...]
+    captured_at      timestamptz DEFAULT now(),
+    PRIMARY KEY (org_id, module, api_name)
+);
