@@ -60,10 +60,11 @@ FIELD_MAP: dict[str, str] = {
 
 # ---------------------------------------------------------------------------
 # Picklist eşlemeleri (modül sabitleri). Anahtarlar casefold.
-# Bilinmeyen değer: WARNING + varsayılana DÜŞME.
+# Call_Type → direction koda gömülü (az ve sabit).
+# Outcome → call_outcomes tablosundan cache (ham değer koda gömülmez).
+# Bilinmeyen değer: WARNING (bir kez) + varsayılana DÜŞME; kayıt ATLANMAZ.
 # ---------------------------------------------------------------------------
 
-# Call_Type → direction (TR + EN).
 DIRECTION_BY_CALL_TYPE: dict[str, Direction] = {
     "giden": "outbound",
     "outbound": "outbound",
@@ -72,24 +73,6 @@ DIRECTION_BY_CALL_TYPE: dict[str, Direction] = {
     "cevapsız": "inbound",
     "cevapsiz": "inbound",
     "missed": "inbound",
-}
-
-# Outcome alanlarından gelen bilinen değerler → kanonik etiket.
-# Kaynak sırası: Call_Result → Gelen_Arama_Sonucu → Outgoing_Call_Status.
-OUTCOME_BY_VALUE: dict[str, str] = {
-    "tamamlandı": "Tamamlandı",
-    "completed": "Tamamlandı",
-    "planlandı": "Planlandı",
-    "scheduled": "Planlandı",
-    "iptal": "İptal",
-    "cancelled": "İptal",
-    "canceled": "İptal",
-    "meşgul": "Meşgul",
-    "busy": "Meşgul",
-    "yanıt yok": "Yanıt Yok",
-    "no answer": "Yanıt Yok",
-    "cevapsız": "Cevapsız",
-    "missed": "Cevapsız",
 }
 
 OUTCOME_FIELD_KEYS: tuple[str, ...] = (
@@ -109,6 +92,11 @@ class CrmCallsIngester(Ingester):
     def __init__(self) -> None:
         # rep_id -> (category, active); fetch başında bir kez dolar.
         self._reps: dict[str, tuple[str, bool]] | None = None
+        # raw_value.casefold() -> {outcome_key, category, is_progress}
+        self._outcomes: dict[str, dict[str, Any]] | None = None
+        # Bilinmeyen outcome: bir kez uyar, adet tut.
+        self._warned_outcomes: set[str] = set()
+        self.unknown_outcomes: dict[str, int] = {}
         # run() skip_reasons / sample_skipped için (base okur).
         self.last_skip_reason: str | None = None
         self.last_skip_sample: dict[str, Any] | None = None
@@ -125,7 +113,14 @@ class CrmCallsIngester(Ingester):
         """Şablon run + tur sonu lead kimlik batch zenginleştirmesi."""
         self._seen_lead_ids = set()
         self.lead_identity_stats = None
+        self._warned_outcomes = set()
+        self.unknown_outcomes = {}
         result = super().run(since=since, dry_run=dry_run)
+        if self.unknown_outcomes:
+            logger.info(
+                "bilinmeyen outcome: %s",
+                {k: v for k, v in sorted(self.unknown_outcomes.items())},
+            )
         if dry_run:
             self.lead_identity_stats = {
                 "processed": 0,
@@ -156,6 +151,7 @@ class CrmCallsIngester(Ingester):
         Event.occurred_at to_event'te Call_Start_Time kalır.
         """
         self._reps = _load_reps()
+        self._outcomes = _load_call_outcomes()
 
         fields = list(dict.fromkeys(FIELD_MAP.values()))
         query = f"select {', '.join(fields)} from Calls"
@@ -224,7 +220,7 @@ class CrmCallsIngester(Ingester):
         call_result = payload.get(f["call_result"])
         inbound_result = payload.get(f["inbound_call_result"])
         outgoing_status = payload.get(f["outgoing_call_status"])
-        outcome = _resolve_outcome(
+        outcome_key, raw_outcome = self._resolve_outcome(
             *(payload.get(f[key]) for key in OUTCOME_FIELD_KEYS)
         )
 
@@ -245,7 +241,7 @@ class CrmCallsIngester(Ingester):
         meta: dict[str, Any] = {
             "duration_sec": duration_sec,
             "duration_source": duration_source,
-            "outcome": outcome,
+            "outcome_key": outcome_key,
             "call_result": call_result,
             "gelen_arama_sonucu": inbound_result,
             "subject": payload.get(f["subject"]),
@@ -258,6 +254,8 @@ class CrmCallsIngester(Ingester):
             "extension": extension,
             "dialled": dialled,
         }
+        if outcome_key is None and raw_outcome is not None:
+            meta["raw_outcome"] = raw_outcome
         if raw_call_type is not None:
             meta["raw_call_type"] = raw_call_type
 
@@ -274,6 +272,27 @@ class CrmCallsIngester(Ingester):
             zoho_lead_id=zoho_lead_id,
             zoho_contact_id=zoho_contact_id,
         )
+
+    def _resolve_outcome(self, *candidates: Any) -> tuple[str | None, str | None]:
+        """Outcome alanlarından ilk dolu → (outcome_key, ham).
+
+        call_outcomes cache'inden okur. Bilinmeyende WARNING (bir kez),
+        outcome_key=None, ham değer döner; kayıt atlanmaz.
+        """
+        raw = _first_nonempty(*candidates)
+        if raw is None:
+            return None, None
+        text = str(raw).strip()
+        outcomes = self._outcomes if self._outcomes is not None else _load_call_outcomes()
+        self._outcomes = outcomes
+        row = outcomes.get(text.casefold())
+        if row is not None:
+            return str(row["outcome_key"]), text
+        self.unknown_outcomes[text] = self.unknown_outcomes.get(text, 0) + 1
+        if text not in self._warned_outcomes:
+            self._warned_outcomes.add(text)
+            logger.warning("bilinmeyen outcome picklist değeri: %r", text)
+        return None, text
 
     def _skip(self, reason: str, payload: dict[str, Any]) -> Event | None:
         """Atlamanın sebebini ve teşhis örneğini base.run için işaretler."""
@@ -310,6 +329,26 @@ def _load_reps() -> dict[str, tuple[str, bool]]:
     with client.transaction() as conn:
         rows = conn.execute(query, (get_org_id(),)).fetchall()
     return {str(row[0]): (str(row[1]), bool(row[2])) for row in rows}
+
+
+def _load_call_outcomes() -> dict[str, dict[str, Any]]:
+    """call_outcomes tablosunu raw_value.casefold() anahtarıyla cache'ler."""
+    query = """
+        SELECT raw_value, outcome_key, category, is_progress
+        FROM call_outcomes
+        WHERE org_id = %s
+    """
+    with client.transaction() as conn:
+        rows = conn.execute(query, (get_org_id(),)).fetchall()
+    result: dict[str, dict[str, Any]] = {}
+    for raw_value, outcome_key, category, is_progress in rows:
+        result[str(raw_value).casefold()] = {
+            "outcome_key": str(outcome_key),
+            "category": str(category),
+            "is_progress": bool(is_progress),
+            "raw_value": str(raw_value),
+        }
+    return result
 
 
 def _parse_zoho_datetime(value: Any) -> datetime | None:
@@ -393,23 +432,6 @@ def _map_direction(call_type: Any) -> tuple[Direction | None, str | None]:
         return mapped, None
     logger.warning("bilinmeyen Call_Type picklist değeri: %r", raw)
     return None, raw
-
-
-def _resolve_outcome(*candidates: Any) -> str | None:
-    """Outcome alanlarından ilk dolu değeri kanonikleştirir.
-
-    Sıra: Call_Result → Gelen_Arama_Sonucu → Outgoing_Call_Status.
-    Bilinen değer OUTCOME_BY_VALUE'dan gelir; bilinmeyende WARNING + ham.
-    """
-    raw = _first_nonempty(*candidates)
-    if raw is None:
-        return None
-    text = str(raw).strip()
-    mapped = OUTCOME_BY_VALUE.get(text.casefold())
-    if mapped is not None:
-        return mapped
-    logger.warning("bilinmeyen outcome picklist değeri: %r", text)
-    return text
 
 
 def _lookup_id(lookup: Any) -> str | None:

@@ -284,3 +284,17 @@ CREATE TABLE IF NOT EXISTS zoho_schema_snapshot (
     captured_at      timestamptz DEFAULT now(),
     PRIMARY KEY (org_id, module, api_name)
 );
+
+-- call_outcomes: Zoho Calls sonuç picklist → kanonik outcome_key.
+-- Ham değerler koda gömülmez; seed_rexven.sql ile doldurulur.
+-- crm_calls ingester başında tek sorguda cache'ler.
+CREATE TABLE IF NOT EXISTS call_outcomes (
+    org_id        text NOT NULL DEFAULT 'rexven',
+    raw_value     text NOT NULL,  -- Zoho'daki ham picklist değeri
+    outcome_key   text NOT NULL,  -- kanonik anahtar (no_answer, demo_done, ...)
+    category      text NOT NULL
+        CHECK (category IN ('reached', 'not_reached', 'positive', 'negative', 'pending')),
+    is_progress   boolean NOT NULL DEFAULT false,
+    sort_order    int,
+    PRIMARY KEY (org_id, raw_value)
+);
