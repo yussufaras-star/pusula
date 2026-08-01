@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, Field, field_validator
 
 from pusula.db import client
-from pusula.db.identity import resolve_thread
+from pusula.db.identity import resolve_thread_detailed
 from pusula.db.models import Event, SyncState
 
 logger = logging.getLogger(__name__)
@@ -122,6 +122,11 @@ class Ingester(ABC):
         Akış: watermark oku -> fetch -> to_event -> resolve_thread ->
         insert_event -> thread dokunuşu -> watermark güncelle.
 
+        - resolve_thread tanımlayıcı bulamazsa None döner; yeni thread
+          açılmaz. Event thread_id=None ile yazılır (şema nullable).
+        - Thread yaratma ile event yazma aynı transaction'dadır; insert
+          ON CONFLICT ile hiçbir şey yazmazsa yeni thread geri alınır.
+        - Thread dokunuşunda owner_rep_id = event.rep_id yazılır.
         - Tek kayıt hatası run'ı düşürmez: hata loglanır, kayıt failed
           sayılır, devam edilir. _MAX_CONSECUTIVE_FAILURES aşılırsa
           IngestError yükselir.
@@ -192,23 +197,58 @@ class Ingester(ABC):
                 last_processed_at = raw.occurred_at
                 continue
 
-            # d) Kimlik alanlarıyla thread'i çöz.
-            thread_id = resolve_thread(
-                phone=event.phone,
-                email=event.email,
-                zoho_lead_id=event.zoho_lead_id,
-                zoho_contact_id=event.zoho_contact_id,
-            )
-            event.thread_id = thread_id
-
-            # e) Idempotent yazma; None dönerse aynı kayıt daha önce girmiş.
-            event_id = client.insert_event(event)
-            if event_id is None:
-                result.duplicated += 1
-            else:
-                result.inserted += 1
-                # f) Thread dokunuşu sadece gerçekten yazılan olay için.
-                client.touch_thread(thread_id, self.channel, event.occurred_at)
+            # d–f) resolve + insert + touch aynı transaction'da.
+            # ON CONFLICT'te yeni açılan thread geri alınır (orphan sızıntısı yok).
+            # Tanımlayıcı yoksa thread_id None; şema nullable — event yine yazılır.
+            try:
+                with client.transaction() as conn:
+                    thread_id, created_new = resolve_thread_detailed(
+                        phone=event.phone,
+                        email=event.email,
+                        zoho_lead_id=event.zoho_lead_id,
+                        zoho_contact_id=event.zoho_contact_id,
+                        conn=conn,
+                    )
+                    event.thread_id = thread_id
+                    if thread_id is None:
+                        logger.info(
+                            "%s: geçerli kimlik yok, thread açılmadı (source_ref=%s)",
+                            self.source_name,
+                            raw.source_ref,
+                        )
+                    event_id = client.insert_event(event, conn=conn)
+                    if event_id is None:
+                        result.duplicated += 1
+                        if created_new and thread_id is not None:
+                            client.clear_thread_identities(conn, thread_id)
+                            client.delete_thread(conn, thread_id)
+                    else:
+                        result.inserted += 1
+                        if thread_id is not None:
+                            client.touch_thread(
+                                thread_id,
+                                self.channel,
+                                event.occurred_at,
+                                owner_rep_id=event.rep_id,
+                                conn=conn,
+                            )
+            except Exception as exc:
+                result.failed += 1
+                consecutive_failures += 1
+                if len(result.errors) < _MAX_ERRORS:
+                    result.errors.append(f"{raw.source_ref}: {exc}")
+                logger.exception(
+                    "%s: yazma başarısız (source_ref=%s)",
+                    self.source_name,
+                    raw.source_ref,
+                )
+                if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                    raise IngestError(
+                        f"{self.source_name}: {consecutive_failures} ardışık hata, "
+                        f"run durduruldu (fetched={result.fetched})"
+                    ) from exc
+                continue
+            consecutive_failures = 0
             last_processed_at = raw.occurred_at
 
         # g) Watermark yalnızca tamamı başarılıysa en son işlenen kaydın

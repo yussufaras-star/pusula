@@ -169,9 +169,9 @@ def test_resolve_ignores_blocked_domain(db: psycopg.Connection) -> None:
     ).fetchone()
     assert count == (0,)
 
-    # Aynı bloklu e-posta tek başına gelirse eşleşme kuramaz, yeni hat açar.
+    # Aynı bloklu e-posta tek başına gelirse eşleşme kuramaz, thread açılmaz.
     second = resolve_thread(email="ali@rexven.com")
-    assert second != first
+    assert second is None
 
 
 def test_resolve_processes_non_blocked_domain_email(db: psycopg.Connection) -> None:

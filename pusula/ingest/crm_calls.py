@@ -11,19 +11,21 @@ indirilemez; meta'da referans olarak tutulur.
 
 Delta: COQL where Modified_Time > since. $se_module COQL'de yok;
 What_Id doğrudan zoho_lead_id sayılır (çağrılar lead'e bağlı).
-Caller_ID/Dialled_Number santral-dahili — sadece meta; gerçek telefon
-Lead sync (lead_identity) ile gelir.
+Telefon kimliği: Phone/Phone_2/Mobile alanları, yoksa Subject'ten
+(+90…) ayıklama; Caller_ID/Dialled_Number santral-dahili — sadece meta.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
 
 from pusula.config import get_org_id
 from pusula.db import client
+from pusula.db.identity import normalize_phone
 from pusula.db.models import Direction, Event
 from pusula.ingest.base import IngestResult, Ingester, RawRecord, to_istanbul
 from pusula.ingest.lead_identity import sync_lead_identities
@@ -57,6 +59,12 @@ FIELD_MAP: dict[str, str] = {
     "extension": "Caller_ID",
     "dialled": "Dialled_Number",
 }
+
+# Gerçek telefon alanları (Calls snapshot'ta yok; varsa payload'dan okunur).
+# COQL select'e eklenmez — olmayan kolon tüm fetch'i düşürür.
+_PHONE_API_NAMES: tuple[str, ...] = ("Phone", "Phone_2", "Mobile")
+# Subject: "İsim (+905xxxxxxxxx)'e giden arama" / "'den gelen arama"
+_SUBJECT_PHONE_RE = re.compile(r"\+90[0-9]{10}")
 
 # ---------------------------------------------------------------------------
 # Picklist eşlemeleri (modül sabitleri). Anahtarlar casefold.
@@ -252,6 +260,8 @@ class CrmCallsIngester(Ingester):
         extension = payload.get(f["extension"])
         dialled = payload.get(f["dialled"])
 
+        phone, phone_source = _extract_call_phone(payload)
+
         meta: dict[str, Any] = {
             "duration_sec": duration_sec,
             "duration_source": duration_source,
@@ -268,6 +278,8 @@ class CrmCallsIngester(Ingester):
             "extension": extension,
             "dialled": dialled,
         }
+        if phone_source is not None:
+            meta["phone_source"] = phone_source
         if outcome_key is None and raw_outcome is not None:
             meta["raw_outcome"] = raw_outcome
         if status_key is None and raw_status is not None:
@@ -284,7 +296,7 @@ class CrmCallsIngester(Ingester):
             body=payload.get(f["description"]),
             body_quality="high",
             meta=meta,
-            phone=None,
+            phone=phone,
             zoho_lead_id=zoho_lead_id,
             zoho_contact_id=zoho_contact_id,
         )
@@ -350,6 +362,59 @@ def _skip_sample(payload: dict[str, Any]) -> dict[str, Any]:
         "Outgoing_Call_Status": payload.get(FIELD_MAP["outgoing_call_status"]),
         "Call_Type": payload.get(FIELD_MAP["call_type"]),
     }
+
+
+def _extract_call_phone(payload: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Telefonu alanlardan, yoksa Subject'ten çıkarır.
+
+    Dönüş: (normalize edilmiş numara, phone_source).
+    phone_source: "field" | "subject" | None.
+    Subject'te birden fazla +90... varsa belirsiz — hiçbiri alınmaz.
+    Subject numarası blocked_identifiers'daysa kimlik sayılmaz.
+    """
+    for api_name in _PHONE_API_NAMES:
+        raw = payload.get(api_name)
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            continue
+        normalized = normalize_phone(str(raw))
+        if normalized is None:
+            continue
+        if _phone_blocked(normalized):
+            logger.info(
+                "Calls telefon alanı blocked_identifiers'da, yok sayıldı (%s)",
+                api_name,
+            )
+            continue
+        return normalized, "field"
+
+    subject = payload.get(FIELD_MAP["subject"])
+    if not isinstance(subject, str) or not subject.strip():
+        return None, None
+    matches = _SUBJECT_PHONE_RE.findall(subject)
+    if len(matches) > 1:
+        logger.info(
+            "Subject'te birden fazla telefon, belirsiz — alınmadı: %s",
+            matches,
+        )
+        return None, None
+    if len(matches) != 1:
+        return None, None
+    normalized = normalize_phone(matches[0])
+    if normalized is None:
+        return None, None
+    if _phone_blocked(normalized):
+        logger.info(
+            "Subject telefonu blocked_identifiers'da, kimlik sayılmadı: %s",
+            normalized,
+        )
+        return None, None
+    return normalized, "subject"
+
+
+def _phone_blocked(normalized: str) -> bool:
+    """Normalize edilmiş telefon blocked_identifiers'da mı."""
+    with client.transaction() as conn:
+        return client.is_identifier_blocked(conn, "phone", normalized)
 
 
 def _load_reps() -> dict[str, tuple[str, bool]]:

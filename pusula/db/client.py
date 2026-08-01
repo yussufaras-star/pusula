@@ -35,12 +35,14 @@ def _get_pool() -> ConnectionPool:
     return _pool
 
 
-def insert_event(event: Event) -> int | None:
+def insert_event(
+    event: Event, conn: psycopg.Connection[Any] | None = None
+) -> int | None:
     """Olayı events tablosuna yazar.
 
     (org_id, channel, source_ref) çakışmasında hiçbir şey yapmaz
     (idempotent ingest). Yeni kayıt yazıldıysa id, çakışma olduysa
-    None döner.
+    None döner. conn verilirse dış transaction kullanılır.
     """
     query = """
         INSERT INTO events (
@@ -63,8 +65,11 @@ def insert_event(event: Event) -> int | None:
         event.body_quality,
         Json(event.meta) if event.meta is not None else None,
     )
-    with _get_pool().connection() as conn:
+    if conn is not None:
         row = conn.execute(query, params).fetchone()
+        return row[0] if row is not None else None
+    with _get_pool().connection() as owned:
+        row = owned.execute(query, params).fetchone()
     return row[0] if row is not None else None
 
 
@@ -97,30 +102,57 @@ def set_sync_state(state: SyncState) -> None:
         )
 
 
-def touch_thread(thread_id: str, channel: str, occurred_at: datetime | None) -> None:
-    """threads.last_touch_at ve touch_count_by_channel'ı günceller.
+def touch_thread(
+    thread_id: str,
+    channel: str,
+    occurred_at: datetime | None,
+    owner_rep_id: str | None = None,
+    conn: psycopg.Connection[Any] | None = None,
+) -> None:
+    """threads.last_touch_at, touch_count ve owner_rep_id günceller.
 
     last_touch_at geriye gitmez (greatest); kanal sayacı bir artar.
+    owner_rep_id verilirse en son event'in temsilcisi olarak yazılır.
     occurred_at None ise last_touch_at'e dokunulmaz, sadece sayaç artar.
     """
     query = """
         UPDATE threads SET
-            last_touch_at = greatest(last_touch_at, %(occurred_at)s),
+            last_touch_at = CASE
+                WHEN %(occurred_at)s IS NULL THEN last_touch_at
+                ELSE greatest(last_touch_at, %(occurred_at)s)
+            END,
             touch_count_by_channel = jsonb_set(
                 coalesce(touch_count_by_channel, '{}'::jsonb),
                 ARRAY[%(channel)s],
                 to_jsonb(coalesce((touch_count_by_channel ->> %(channel)s)::int, 0) + 1)
-            )
+            ),
+            owner_rep_id = coalesce(%(owner_rep_id)s, owner_rep_id)
         WHERE org_id = %(org_id)s AND thread_id = %(thread_id)s
     """
+    # owner_rep_id her zaman son event'inki olmalı; coalesce yukarıda
+    # None gelirse eskiyi korur — çağıran dolu rep_id geçirmeli.
     params = {
         "org_id": get_org_id(),
         "thread_id": thread_id,
         "channel": channel,
         "occurred_at": occurred_at,
+        "owner_rep_id": owner_rep_id,
     }
-    with _get_pool().connection() as conn:
+    if conn is not None:
         conn.execute(query, params)
+        return
+    with _get_pool().connection() as owned:
+        owned.execute(query, params)
+
+
+def clear_thread_identities(
+    conn: psycopg.Connection[Any], thread_id: str
+) -> None:
+    """Thread'e bağlı identities satırlarını siler (orphan geri alma)."""
+    conn.execute(
+        "DELETE FROM identities WHERE org_id = %s AND thread_id = %s",
+        (get_org_id(), thread_id),
+    )
 
 
 # --- Kimlik çözümleme yardımcıları (identity.py kullanır) ---

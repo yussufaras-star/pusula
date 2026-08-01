@@ -195,15 +195,19 @@ def _sync_one_lead(
 
 
 def _remember(
-    identity_map: IdentityMap, id_type: str, id_value: str, thread_id: str
+    identity_map: IdentityMap, id_type: str, id_value: str, thread_id: str | None
 ) -> None:
+    if thread_id is None:
+        return
     identity_map[(id_type, id_value)] = thread_id
 
 
 def _write_lead_state(
-    thread_id: str, lead_source: str | None, lead_status: str | None
+    thread_id: str | None, lead_source: str | None, lead_status: str | None
 ) -> None:
     """Lead_Source / Lead_Status'u threads.state jsonb'ye yazar (merge)."""
+    if thread_id is None:
+        return
     patch: dict[str, Any] = {}
     if lead_source is not None:
         patch["lead_source"] = lead_source
