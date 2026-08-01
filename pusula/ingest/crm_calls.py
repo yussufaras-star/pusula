@@ -13,7 +13,7 @@ Delta: COQL where Modified_Time > since. $se_module COQL'de yok;
 What_Id doğrudan zoho_lead_id sayılır (çağrılar lead'e bağlı).
 Telefon kimliği: Phone/Phone_2/Mobile alanları, yoksa Subject'ten
 (+90…) ayıklama; Caller_ID/Dialled_Number santral-dahili — sadece meta.
-Scheduled_In_CRM='True' → channel=meeting + commitments satırı.
+Scheduled_In_CRM='True' → channel=call + meta.scheduled + commitments.
 """
 
 from __future__ import annotations
@@ -300,8 +300,8 @@ class CrmCallsIngester(Ingester):
             meta["raw_call_type"] = raw_call_type
 
         return Event(
-            # Planlanmış randevu call değil meeting kanalına düşer.
-            channel="meeting" if scheduled else "call",
+            # Planlanmış arama da call kanalında; meeting Bookings'e ayrılır.
+            channel="call",
             direction=direction,
             rep_id=rep_id,
             occurred_at=occurred_at,
