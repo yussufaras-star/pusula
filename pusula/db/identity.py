@@ -31,12 +31,13 @@ def _is_valid_turkish_national(digits: str) -> bool:
 
 
 def normalize_phone(raw: str) -> str | None:
-    """Telefonu Türkiye odaklı E.164 biçimine çevirir.
+    """Telefonu E.164 biçimine çevirir (Türkiye + uluslararası).
 
-    "0532 123 45 67", "532 123 45 67", "+90 532 123 45 67",
-    "00905321234567" ve "905321234567" girdilerinin hepsi
-    "+905321234567" döner. Geçersiz/eksik numara None döner.
-    Yurt dışı numarası + ile başlıyorsa sadece boşluk/tire temizlenir.
+    Türkiye: "0532…", "532…", "+90…", "0090…", "905…" → "+905…".
+    Geçersiz TR ulusal numara None döner.
+    Yurt dışı: "+" veya "00" ile gelirse temizlenmiş E.164 korunur
+    (ör. +49176…, +1469…). Ülke kodu olmadan ≥11 haneli rakam
+    dizisi de "+" eklenerek korunur (Zoho bazen + yazmaz).
     """
     cleaned = _PHONE_JUNK_RE.sub("", raw.strip())
     if not cleaned:
@@ -62,13 +63,17 @@ def normalize_phone(raw: str) -> str | None:
     # Ülke kodu olmadan yazılmış Türkiye varyantları.
     if cleaned.startswith("90") and len(cleaned) == 12:
         national = cleaned[2:]
-    elif cleaned.startswith("0") and len(cleaned) == 11:
+        return "+90" + national if _is_valid_turkish_national(national) else None
+    if cleaned.startswith("0") and len(cleaned) == 11:
         national = cleaned[1:]
-    elif len(cleaned) == 10:
-        national = cleaned
-    else:
-        return None
-    return "+90" + national if _is_valid_turkish_national(national) else None
+        return "+90" + national if _is_valid_turkish_national(national) else None
+    if len(cleaned) == 10:
+        return "+90" + cleaned if _is_valid_turkish_national(cleaned) else None
+
+    # TR değil; yeterince uzun rakam → uluslararası E.164 adayı (+ ekle).
+    if len(cleaned) >= 11:
+        return "+" + cleaned
+    return None
 
 
 def _is_blocked(id_type: str, id_value: str) -> bool:
