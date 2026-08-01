@@ -22,6 +22,8 @@ bırakan bir asistandır. İki muhatabı var:
 - Kütüphane eklemeden önce sor.
 - ORM kullanma, düz psycopg3 + SQL.
 - Tüm timestamp'ler Europe/Istanbul, DB'ye timestamptz.
+- scripts/ altındaki her dosya ilk satırlarda repo kökünü
+  sys.path'e ekler ve load_dotenv() çağırır.
 
 ## LLM çağrıları
 - Model adını koda gömme, config'den al.

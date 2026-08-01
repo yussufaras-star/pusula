@@ -70,6 +70,7 @@ class IngestResult(BaseModel):
 
     dry_run'da inserted "yazılacak olan" sayısıdır; DB'ye gidilmediği
     için duplicated hep 0 kalır ve sample_events ilk 5 Event'i taşır.
+    duplicated: upsert'te mevcut source_ref güncellendi (yeni satır değil).
     skip_reasons: to_event'in last_skip_reason ile bildirdiği sebepler.
     sample_skipped: dry_run'da sample_events boşken teşhis için ilk
     atlanan kayıt özetleri (ingester last_skip_sample doldurur).
@@ -116,6 +117,15 @@ class Ingester(ABC):
         geçici alanlarına yazar; bu alanlar DB'ye yazılmaz.
         """
 
+    def on_event_upserted(
+        self,
+        conn: Any,
+        event: Event,
+        event_id: int,
+        created: bool,
+    ) -> None:
+        """Event yazıldıktan sonra çağrılır (commitment vb.). Varsayılan no-op."""
+
     def run(self, since: datetime | None = None, dry_run: bool = False) -> IngestResult:
         """Şablon metot; alt sınıflar override etmez.
 
@@ -124,9 +134,10 @@ class Ingester(ABC):
 
         - resolve_thread tanımlayıcı bulamazsa None döner; yeni thread
           açılmaz. Event thread_id=None ile yazılır (şema nullable).
-        - Thread yaratma ile event yazma aynı transaction'dadır; insert
-          ON CONFLICT ile hiçbir şey yazmazsa yeni thread geri alınır.
-        - Thread dokunuşunda owner_rep_id = event.rep_id yazılır.
+        - Thread yaratma ile event yazma aynı transaction'dadır; upsert
+          mevcut satırı güncellerse (created=False) yeni thread geri alınır.
+        - Thread dokunuşunda owner_rep_id = event.rep_id yazılır (yalnızca
+          yeni insert'te; touch_count şişmesin diye update'te dokunulmaz).
         - Tek kayıt hatası run'ı düşürmez: hata loglanır, kayıt failed
           sayılır, devam edilir. _MAX_CONSECUTIVE_FAILURES aşılırsa
           IngestError yükselir.
@@ -197,8 +208,8 @@ class Ingester(ABC):
                 last_processed_at = raw.occurred_at
                 continue
 
-            # d–f) resolve + insert + touch aynı transaction'da.
-            # ON CONFLICT'te yeni açılan thread geri alınır (orphan sızıntısı yok).
+            # d–f) resolve + upsert + touch aynı transaction'da.
+            # Upsert güncellemedeyse (created=False) yeni thread geri alınır.
             # Tanımlayıcı yoksa thread_id None; şema nullable — event yine yazılır.
             try:
                 with client.transaction() as conn:
@@ -216,22 +227,29 @@ class Ingester(ABC):
                             self.source_name,
                             raw.source_ref,
                         )
-                    event_id = client.insert_event(event, conn=conn)
-                    if event_id is None:
+                    event_id, created = client.insert_event(event, conn=conn)
+                    if not created:
                         result.duplicated += 1
                         if created_new and thread_id is not None:
                             client.clear_thread_identities(conn, thread_id)
                             client.delete_thread(conn, thread_id)
+                            # Upsert thread_id yazmaz; commitment DB'deki hatı kullansın.
+                            row = conn.execute(
+                                "SELECT thread_id FROM events WHERE id = %s",
+                                (event_id,),
+                            ).fetchone()
+                            event.thread_id = row[0] if row is not None else None
                     else:
                         result.inserted += 1
                         if thread_id is not None:
                             client.touch_thread(
                                 thread_id,
-                                self.channel,
+                                event.channel,
                                 event.occurred_at,
                                 owner_rep_id=event.rep_id,
                                 conn=conn,
                             )
+                    self.on_event_upserted(conn, event, event_id, created)
             except Exception as exc:
                 result.failed += 1
                 consecutive_failures += 1

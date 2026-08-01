@@ -13,6 +13,7 @@ Delta: COQL where Modified_Time > since. $se_module COQL'de yok;
 What_Id doğrudan zoho_lead_id sayılır (çağrılar lead'e bağlı).
 Telefon kimliği: Phone/Phone_2/Mobile alanları, yoksa Subject'ten
 (+90…) ayıklama; Caller_ID/Dialled_Number santral-dahili — sadece meta.
+Scheduled_In_CRM='True' → channel=meeting + commitments satırı.
 """
 
 from __future__ import annotations
@@ -55,6 +56,10 @@ FIELD_MAP: dict[str, str] = {
     "what_id": "What_Id",
     "outgoing_call_status": "Outgoing_Call_Status",
     "voice_recording": "Voice_Recording__s",
+    # Planlanmış randevu (string "True"/"False", boolean değil).
+    "scheduled_in_crm": "Scheduled_In_CRM",
+    "telephony_external_id": "Telephony_External_ID__s",
+    "record_status": "Record_Status__s",
     # Santral/dahili — kimlik çözümlemede KULLANILMAZ, sadece meta.
     "extension": "Caller_ID",
     "dialled": "Dialled_Number",
@@ -261,23 +266,30 @@ class CrmCallsIngester(Ingester):
         dialled = payload.get(f["dialled"])
 
         phone, phone_source = _extract_call_phone(payload)
+        scheduled = _is_scheduled(payload.get(f["scheduled_in_crm"]))
+        subject = payload.get(f["subject"])
 
         meta: dict[str, Any] = {
             "duration_sec": duration_sec,
             "duration_source": duration_source,
             "outcome_key": outcome_key,
             "call_status": status_key if status_key is not None else raw_status,
+            # Sonuç alanları ayrı tutulur (gelen çağrıda Call_Result boş olabilir).
             "call_result": call_result,
             "gelen_arama_sonucu": inbound_result,
-            "subject": payload.get(f["subject"]),
+            "subject": subject,
             "call_purpose": payload.get(f["call_purpose"]),
             "who_id": who,
             "what_id": what,
             "owner_name": owner.get("name"),
-            "voice_recording": payload.get(f["voice_recording"]),
+            "voice_recording_url": payload.get(f["voice_recording"]),
+            "telephony_external_id": payload.get(f["telephony_external_id"]),
+            "record_status": payload.get(f["record_status"]),
             "extension": extension,
             "dialled": dialled,
         }
+        if scheduled:
+            meta["scheduled"] = True
         if phone_source is not None:
             meta["phone_source"] = phone_source
         if outcome_key is None and raw_outcome is not None:
@@ -288,7 +300,8 @@ class CrmCallsIngester(Ingester):
             meta["raw_call_type"] = raw_call_type
 
         return Event(
-            channel="call",
+            # Planlanmış randevu call değil meeting kanalına düşer.
+            channel="meeting" if scheduled else "call",
             direction=direction,
             rep_id=rep_id,
             occurred_at=occurred_at,
@@ -299,6 +312,29 @@ class CrmCallsIngester(Ingester):
             phone=phone,
             zoho_lead_id=zoho_lead_id,
             zoho_contact_id=zoho_contact_id,
+        )
+
+    def on_event_upserted(
+        self,
+        conn: Any,
+        event: Event,
+        event_id: int,
+        created: bool,
+    ) -> None:
+        """Planlanmış arama → commitments (Subject, Call_Start_Time, open)."""
+        meta = event.meta or {}
+        if not meta.get("scheduled"):
+            return
+        subject = meta.get("subject")
+        text = str(subject).strip() if subject is not None else None
+        if text == "":
+            text = None
+        client.upsert_open_commitment(
+            conn,
+            thread_id=event.thread_id,
+            source_event_id=event_id,
+            text=text,
+            due_at=event.occurred_at,
         )
 
     def _resolve_outcome(self, *candidates: Any) -> tuple[str | None, str | None]:
@@ -415,6 +451,13 @@ def _phone_blocked(normalized: str) -> bool:
     """Normalize edilmiş telefon blocked_identifiers'da mı."""
     with client.transaction() as conn:
         return client.is_identifier_blocked(conn, "phone", normalized)
+
+
+def _is_scheduled(raw: Any) -> bool:
+    """Scheduled_In_CRM string 'True' mu (büyük/küçük harf duyarsız)."""
+    if raw is None:
+        return False
+    return str(raw).strip().casefold() == "true"
 
 
 def _load_reps() -> dict[str, tuple[str, bool]]:
