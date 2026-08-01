@@ -24,6 +24,7 @@ bırakan bir asistandır. İki muhatabı var:
 - Tüm timestamp'ler Europe/Istanbul, DB'ye timestamptz.
 - scripts/ altındaki her dosya ilk satırlarda repo kökünü
   sys.path'e ekler ve load_dotenv() çağırır.
+- coql() sorgularına LIMIT/OFFSET yazma, sayfalama otomatik.
 
 ## LLM çağrıları
 - Model adını koda gömme, config'den al.

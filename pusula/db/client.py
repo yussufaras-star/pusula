@@ -41,9 +41,10 @@ def insert_event(
     """Olayı events tablosuna yazar veya günceller (upsert).
 
     (org_id, channel, source_ref) çakışmasında body, meta, occurred_at,
-    direction güncellenir; created_at değişmez.
+    direction, channel güncellenir; created_at değişmez.
     Dönüş: (event_id, created). created=False → mevcut satır güncellendi.
-    call↔meeting kanal geçişinde aynı source_ref tek satırda kalır.
+    call↔meeting kanal geçişinde aynı source_ref tek satırda kalır
+    (randevu tamamlanınca Zoho source_ref'i değiştirmez).
     conn verilirse dış transaction kullanılır.
     """
     if conn is not None:
@@ -97,6 +98,7 @@ def _upsert_event_on_conn(
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (org_id, channel, source_ref) DO UPDATE SET
+            channel = EXCLUDED.channel,
             body = EXCLUDED.body,
             meta = EXCLUDED.meta,
             occurred_at = EXCLUDED.occurred_at,
