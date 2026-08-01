@@ -169,6 +169,34 @@ def get_records(
         page += 1
 
 
+def get_field_metadata(module: str) -> list[dict[str, Any]]:
+    """Modül alan metadata'sını döner.
+
+    Her öğe: api_name, field_label, data_type, custom_field.
+    Kayıt çekmeden tam alan listesi için kullanılır.
+    """
+    response = _request(
+        "GET", "/crm/v7/settings/fields", params={"module": module}
+    )
+    if response.status_code == 204:
+        return []
+    fields = response.json().get("fields") or []
+    result: list[dict[str, Any]] = []
+    for field in fields:
+        api_name = field.get("api_name")
+        if not api_name:
+            continue
+        result.append(
+            {
+                "api_name": api_name,
+                "field_label": field.get("field_label"),
+                "data_type": field.get("data_type"),
+                "custom_field": bool(field.get("custom_field", False)),
+            }
+        )
+    return result
+
+
 def get_related(
     module: str, record_id: str, related_list: str
 ) -> Iterator[dict[str, Any]]:

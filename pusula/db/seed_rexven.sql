@@ -62,3 +62,25 @@ INSERT INTO segments (org_id, key, label, sort_order) VALUES
 ON CONFLICT (org_id, key) DO UPDATE SET
     label = EXCLUDED.label,
     sort_order = EXCLUDED.sort_order;
+
+-- Calls sonuç picklist → kanonik outcome (gerçek Zoho değerleri).
+INSERT INTO call_outcomes (org_id, raw_value, outcome_key, category, is_progress, sort_order) VALUES
+    ('rexven', 'Yanıt yok/Meşgul',   'no_answer',      'not_reached', false, 10),
+    ('rexven', 'Geciken',            'delayed',        'pending',     false, 20),
+    ('rexven', 'Geri Dönüş',         'callback',       'pending',     false, 30),
+    ('rexven', 'Bilgi Almak İstedi', 'info_requested', 'positive',    false, 40),
+    ('rexven', 'Sunum Yapıldı',      'demo_done',      'positive',    true,  50),
+    ('rexven', 'Randevu Alındı',     'meeting_booked', 'positive',    true,  60),
+    ('rexven', 'İlgilenmiyorum',     'not_interested', 'negative',    false, 70),
+    ('rexven', 'İptal Edildi',       'cancelled',      'negative',    false, 80)
+ON CONFLICT (org_id, raw_value) DO UPDATE SET
+    outcome_key = EXCLUDED.outcome_key,
+    category = EXCLUDED.category,
+    is_progress = EXCLUDED.is_progress,
+    sort_order = EXCLUDED.sort_order;
+
+-- Outgoing_Call_Status teknik durum (satış sonucu değil).
+INSERT INTO call_statuses (org_id, raw_value, status_key) VALUES
+    ('rexven', 'Tamamlandı', 'connected')
+ON CONFLICT (org_id, raw_value) DO UPDATE SET
+    status_key = EXCLUDED.status_key;

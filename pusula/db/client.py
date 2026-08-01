@@ -35,37 +35,133 @@ def _get_pool() -> ConnectionPool:
     return _pool
 
 
-def insert_event(event: Event) -> int | None:
-    """Olayı events tablosuna yazar.
+def insert_event(
+    event: Event, conn: psycopg.Connection[Any] | None = None
+) -> tuple[int, bool]:
+    """Olayı events tablosuna yazar veya günceller (upsert).
 
-    (org_id, channel, source_ref) çakışmasında hiçbir şey yapmaz
-    (idempotent ingest). Yeni kayıt yazıldıysa id, çakışma olduysa
-    None döner.
+    (org_id, channel, source_ref) çakışmasında body, meta, occurred_at,
+    direction güncellenir; created_at değişmez.
+    Dönüş: (event_id, created). created=False → mevcut satır güncellendi.
+    call↔meeting kanal geçişinde aynı source_ref tek satırda kalır.
+    conn verilirse dış transaction kullanılır.
     """
-    query = """
+    if conn is not None:
+        return _upsert_event_on_conn(conn, event)
+    with _get_pool().connection() as owned:
+        return _upsert_event_on_conn(owned, event)
+
+
+def _upsert_event_on_conn(
+    conn: psycopg.Connection[Any], event: Event
+) -> tuple[int, bool]:
+    org_id = get_org_id()
+    meta_json = Json(event.meta) if event.meta is not None else None
+
+    # Randevu tamamlanınca channel meeting→call olur; source_ref sabit.
+    # UNIQUE (org_id, channel, source_ref) bu geçişi yakalamaz — önce taşı.
+    if event.channel in ("call", "meeting"):
+        moved = conn.execute(
+            """
+            UPDATE events SET
+                channel = %s,
+                body = %s,
+                meta = %s,
+                occurred_at = %s,
+                direction = %s
+            WHERE org_id = %s
+              AND source_ref = %s
+              AND channel IN ('call', 'meeting')
+              AND channel IS DISTINCT FROM %s
+            RETURNING id
+            """,
+            (
+                event.channel,
+                event.body,
+                meta_json,
+                event.occurred_at,
+                event.direction,
+                org_id,
+                event.source_ref,
+                event.channel,
+            ),
+        ).fetchone()
+        if moved is not None:
+            return moved[0], False
+
+    row = conn.execute(
+        """
         INSERT INTO events (
             org_id, thread_id, channel, direction, rep_id, occurred_at,
             source_ref, body, body_quality, meta
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (org_id, channel, source_ref) DO NOTHING
-        RETURNING id
-    """
-    params = (
-        get_org_id(),
-        event.thread_id,
-        event.channel,
-        event.direction,
-        event.rep_id,
-        event.occurred_at,
-        event.source_ref,
-        event.body,
-        event.body_quality,
-        Json(event.meta) if event.meta is not None else None,
+        ON CONFLICT (org_id, channel, source_ref) DO UPDATE SET
+            body = EXCLUDED.body,
+            meta = EXCLUDED.meta,
+            occurred_at = EXCLUDED.occurred_at,
+            direction = EXCLUDED.direction
+        RETURNING id, (xmax = 0) AS inserted
+        """,
+        (
+            org_id,
+            event.thread_id,
+            event.channel,
+            event.direction,
+            event.rep_id,
+            event.occurred_at,
+            event.source_ref,
+            event.body,
+            event.body_quality,
+            meta_json,
+        ),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError(
+            f"insert_event RETURNING boş: channel={event.channel} "
+            f"source_ref={event.source_ref}"
+        )
+    return int(row[0]), bool(row[1])
+
+
+def upsert_open_commitment(
+    conn: psycopg.Connection[Any],
+    *,
+    thread_id: str | None,
+    source_event_id: int,
+    text: str | None,
+    due_at: datetime | None,
+) -> None:
+    """Planlanmış arama için open commitment yazar veya metni/due_at günceller."""
+    org_id = get_org_id()
+    existing = conn.execute(
+        """
+        SELECT id FROM commitments
+        WHERE org_id = %s AND source_event_id = %s
+        """,
+        (org_id, source_event_id),
+    ).fetchone()
+    if existing is not None:
+        conn.execute(
+            """
+            UPDATE commitments SET
+                thread_id = COALESCE(%s, thread_id),
+                text = %s,
+                due_at = %s
+            WHERE id = %s
+            """,
+            (thread_id, text, due_at, existing[0]),
+        )
+        return
+    conn.execute(
+        """
+        INSERT INTO commitments (
+            org_id, thread_id, source_event_id, text, due_at, status
+        )
+        VALUES (%s, %s, %s, %s, %s, 'open')
+        """,
+        (org_id, thread_id, source_event_id, text, due_at),
     )
-    with _get_pool().connection() as conn:
-        row = conn.execute(query, params).fetchone()
-    return row[0] if row is not None else None
 
 
 def get_sync_state(source_name: str) -> SyncState | None:
@@ -97,30 +193,57 @@ def set_sync_state(state: SyncState) -> None:
         )
 
 
-def touch_thread(thread_id: str, channel: str, occurred_at: datetime | None) -> None:
-    """threads.last_touch_at ve touch_count_by_channel'ı günceller.
+def touch_thread(
+    thread_id: str,
+    channel: str,
+    occurred_at: datetime | None,
+    owner_rep_id: str | None = None,
+    conn: psycopg.Connection[Any] | None = None,
+) -> None:
+    """threads.last_touch_at, touch_count ve owner_rep_id günceller.
 
     last_touch_at geriye gitmez (greatest); kanal sayacı bir artar.
+    owner_rep_id verilirse en son event'in temsilcisi olarak yazılır.
     occurred_at None ise last_touch_at'e dokunulmaz, sadece sayaç artar.
     """
     query = """
         UPDATE threads SET
-            last_touch_at = greatest(last_touch_at, %(occurred_at)s),
+            last_touch_at = CASE
+                WHEN %(occurred_at)s IS NULL THEN last_touch_at
+                ELSE greatest(last_touch_at, %(occurred_at)s)
+            END,
             touch_count_by_channel = jsonb_set(
                 coalesce(touch_count_by_channel, '{}'::jsonb),
                 ARRAY[%(channel)s],
                 to_jsonb(coalesce((touch_count_by_channel ->> %(channel)s)::int, 0) + 1)
-            )
+            ),
+            owner_rep_id = coalesce(%(owner_rep_id)s, owner_rep_id)
         WHERE org_id = %(org_id)s AND thread_id = %(thread_id)s
     """
+    # owner_rep_id her zaman son event'inki olmalı; coalesce yukarıda
+    # None gelirse eskiyi korur — çağıran dolu rep_id geçirmeli.
     params = {
         "org_id": get_org_id(),
         "thread_id": thread_id,
         "channel": channel,
         "occurred_at": occurred_at,
+        "owner_rep_id": owner_rep_id,
     }
-    with _get_pool().connection() as conn:
+    if conn is not None:
         conn.execute(query, params)
+        return
+    with _get_pool().connection() as owned:
+        owned.execute(query, params)
+
+
+def clear_thread_identities(
+    conn: psycopg.Connection[Any], thread_id: str
+) -> None:
+    """Thread'e bağlı identities satırlarını siler (orphan geri alma)."""
+    conn.execute(
+        "DELETE FROM identities WHERE org_id = %s AND thread_id = %s",
+        (get_org_id(), thread_id),
+    )
 
 
 # --- Kimlik çözümleme yardımcıları (identity.py kullanır) ---
