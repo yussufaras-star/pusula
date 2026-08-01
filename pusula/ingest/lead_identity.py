@@ -147,26 +147,28 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
                     client.delete_thread(conn, loser)
             if threads_to_create:
                 org_id = get_org_id()
-                conn.executemany(
-                    "INSERT INTO threads (org_id, thread_id) VALUES (%s, %s)"
-                    " ON CONFLICT DO NOTHING",
-                    [(org_id, tid) for tid in threads_to_create],
-                )
+                with conn.cursor() as cur:
+                    cur.executemany(
+                        "INSERT INTO threads (org_id, thread_id) VALUES (%s, %s)"
+                        " ON CONFLICT DO NOTHING",
+                        [(org_id, tid) for tid in threads_to_create],
+                    )
             if identities_to_upsert:
                 org_id = get_org_id()
-                conn.executemany(
-                    """
-                    INSERT INTO identities (org_id, thread_id, id_type, id_value)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (org_id, id_type, id_value) DO UPDATE SET
-                        thread_id = EXCLUDED.thread_id,
-                        last_seen_at = now()
-                    """,
-                    [
-                        (org_id, thread_id, id_type, id_value)
-                        for thread_id, id_type, id_value in identities_to_upsert
-                    ],
-                )
+                with conn.cursor() as cur:
+                    cur.executemany(
+                        """
+                        INSERT INTO identities (org_id, thread_id, id_type, id_value)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (org_id, id_type, id_value) DO UPDATE SET
+                            thread_id = EXCLUDED.thread_id,
+                            last_seen_at = now()
+                        """,
+                        [
+                            (org_id, thread_id, id_type, id_value)
+                            for thread_id, id_type, id_value in identities_to_upsert
+                        ],
+                    )
             for thread_id, patch in state_patches:
                 conn.execute(
                     """
