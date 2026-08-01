@@ -81,6 +81,9 @@ ON CONFLICT (org_id, raw_value) DO UPDATE SET
 
 -- Outgoing_Call_Status teknik durum (satış sonucu değil).
 INSERT INTO call_statuses (org_id, raw_value, status_key) VALUES
-    ('rexven', 'Tamamlandı', 'connected')
+    ('rexven', 'Tamamlandı', 'connected'),
+    ('rexven', 'Geciken', 'overdue'),
+    ('rexven', 'Planlandı', 'scheduled'),
+    ('rexven', 'İptal Edildi', 'cancelled')
 ON CONFLICT (org_id, raw_value) DO UPDATE SET
     status_key = EXCLUDED.status_key;

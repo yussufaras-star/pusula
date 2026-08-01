@@ -1,11 +1,14 @@
 """Lead kimlik zenginleştirme yardımcısı.
 
 Calls ingest sonrası görülen zoho_lead_id'ler için Leads modülünden
-telefon/e-posta çeker, resolve_thread ile bağlar ve threads.state'e
+telefon/e-posta çeker, thread kimliğine bağlar ve threads.state'e
 Lead_Source / Lead_Status yazar. Ingester değildir.
 
-Kimlik varlık kontrolü N+1 yapmaz: sync başında tüm aday
-(id_type, id_value) çiftleri tek sorguda identities'ten çekilir.
+Kimlik çözümleme N+1 yapmaz: tüm aday çiftler tek sorguda okunur,
+yeni thread/identity yazımları executemany ile batch edilir.
+
+Leads telefon alanları (inspect_zoho_module --module Leads, 2026-08):
+Phone, Mobile. Phone_2 yok.
 """
 
 from __future__ import annotations
@@ -13,17 +16,18 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable, Sequence
 from typing import Any
+from uuid import uuid4
 
 from psycopg.types.json import Json
 
 from pusula.config import get_org_id
 from pusula.db import client
-from pusula.db.identity import normalize_email, normalize_phone, resolve_thread
+from pusula.db.identity import normalize_email, normalize_phone
 from pusula.zoho.crm import coql
 
 logger = logging.getLogger(__name__)
 
-# Canlı Leads inspect ile doğrulandı. Mobile etiketi "Phone-2".
+# inspect_zoho_module.py --module Leads ile doğrulandı.
 _LEAD_FIELDS = [
     "id",
     "Phone",
@@ -48,13 +52,12 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
     """
     stats = {"processed": 0, "phones_added": 0, "emails_added": 0, "errors": 0}
     cleaned = {lid.strip() for lid in lead_ids if lid and str(lid).strip()}
-    # resolve_thread blocklist cache ister; ingest dışı çağrıda da yükle.
     with client.transaction() as conn:
         client.load_blocklist(conn)
     if not cleaned:
         return stats
 
-    # 1) Tüm lead kayıtlarını çek.
+    # 1) Tüm lead kayıtlarını COQL batch ile çek.
     records_by_id: dict[str, dict[str, Any]] = {}
     failed_ids: set[str] = set()
     for chunk in _chunks(sorted(cleaned), _BATCH_SIZE):
@@ -68,13 +71,29 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
             stats["errors"] += len(chunk)
             failed_ids.update(chunk)
 
-    # 2) Aday kimlik çiftlerini topla, tek sorguda mevcutları yükle.
-    candidate_pairs: list[tuple[str, str]] = []
+    # 2) Aday kimlikleri topla; mevcut eşleşmeleri tek sorguda yükle.
+    lead_pairs: dict[str, list[tuple[str, str]]] = {}
+    all_pairs: list[tuple[str, str]] = []
     for lead_id, record in records_by_id.items():
-        candidate_pairs.extend(_candidate_pairs(lead_id, record))
-    identity_map = _load_identity_map(candidate_pairs)
+        pairs = _active_pairs(lead_id, record)
+        lead_pairs[lead_id] = pairs
+        all_pairs.extend(pairs)
+    identity_map = _load_identity_map(all_pairs)
 
-    # 3) Lead başına sync; yeni kimlikler identity_map'e eklenir.
+    # 3) Bellekte çöz; yazılacakları biriktir (resolve_thread / N+1 yok).
+    threads_to_create: list[str] = []
+    identities_to_upsert: list[tuple[str, str, str]] = []  # thread, type, value
+    state_patches: list[tuple[str, dict[str, Any]]] = []  # thread_id, patch
+    merge_jobs: list[tuple[str, list[str], dict[tuple[str, str], str]]] = []
+
+    matched_thread_ids: set[str] = set()
+    for pairs in lead_pairs.values():
+        for pair in pairs:
+            tid = identity_map.get(pair)
+            if tid is not None:
+                matched_thread_ids.add(tid)
+    thread_created_at = _load_thread_created_at(matched_thread_ids)
+
     for lead_id in cleaned:
         if lead_id in failed_ids:
             continue
@@ -82,8 +101,25 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
         if record is None:
             stats["errors"] += 1
             continue
+        pairs = lead_pairs.get(lead_id) or _active_pairs(lead_id, record)
         try:
-            phones, emails = _sync_one_lead(lead_id, record, identity_map)
+            phones, emails, thread_id = _plan_one_lead(
+                pairs=pairs,
+                identity_map=identity_map,
+                thread_created_at=thread_created_at,
+                threads_to_create=threads_to_create,
+                identities_to_upsert=identities_to_upsert,
+                merge_jobs=merge_jobs,
+            )
+            patch: dict[str, Any] = {}
+            lead_source = _as_str(record.get("Lead_Source"))
+            lead_status = _as_str(record.get("Lead_Status"))
+            if lead_source is not None:
+                patch["lead_source"] = lead_source
+            if lead_status is not None:
+                patch["lead_status"] = lead_status
+            if patch and thread_id is not None:
+                state_patches.append((thread_id, patch))
             stats["processed"] += 1
             stats["phones_added"] += phones
             stats["emails_added"] += emails
@@ -91,13 +127,61 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
             logger.exception("lead kimlik senkronu başarısız (lead_id=%s)", lead_id)
             stats["errors"] += 1
 
+    # 4) Tek transaction: merge → thread → identity → state.
+    if (
+        threads_to_create
+        or identities_to_upsert
+        or state_patches
+        or merge_jobs
+    ):
+        with client.transaction() as conn:
+            for winner, losers, match_pairs in merge_jobs:
+                for loser in losers:
+                    reason = ", ".join(
+                        f"{id_type}={id_value}"
+                        for (id_type, id_value), tid in match_pairs.items()
+                        if tid == loser
+                    )
+                    client.reassign_thread_rows(conn, winner, loser)
+                    client.record_thread_merge(conn, winner, loser, reason)
+                    client.delete_thread(conn, loser)
+            if threads_to_create:
+                org_id = get_org_id()
+                conn.executemany(
+                    "INSERT INTO threads (org_id, thread_id) VALUES (%s, %s)"
+                    " ON CONFLICT DO NOTHING",
+                    [(org_id, tid) for tid in threads_to_create],
+                )
+            if identities_to_upsert:
+                org_id = get_org_id()
+                conn.executemany(
+                    """
+                    INSERT INTO identities (org_id, thread_id, id_type, id_value)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (org_id, id_type, id_value) DO UPDATE SET
+                        thread_id = EXCLUDED.thread_id,
+                        last_seen_at = now()
+                    """,
+                    [
+                        (org_id, thread_id, id_type, id_value)
+                        for thread_id, id_type, id_value in identities_to_upsert
+                    ],
+                )
+            for thread_id, patch in state_patches:
+                conn.execute(
+                    """
+                    UPDATE threads SET
+                        state = coalesce(state, '{}'::jsonb) || %s::jsonb
+                    WHERE org_id = %s AND thread_id = %s
+                    """,
+                    (Json(patch), get_org_id(), thread_id),
+                )
+
     return stats
 
 
-def _candidate_pairs(
-    lead_id: str, record: dict[str, Any]
-) -> list[tuple[str, str]]:
-    """Bu lead için normalize edilmiş (id_type, id_value) adayları."""
+def _active_pairs(lead_id: str, record: dict[str, Any]) -> list[tuple[str, str]]:
+    """Normalize + blocklist sonrası (id_type, id_value) listesi."""
     pairs: list[tuple[str, str]] = [("zoho_lead", lead_id)]
     for raw in (_as_str(record.get("Phone")), _as_str(record.get("Mobile"))):
         normalized = _normalized_phone(raw)
@@ -107,7 +191,68 @@ def _candidate_pairs(
         normalized = _normalized_email(raw)
         if normalized is not None:
             pairs.append(("email", normalized))
-    return pairs
+    return [
+        (id_type, id_value)
+        for id_type, id_value in pairs
+        if not client.is_identifier_blocked(id_type, id_value)
+    ]
+
+
+def _plan_one_lead(
+    *,
+    pairs: list[tuple[str, str]],
+    identity_map: IdentityMap,
+    thread_created_at: dict[str, Any],
+    threads_to_create: list[str],
+    identities_to_upsert: list[tuple[str, str, str]],
+    merge_jobs: list[tuple[str, list[str], dict[tuple[str, str], str]]],
+) -> tuple[int, int, str | None]:
+    """Tek lead için thread çözümü planlar; yazma listelerine ekler."""
+    if not pairs:
+        return 0, 0, None
+
+    matches: dict[tuple[str, str], str] = {}
+    for pair in pairs:
+        found = identity_map.get(pair)
+        if found is not None:
+            matches[pair] = found
+    matched_ids = sorted(set(matches.values()))
+
+    phones_added = 0
+    emails_added = 0
+
+    if not matched_ids:
+        thread_id = uuid4().hex
+        threads_to_create.append(thread_id)
+        thread_created_at[thread_id] = None
+    elif len(matched_ids) == 1:
+        thread_id = matched_ids[0]
+    else:
+        # En eski created_at kazanır (resolve_thread ile aynı kural).
+        thread_id = min(
+            matched_ids,
+            key=lambda tid: (thread_created_at.get(tid) is None, thread_created_at.get(tid), tid),
+        )
+        losers = [tid for tid in matched_ids if tid != thread_id]
+        merge_jobs.append((thread_id, losers, dict(matches)))
+        # Kaybeden thread kimliklerini kazananla güncelle (map).
+        for pair, tid in list(identity_map.items()):
+            if tid in losers:
+                identity_map[pair] = thread_id
+
+    for id_type, id_value in pairs:
+        was_new = (id_type, id_value) not in identity_map
+        prev = identity_map.get((id_type, id_value))
+        if was_new or prev != thread_id:
+            identities_to_upsert.append((thread_id, id_type, id_value))
+        if was_new:
+            if id_type == "phone":
+                phones_added += 1
+            elif id_type == "email":
+                emails_added += 1
+        identity_map[(id_type, id_value)] = thread_id
+
+    return phones_added, emails_added, thread_id
 
 
 def _load_identity_map(pairs: Sequence[tuple[str, str]]) -> IdentityMap:
@@ -129,102 +274,25 @@ def _load_identity_map(pairs: Sequence[tuple[str, str]]) -> IdentityMap:
     return {(str(row[0]), str(row[1])): str(row[2]) for row in rows}
 
 
+def _load_thread_created_at(thread_ids: set[str]) -> dict[str, Any]:
+    """Merge için created_at; tek sorgu."""
+    if not thread_ids:
+        return {}
+    query = """
+        SELECT thread_id, created_at FROM threads
+        WHERE org_id = %s AND thread_id = ANY(%s)
+    """
+    with client.transaction() as conn:
+        rows = conn.execute(query, (get_org_id(), list(thread_ids))).fetchall()
+    return {str(row[0]): row[1] for row in rows}
+
+
 def _fetch_leads(lead_ids: Sequence[str]) -> Iterable[dict[str, Any]]:
     """COQL ile id in (...) batch çeker."""
     ids_sql = ", ".join(lead_ids)
     fields = ", ".join(_LEAD_FIELDS)
     query = f"select {fields} from Leads where id in ({ids_sql})"
     return coql(query)
-
-
-def _sync_one_lead(
-    lead_id: str, record: dict[str, Any], identity_map: IdentityMap
-) -> tuple[int, int]:
-    """Tek lead: resolve_thread + ek Mobile/Secondary_Email + state."""
-    phone = _as_str(record.get("Phone"))
-    mobile = _as_str(record.get("Mobile"))
-    email = _as_str(record.get("Email"))
-    secondary_email = _as_str(record.get("Secondary_Email"))
-
-    phones_added = 0
-    emails_added = 0
-
-    before_phone = _normalized_phone(phone)
-    before_email = _normalized_email(email)
-    phone_was_new = before_phone is not None and ("phone", before_phone) not in identity_map
-    email_was_new = before_email is not None and ("email", before_email) not in identity_map
-
-    thread_id = resolve_thread(
-        zoho_lead_id=lead_id,
-        phone=phone,
-        email=email,
-    )
-    _remember(identity_map, "zoho_lead", lead_id, thread_id)
-    if before_phone is not None:
-        _remember(identity_map, "phone", before_phone, thread_id)
-        if phone_was_new:
-            phones_added += 1
-    if before_email is not None:
-        _remember(identity_map, "email", before_email, thread_id)
-        if email_was_new:
-            emails_added += 1
-
-    if mobile:
-        mobile_norm = _normalized_phone(mobile)
-        if mobile_norm is not None:
-            was_new = ("phone", mobile_norm) not in identity_map
-            thread_id = resolve_thread(zoho_lead_id=lead_id, phone=mobile)
-            _remember(identity_map, "phone", mobile_norm, thread_id)
-            _remember(identity_map, "zoho_lead", lead_id, thread_id)
-            if was_new:
-                phones_added += 1
-
-    if secondary_email:
-        sec_norm = _normalized_email(secondary_email)
-        if sec_norm is not None:
-            was_new = ("email", sec_norm) not in identity_map
-            thread_id = resolve_thread(zoho_lead_id=lead_id, email=secondary_email)
-            _remember(identity_map, "email", sec_norm, thread_id)
-            _remember(identity_map, "zoho_lead", lead_id, thread_id)
-            if was_new:
-                emails_added += 1
-
-    _write_lead_state(
-        thread_id,
-        lead_source=_as_str(record.get("Lead_Source")),
-        lead_status=_as_str(record.get("Lead_Status")),
-    )
-    return phones_added, emails_added
-
-
-def _remember(
-    identity_map: IdentityMap, id_type: str, id_value: str, thread_id: str | None
-) -> None:
-    if thread_id is None:
-        return
-    identity_map[(id_type, id_value)] = thread_id
-
-
-def _write_lead_state(
-    thread_id: str | None, lead_source: str | None, lead_status: str | None
-) -> None:
-    """Lead_Source / Lead_Status'u threads.state jsonb'ye yazar (merge)."""
-    if thread_id is None:
-        return
-    patch: dict[str, Any] = {}
-    if lead_source is not None:
-        patch["lead_source"] = lead_source
-    if lead_status is not None:
-        patch["lead_status"] = lead_status
-    if not patch:
-        return
-    query = """
-        UPDATE threads SET
-            state = coalesce(state, '{}'::jsonb) || %s::jsonb
-        WHERE org_id = %s AND thread_id = %s
-    """
-    with client.transaction() as conn:
-        conn.execute(query, (Json(patch), get_org_id(), thread_id))
 
 
 def _normalized_phone(raw: str | None) -> str | None:
