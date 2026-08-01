@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import psycopg
 from pydantic import BaseModel, Field, field_validator
 
 from pusula.db import client
@@ -38,6 +39,8 @@ _MAX_ERRORS = 10
 _MAX_SAMPLE_EVENTS = 5
 # dry_run'da atlanan kayıtlardan tutulacak örnek sayısı.
 _MAX_SAMPLE_SKIPPED = 3
+# Uzun çalıştırmada her N kayıtta havuzu yenile (pooler stale bağlantı).
+_POOL_REFRESH_EVERY = 500
 
 
 class IngestError(RuntimeError):
@@ -141,12 +144,19 @@ class Ingester(ABC):
         - Tek kayıt hatası run'ı düşürmez: hata loglanır, kayıt failed
           sayılır, devam edilir. _MAX_CONSECUTIVE_FAILURES aşılırsa
           IngestError yükselir.
+        - Yazmada OperationalError: havuz yenilenir, kayıt bir kez
+          yeniden denenir; yine olmazsa failed.
+        - Her _POOL_REFRESH_EVERY kayıtta bağlantı havuzu yenilenir.
         - Watermark sadece run'ın TAMAMI başarılıysa (failed == 0)
           güncellenir; yarıda hata watermark'ı ilerletmez, bir sonraki
           run aynı aralığı yeniden çeker (insert idempotent).
         - dry_run=True: DB'ye hiçbir şey yazılmaz; sayılar ve ilk 5
           Event döner.
         """
+        # Blocklist bir kez belleğe alınır; kayıt başına SELECT yok.
+        with client.transaction() as conn:
+            client.load_blocklist(conn)
+
         # a) since verilmemişse sync_state'ten watermark oku.
         watermark_before = since
         if watermark_before is None:
@@ -165,6 +175,17 @@ class Ingester(ABC):
         # b) fetch(since) ile kayıtları al.
         for raw in self.fetch(watermark_before):
             result.fetched += 1
+            if (
+                not dry_run
+                and result.fetched > 0
+                and result.fetched % _POOL_REFRESH_EVERY == 0
+            ):
+                logger.info(
+                    "%s: bağlantı havuzu yenileniyor (fetched=%s)",
+                    self.source_name,
+                    result.fetched,
+                )
+                client.reset_pool()
 
             # c) to_event; tek kayıt hatası run'ı düşürmesin.
             try:
@@ -208,48 +229,35 @@ class Ingester(ABC):
                 last_processed_at = raw.occurred_at
                 continue
 
-            # d–f) resolve + upsert + touch aynı transaction'da.
-            # Upsert güncellemedeyse (created=False) yeni thread geri alınır.
-            # Tanımlayıcı yoksa thread_id None; şema nullable — event yine yazılır.
+            # d–f) resolve + upsert + touch; OperationalError'da bir kez retry.
             try:
-                with client.transaction() as conn:
-                    thread_id, created_new = resolve_thread_detailed(
-                        phone=event.phone,
-                        email=event.email,
-                        zoho_lead_id=event.zoho_lead_id,
-                        zoho_contact_id=event.zoho_contact_id,
-                        conn=conn,
+                self._persist_event(event, raw, result)
+            except psycopg.OperationalError as exc:
+                logger.warning(
+                    "%s: bağlantı koptu, bir kez yeniden denenecek (source_ref=%s): %s",
+                    self.source_name,
+                    raw.source_ref,
+                    exc,
+                )
+                client.reset_pool()
+                try:
+                    self._persist_event(event, raw, result)
+                except Exception as retry_exc:
+                    result.failed += 1
+                    consecutive_failures += 1
+                    if len(result.errors) < _MAX_ERRORS:
+                        result.errors.append(f"{raw.source_ref}: {retry_exc}")
+                    logger.exception(
+                        "%s: yazma retry başarısız (source_ref=%s)",
+                        self.source_name,
+                        raw.source_ref,
                     )
-                    event.thread_id = thread_id
-                    if thread_id is None:
-                        logger.info(
-                            "%s: geçerli kimlik yok, thread açılmadı (source_ref=%s)",
-                            self.source_name,
-                            raw.source_ref,
-                        )
-                    event_id, created = client.insert_event(event, conn=conn)
-                    if not created:
-                        result.duplicated += 1
-                        if created_new and thread_id is not None:
-                            client.clear_thread_identities(conn, thread_id)
-                            client.delete_thread(conn, thread_id)
-                            # Upsert thread_id yazmaz; commitment DB'deki hatı kullansın.
-                            row = conn.execute(
-                                "SELECT thread_id FROM events WHERE id = %s",
-                                (event_id,),
-                            ).fetchone()
-                            event.thread_id = row[0] if row is not None else None
-                    else:
-                        result.inserted += 1
-                        if thread_id is not None:
-                            client.touch_thread(
-                                thread_id,
-                                event.channel,
-                                event.occurred_at,
-                                owner_rep_id=event.rep_id,
-                                conn=conn,
-                            )
-                    self.on_event_upserted(conn, event, event_id, created)
+                    if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                        raise IngestError(
+                            f"{self.source_name}: {consecutive_failures} ardışık hata, "
+                            f"run durduruldu (fetched={result.fetched})"
+                        ) from retry_exc
+                    continue
             except Exception as exc:
                 result.failed += 1
                 consecutive_failures += 1
@@ -278,3 +286,54 @@ class Ingester(ABC):
             )
             result.watermark_after = last_processed_at
         return result
+
+    def _persist_event(
+        self, event: Event, raw: RawRecord, result: IngestResult
+    ) -> None:
+        """resolve + upsert + touch tek transaction'da; sayaçları günceller.
+
+        Sayaçlar commit sonrası artar — OperationalError retry çift saymasın.
+        """
+        created: bool
+        created_new: bool
+        thread_id: str | None
+        event_id: int
+        with client.transaction() as conn:
+            thread_id, created_new = resolve_thread_detailed(
+                phone=event.phone,
+                email=event.email,
+                zoho_lead_id=event.zoho_lead_id,
+                zoho_contact_id=event.zoho_contact_id,
+                conn=conn,
+            )
+            event.thread_id = thread_id
+            if thread_id is None:
+                logger.info(
+                    "%s: geçerli kimlik yok, thread açılmadı (source_ref=%s)",
+                    self.source_name,
+                    raw.source_ref,
+                )
+            event_id, created = client.insert_event(event, conn=conn)
+            if not created:
+                if created_new and thread_id is not None:
+                    client.clear_thread_identities(conn, thread_id)
+                    client.delete_thread(conn, thread_id)
+                    row = conn.execute(
+                        "SELECT thread_id FROM events WHERE id = %s",
+                        (event_id,),
+                    ).fetchone()
+                    event.thread_id = row[0] if row is not None else None
+            else:
+                if thread_id is not None:
+                    client.touch_thread(
+                        thread_id,
+                        event.channel,
+                        event.occurred_at,
+                        owner_rep_id=event.rep_id,
+                        conn=conn,
+                    )
+            self.on_event_upserted(conn, event, event_id, created)
+        if created:
+            result.inserted += 1
+        else:
+            result.duplicated += 1

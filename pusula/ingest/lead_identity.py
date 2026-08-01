@@ -48,6 +48,9 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
     """
     stats = {"processed": 0, "phones_added": 0, "emails_added": 0, "errors": 0}
     cleaned = {lid.strip() for lid in lead_ids if lid and str(lid).strip()}
+    # resolve_thread blocklist cache ister; ingest dışı çağrıda da yükle.
+    with client.transaction() as conn:
+        client.load_blocklist(conn)
     if not cleaned:
         return stats
 

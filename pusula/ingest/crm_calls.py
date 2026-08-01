@@ -448,9 +448,8 @@ def _extract_call_phone(payload: dict[str, Any]) -> tuple[str | None, str | None
 
 
 def _phone_blocked(normalized: str) -> bool:
-    """Normalize edilmiş telefon blocked_identifiers'da mı."""
-    with client.transaction() as conn:
-        return client.is_identifier_blocked(conn, "phone", normalized)
+    """Normalize edilmiş telefon blocked_identifiers'da mı (cache)."""
+    return client.is_identifier_blocked("phone", normalized)
 
 
 def _is_scheduled(raw: Any) -> bool:
