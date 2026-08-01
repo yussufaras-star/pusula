@@ -18,7 +18,6 @@ from uuid import uuid4
 
 import psycopg
 
-from pusula.config import get_org_id
 from pusula.db import client
 
 # Boşluk, tire, parantez ve nokta telefon girdisinden temizlenir.
@@ -72,22 +71,9 @@ def normalize_phone(raw: str) -> str | None:
     return "+90" + national if _is_valid_turkish_national(national) else None
 
 
-def _is_blocked(conn: psycopg.Connection[Any], id_type: str, id_value: str) -> bool:
-    """Tanımlayıcı çözümlemede yok sayılmalı mı.
-
-    Önce blocked_identifiers'a bakılır. E-posta kimliğinde birebir
-    eşleşme yoksa @ sonrasındaki domain blocked_domains'de aranır.
-    İkisinden biri eşleşirse kimlik yok sayılır. Telefonda domain
-    kontrolü yoktur.
-    """
-    if client.is_identifier_blocked(conn, id_type, id_value):
-        return True
-    if id_type != "email":
-        return False
-    # normalize_email zaten küçük harfe çevirdi; domain listedeki biçimde.
-    domain = id_value.rpartition("@")[2]
-    query = "SELECT 1 FROM blocked_domains WHERE org_id = %s AND domain = %s"
-    return conn.execute(query, (get_org_id(), domain)).fetchone() is not None
+def _is_blocked(id_type: str, id_value: str) -> bool:
+    """Tanımlayıcı çözümlemede yok sayılmalı mı (blocklist cache)."""
+    return client.is_identifier_blocked(id_type, id_value)
 
 
 def normalize_email(raw: str) -> str | None:
@@ -187,7 +173,7 @@ def _resolve_thread_on_conn(
     active_pairs = [
         (id_type, id_value)
         for id_type, id_value in pairs
-        if not _is_blocked(conn, id_type, id_value)
+        if not _is_blocked(id_type, id_value)
     ]
     if not active_pairs:
         return None, False

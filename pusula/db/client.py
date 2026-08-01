@@ -9,6 +9,7 @@ Bağlantı bilgisi DATABASE_URL ortam değişkeninden okunur. Tüm
 sorgular config.get_org_id() ile aktif org'a kapsamlanır.
 """
 
+import logging
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -23,16 +24,99 @@ from psycopg_pool import ConnectionPool
 from pusula.config import get_org_id
 from pusula.db.models import Event, SyncState
 
+logger = logging.getLogger(__name__)
+
 # Havuz ilk kullanımda açılır; import anında bağlantı kurulmaz.
 _pool: ConnectionPool | None = None
+
+# Process başı blocklist cache (load_blocklist doldurur).
+_blocked_identifiers: set[tuple[str, str]] | None = None
+_blocked_domains: set[str] | None = None
+
+# Uzun ingest'te pooler'ın düşürdüğü bağlantılar için.
+_POOL_RECONNECT_TIMEOUT = 60.0
+_POOL_MAX_IDLE = 300.0
+_POOL_MAX_LIFETIME = 1800.0
 
 
 def _get_pool() -> ConnectionPool:
     # Tembel başlatma: DATABASE_URL sadece gerçekten gerektiğinde okunur.
     global _pool
     if _pool is None:
-        _pool = ConnectionPool(conninfo=os.environ["DATABASE_URL"], open=True)
+        _pool = ConnectionPool(
+            conninfo=os.environ["DATABASE_URL"],
+            open=True,
+            reconnect_timeout=_POOL_RECONNECT_TIMEOUT,
+            max_idle=_POOL_MAX_IDLE,
+            max_lifetime=_POOL_MAX_LIFETIME,
+        )
     return _pool
+
+
+def reset_pool() -> None:
+    """Bağlantı havuzunu kapatır; sonraki kullanım yenisini açar.
+
+    Uzun çalıştırmalarda Supabase pooler'ın düşürdüğü stale
+    bağlantıları temizlemek için run() periyodik çağırır.
+    """
+    global _pool
+    old = _pool
+    _pool = None
+    if old is None:
+        return
+    try:
+        old.close()
+    except Exception:
+        logger.warning("bağlantı havuzu kapatılırken hata", exc_info=True)
+
+
+def load_blocklist(conn: psycopg.Connection[Any]) -> None:
+    """blocked_identifiers ve blocked_domains'i belleğe alır (org filtreli).
+
+    Process başına bir kez (run başı) çağrılır; is_identifier_blocked
+    bundan sonra DB'ye gitmez.
+    """
+    global _blocked_identifiers, _blocked_domains
+    org_id = get_org_id()
+    id_rows = conn.execute(
+        """
+        SELECT id_type, id_value FROM blocked_identifiers
+        WHERE org_id = %s
+        """,
+        (org_id,),
+    ).fetchall()
+    domain_rows = conn.execute(
+        """
+        SELECT domain FROM blocked_domains
+        WHERE org_id = %s
+        """,
+        (org_id,),
+    ).fetchall()
+    _blocked_identifiers = {(str(id_type), str(id_value)) for id_type, id_value in id_rows}
+    _blocked_domains = {str(domain) for (domain,) in domain_rows}
+    logger.info(
+        "blocklist yüklendi: %s identifier, %s domain",
+        len(_blocked_identifiers),
+        len(_blocked_domains),
+    )
+
+
+def is_identifier_blocked(id_type: str, id_value: str) -> bool:
+    """Tanımlayıcı blocklist'te mi (bellek cache).
+
+    Cache yoksa RuntimeError. E-postada domain de blocked_domains'te
+    aranır.
+    """
+    if _blocked_identifiers is None or _blocked_domains is None:
+        raise RuntimeError(
+            "blocklist yüklenmedi; önce load_blocklist(conn) çağır"
+        )
+    if (id_type, id_value) in _blocked_identifiers:
+        return True
+    if id_type != "email":
+        return False
+    domain = id_value.rpartition("@")[2]
+    return domain in _blocked_domains
 
 
 def insert_event(
@@ -258,15 +342,6 @@ def transaction() -> Iterator[psycopg.Connection[Any]]:
     """Havuzdan bağlantı verir; blok sonunda commit, hatada rollback."""
     with _get_pool().connection() as conn:
         yield conn
-
-
-def is_identifier_blocked(conn: psycopg.Connection[Any], id_type: str, id_value: str) -> bool:
-    """Tanımlayıcı blocked_identifiers'da mı."""
-    query = """
-        SELECT 1 FROM blocked_identifiers
-        WHERE org_id = %s AND id_type = %s AND id_value = %s
-    """
-    return conn.execute(query, (get_org_id(), id_type, id_value)).fetchone() is not None
 
 
 def find_identity_thread_id(
