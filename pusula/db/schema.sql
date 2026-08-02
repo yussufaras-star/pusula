@@ -156,21 +156,30 @@ CREATE INDEX IF NOT EXISTS idx_identities_thread ON identities (thread_id);
 
 -- leads: Zoho Leads özeti (48s / 3 arama penceresi için).
 -- assigned_at = Created_Time; Zoho metadata'da ayrı Owner atama alanı yok.
+-- status = Zoho Lead_Status (salt okunur; Pusula yazmaz).
+-- pusula_state = yerel durum otomasyonu (Zoho'ya yazılmaz).
 CREATE TABLE IF NOT EXISTS leads (
-    org_id         text NOT NULL DEFAULT 'rexven',
-    lead_id        text NOT NULL,
-    thread_id      text,
-    status         text,
-    owner_rep_id   text,
-    assigned_at    timestamptz,
-    source         text,
-    created_at     timestamptz DEFAULT now(),
+    org_id            text NOT NULL DEFAULT 'rexven',
+    lead_id           text NOT NULL,
+    thread_id         text,
+    status            text,
+    owner_rep_id      text,
+    assigned_at       timestamptz,
+    source            text,
+    pusula_state      text
+        CHECK (pusula_state IS NULL OR pusula_state IN (
+            'active', 'stale', 'aging', 'archived', 'closed'
+        )),
+    pusula_state_at   timestamptz,
+    created_at        timestamptz DEFAULT now(),
     PRIMARY KEY (org_id, lead_id),
     FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_leads_thread ON leads (org_id, thread_id);
 CREATE INDEX IF NOT EXISTS idx_leads_assigned_at ON leads (org_id, assigned_at);
+CREATE INDEX IF NOT EXISTS idx_leads_pusula_state
+    ON leads (org_id, pusula_state, owner_rep_id);
 
 -- reps: satış temsilcileri (Zoho kullanıcıları).
 -- category TÜRETİLMİŞ bir alandır; her sync'te şöyle hesaplanır:
@@ -246,6 +255,15 @@ ALTER TABLE blocked_domains     ADD COLUMN IF NOT EXISTS org_id text NOT NULL DE
 ALTER TABLE reps                ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
 ALTER TABLE role_category_map   ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
 ALTER TABLE leads               ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
+ALTER TABLE leads               ADD COLUMN IF NOT EXISTS pusula_state text;
+ALTER TABLE leads               ADD COLUMN IF NOT EXISTS pusula_state_at timestamptz;
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_pusula_state_check;
+ALTER TABLE leads ADD CONSTRAINT leads_pusula_state_check
+    CHECK (pusula_state IS NULL OR pusula_state IN (
+        'active', 'stale', 'aging', 'archived', 'closed'
+    ));
+CREATE INDEX IF NOT EXISTS idx_leads_pusula_state
+    ON leads (org_id, pusula_state, owner_rep_id);
 
 -- threads PK'sı değişeceği için ona bağımlı FK önce bırakılır.
 ALTER TABLE identities DROP CONSTRAINT IF EXISTS identities_thread_id_fkey;

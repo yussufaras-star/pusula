@@ -15,6 +15,7 @@ Channel = Literal["call", "email", "whatsapp", "meeting", "note", "task"]
 Direction = Literal["inbound", "outbound", "internal"]
 BodyQuality = Literal["low", "medium", "high"]
 CommitmentStatus = Literal["open", "fulfilled", "broken", "expired"]
+PusulaLeadState = Literal["active", "stale", "aging", "archived", "closed"]
 
 
 class Event(BaseModel):
@@ -78,12 +79,14 @@ class SyncState(BaseModel):
 
 
 class Lead(BaseModel):
-    """leads tablosu: Zoho Leads özeti (status + atama zamanı)."""
+    """leads tablosu: Zoho özeti + yerel pusula_state."""
 
     lead_id: str
     thread_id: str | None = None
-    status: str | None = None
+    status: str | None = None  # Zoho Lead_Status; Pusula yazmaz
     owner_rep_id: str | None = None
     assigned_at: datetime | None = None  # Zoho Created_Time
     source: str | None = None
+    pusula_state: PusulaLeadState | None = None
+    pusula_state_at: datetime | None = None
     created_at: datetime | None = None
