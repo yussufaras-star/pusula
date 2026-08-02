@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS leads (
     source            text,
     pusula_state      text
         CHECK (pusula_state IS NULL OR pusula_state IN (
-            'active', 'stale', 'aging', 'archived', 'closed'
+            'active', 'stale', 'aging', 'archived', 'nurture', 'closed'
         )),
     pusula_state_at   timestamptz,
     created_at        timestamptz DEFAULT now(),
@@ -260,7 +260,7 @@ ALTER TABLE leads               ADD COLUMN IF NOT EXISTS pusula_state_at timesta
 ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_pusula_state_check;
 ALTER TABLE leads ADD CONSTRAINT leads_pusula_state_check
     CHECK (pusula_state IS NULL OR pusula_state IN (
-        'active', 'stale', 'aging', 'archived', 'closed'
+        'active', 'stale', 'aging', 'archived', 'nurture', 'closed'
     ));
 CREATE INDEX IF NOT EXISTS idx_leads_pusula_state
     ON leads (org_id, pusula_state, owner_rep_id);

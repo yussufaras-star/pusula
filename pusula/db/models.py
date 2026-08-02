@@ -15,7 +15,9 @@ Channel = Literal["call", "email", "whatsapp", "meeting", "note", "task"]
 Direction = Literal["inbound", "outbound", "internal"]
 BodyQuality = Literal["low", "medium", "high"]
 CommitmentStatus = Literal["open", "fulfilled", "broken", "expired"]
-PusulaLeadState = Literal["active", "stale", "aging", "archived", "closed"]
+PusulaLeadState = Literal[
+    "active", "stale", "aging", "archived", "nurture", "closed"
+]
 
 
 class Event(BaseModel):

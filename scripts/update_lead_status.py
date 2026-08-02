@@ -1,13 +1,18 @@
 """Lead'ler için yerel pusula_state hesaplar (Zoho'ya YAZMAZ).
 
 Kurallar (öncelik sırasıyla):
-  1. closed   — Zoho status sonuçlanmış (Randevu, Nitelikli Değil*,
-                Aranmamalı, Almadı-*, Mevcut Müşteri, İletişim Kurulamadı…)
-  2. aging    — outbound arama >= 3 ve temas yok
-  3. active   — pazarsız 48 saat dolmamış VE outbound < 3
-                (veya >=3 arama ama temas var → hâlâ açık)
-  4. stale    — 48 saat dolmuş, arama < 3, atamadan bu yana < 10 gün
-  5. archived — 48 saat dolmuş, arama < 3, atamadan bu yana >= 10 gün
+  1. closed  — Zoho status sonuçlanmış (Randevu, Nitelikli Değil*,
+               Aranmamalı, Almadı-*, Mevcut Müşteri, İletişim Kurulamadı…)
+  2. nurture — temas kurulmuş canlı lead (Satış Fırsatı, Düşünmek İstiyor,
+               Müsait Olmadığını Belirtti); 48s kuralı uygulanmaz
+  3. 48s / 3 arama kuralı SADECE şu Zoho statülerine:
+       Yeni Müşteri Adayı, 1/2/3.Arama-Ulaşılamadı, Aging,
+       Yabancı No/Mesaj-Mail Atıldı, Yabancı No Mesaj/Mail İletildi
+         aging    — outbound >= 3 ve temas yok
+         active   — pazarsız 48 saat dolmamış VE outbound < 3
+                    (veya >=3 arama ama temas var)
+         stale    — 48 saat dolmuş, arama < 3, atamadan < 10 gün
+         archived — 48 saat dolmuş, arama < 3, atamadan >= 10 gün
 
 Pazar hesabı: public.pazarsiz_saat(baslangic, bitis).
 leads.status (Zoho alanı) okunur, asla güncellenmez.
@@ -34,7 +39,7 @@ from dotenv import load_dotenv
 
 from pusula.config import get_org_id
 
-_STATES = ("active", "stale", "aging", "archived", "closed")
+_STATES = ("active", "stale", "aging", "archived", "nurture", "closed")
 
 # Sonraki pusula_state; leads.status'a dokunulmaz.
 _CANDIDATES_SQL = """
@@ -50,13 +55,31 @@ _CANDIDATES_SQL = """
                 OR l.status LIKE 'Almadı-%%'
                 OR l.status LIKE 'Nitelikli Değil%%'
                 THEN 'closed'
-            WHEN outbound_calls >= 3 AND NOT has_temas THEN 'aging'
-            WHEN outbound_calls >= 3 AND has_temas THEN 'active'
-            WHEN pazar_h < 48 AND outbound_calls < 3 THEN 'active'
-            WHEN pazar_h >= 48 AND outbound_calls < 3
-                 AND age < interval '10 days' THEN 'stale'
-            WHEN pazar_h >= 48 AND outbound_calls < 3
-                 AND age >= interval '10 days' THEN 'archived'
+            WHEN l.status IN (
+                    'Satış Fırsatı',
+                    'Düşünmek İstiyor',
+                    'Müsait Olmadığını Belirtti'
+                )
+                THEN 'nurture'
+            WHEN l.status IN (
+                    'Yeni Müşteri Adayı',
+                    '1.Arama-Ulaşılamadı',
+                    '2.Arama-Ulaşılamadı',
+                    '3.Arama-Ulaşılamadı',
+                    'Aging',
+                    'Yabancı No/Mesaj-Mail Atıldı',
+                    'Yabancı No Mesaj/Mail İletildi'
+                )
+                THEN CASE
+                    WHEN outbound_calls >= 3 AND NOT has_temas THEN 'aging'
+                    WHEN outbound_calls >= 3 AND has_temas THEN 'active'
+                    WHEN pazar_h < 48 AND outbound_calls < 3 THEN 'active'
+                    WHEN pazar_h >= 48 AND outbound_calls < 3
+                         AND age < interval '10 days' THEN 'stale'
+                    WHEN pazar_h >= 48 AND outbound_calls < 3
+                         AND age >= interval '10 days' THEN 'archived'
+                    ELSE 'active'
+                END
             ELSE 'active'
         END AS next_state
     FROM (
