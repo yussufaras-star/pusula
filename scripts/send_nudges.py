@@ -5,6 +5,10 @@
   2. kayip_randevu    — Randevu Alındı var, Sunum Yok, sonrası temas yok
   3. gecikmis_taahhut — broken commitment, due_at son 14 gün
 
+Haftanın ilk iş gününde (Pazartesi, Europe/Istanbul) mesajın
+sonuna havuzdan bir kanıt eklenir. Aynı kanıt aynı temsilciye
+8 hafta içinde tekrar gitmez; evidence_id nudges.payload'a yazılır.
+
 Gölge mod: --apply olsa bile tüm DM'ler PUSULA_SHADOW_EMAIL'e gider;
 gerçek temsilciye gitmez. Mesajda hangi temsilci için üretildiği yazar.
 
@@ -19,6 +23,7 @@ CLIQ_WEBHOOK_URL ve PUSULA_SHADOW_EMAIL.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -28,7 +33,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -47,6 +52,65 @@ _TYPE_TITLE = {
     "kayip_randevu": "Kayıp randevu",
     "gecikmis_taahhut": "Gecikmiş taahhüt",
 }
+
+EvidenceTip = Literal["ekip", "kisisel", "sistem"]
+
+
+@dataclass(frozen=True)
+class Evidence:
+    id: str
+    metin: str
+    tip: EvidenceTip
+    aktif: bool = True
+
+
+# Kanıt havuzu (ileride evidence tablosuna taşınabilir).
+_EVIDENCE_POOL: tuple[Evidence, ...] = (
+    Evidence(
+        "ev_ekip_01",
+        "Randevu sonrası aynı gün temas kurulan hatlarda sunuma geçiş daha sıktı.",
+        "ekip",
+    ),
+    Evidence(
+        "ev_ekip_02",
+        "48 saat penceresinde üçüncü aramaya kalan lead'lerin çoğu arşive kaydı.",
+        "ekip",
+    ),
+    Evidence(
+        "ev_ekip_03",
+        "İlk iki aramada ulaşılamayanlarda üçüncü deneme çoğu zaman yapılmadı.",
+        "ekip",
+    ),
+    Evidence(
+        "ev_kisisel_01",
+        "Konu netleşmeden fiyat açılan görüşmelerde görüşme süresi kısalıyordu.",
+        "kisisel",
+    ),
+    Evidence(
+        "ev_kisisel_02",
+        "Taahhüt verilen ama vadesi geçen kayıtlarda sonraki adım çoğu zaman boş kaldı.",
+        "kisisel",
+    ),
+    Evidence(
+        "ev_sistem_01",
+        "Aging'e düşen lead'lerde ortalama ilk anlamlı temas birkaç gün gecikti.",
+        "sistem",
+    ),
+    Evidence(
+        "ev_sistem_02",
+        "Kayıp randevu adaylarında sunum kaydı olmadan hat soğumuş görünüyordu.",
+        "sistem",
+    ),
+)
+
+_USED_EVIDENCE_SQL = """
+    SELECT DISTINCT payload->>'evidence_id'
+    FROM nudges
+    WHERE org_id = %s
+      AND rep_id = %s
+      AND sent_at >= now() - interval '8 weeks'
+      AND payload->>'evidence_id' IS NOT NULL
+"""
 
 _PENCERE_SQL = """
     SELECT
@@ -271,12 +335,47 @@ def _line_for(n: NudgeCandidate) -> str:
     return f"{phone} — vade {due}"
 
 
+def _is_first_business_day(now: datetime | None = None) -> bool:
+    """Haftanın ilk iş günü: Pazartesi (Europe/Istanbul)."""
+    local = now or datetime.now(_TZ)
+    if local.tzinfo is None:
+        local = local.replace(tzinfo=_TZ)
+    else:
+        local = local.astimezone(_TZ)
+    return local.weekday() == 0  # Pazartesi
+
+
+def _pick_evidence(
+    conn: psycopg.Connection,
+    org_id: str,
+    rep_id: str,
+    *,
+    now: datetime | None = None,
+) -> Evidence | None:
+    """İlk iş gününde, 8 haftada kullanılmamış bir kanıt seç."""
+    if not _is_first_business_day(now):
+        return None
+    used = {
+        str(r[0])
+        for r in conn.execute(_USED_EVIDENCE_SQL, (org_id, rep_id)).fetchall()
+        if r[0]
+    }
+    pool = [e for e in _EVIDENCE_POOL if e.aktif and e.id not in used]
+    if not pool:
+        return None
+    local = (now or datetime.now(_TZ)).astimezone(_TZ)
+    year, week, _ = local.isocalendar()
+    digest = hashlib.sha256(f"{rep_id}:{year}:{week}".encode()).hexdigest()
+    return pool[int(digest[:8], 16) % len(pool)]
+
+
 def _build_message(
     *,
     rep_name: str,
     rep_email: str | None,
     selected: list[NudgeCandidate],
     stock: int,
+    evidence: Evidence | None = None,
 ) -> str:
     who = rep_name
     if rep_email:
@@ -294,6 +393,9 @@ def _build_message(
             parts.append(_line_for(item))
         parts.append("")
     parts.append(f"Bekleyen stok: {stock}")
+    if evidence is not None:
+        parts.append("")
+        parts.append(evidence.metin)
     return "\n".join(parts).rstrip() + "\n"
 
 
@@ -492,27 +594,36 @@ def main() -> int:
                 ).fetchall()
             }
 
-            plans: list[tuple[str, list[NudgeCandidate], int, str]] = []
+            evidence_day = _is_first_business_day()
+            plans: list[
+                tuple[str, list[NudgeCandidate], int, str, Evidence | None]
+            ] = []
             total_nudges = 0
             for rep_id, items in sorted(by_rep.items()):
                 selected, stock = _select_for_rep(items)
                 if not selected:
                     continue
                 name, email = reps.get(rep_id, (rep_id, None))
+                evidence = _pick_evidence(conn, org_id, rep_id)
                 msg = _build_message(
                     rep_name=name,
                     rep_email=email,
                     selected=selected,
                     stock=stock,
+                    evidence=evidence,
                 )
-                plans.append((rep_id, selected, stock, msg))
+                plans.append((rep_id, selected, stock, msg, evidence))
                 total_nudges += len(selected)
 
             print(
                 f"aday: {len(raw)} (dedup atlanan={skipped_dup}), "
                 f"temsilci={len(plans)}, dürtü={total_nudges} (org={org_id})"
             )
-            for rep_id, selected, stock, _msg in plans:
+            if evidence_day:
+                print("kanıt: haftanın ilk iş günü — mesaja eklenecek")
+            else:
+                print("kanıt: atlandı (haftanın ilk iş günü değil)")
+            for rep_id, selected, stock, _msg, evidence in plans:
                 name, _email = reps.get(rep_id, (rep_id, None))
                 by_t = defaultdict(int)
                 for n in selected:
@@ -520,9 +631,10 @@ def main() -> int:
                 detail = ", ".join(
                     f"{t}={by_t[t]}" for t in _TYPE_ORDER if by_t[t]
                 )
+                ev_s = evidence.id if evidence else "-"
                 print(
                     f"  {name}: {len(selected)} dürtü ({detail}), "
-                    f"stok={stock}"
+                    f"stok={stock}, kanıt={ev_s}"
                 )
 
             if dry_run:
@@ -530,7 +642,7 @@ def main() -> int:
                 return 0
 
             assert webhook_url and shadow_email
-            for rep_id, selected, stock, msg in plans:
+            for rep_id, selected, stock, msg, evidence in plans:
                 name, email = reps.get(rep_id, (rep_id, None))
                 try:
                     _post_cliq(webhook_url, msg, shadow_email)
@@ -541,7 +653,7 @@ def main() -> int:
 
                 for n in selected:
                     try:
-                        payload = {
+                        payload: dict[str, Any] = {
                             "shadow": True,
                             "shadow_email": shadow_email,
                             "intended_rep_id": rep_id,
@@ -551,6 +663,8 @@ def main() -> int:
                             "phone": n.phone,
                             "stock": stock,
                         }
+                        if evidence is not None:
+                            payload["evidence_id"] = evidence.id
                         written += _insert_nudge(
                             conn, org_id=org_id, n=n, payload=payload
                         )
