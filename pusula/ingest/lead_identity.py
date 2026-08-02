@@ -1,20 +1,24 @@
 """Lead kimlik zenginleştirme yardımcısı.
 
 Calls ingest sonrası görülen zoho_lead_id'ler için Leads modülünden
-telefon/e-posta çeker, thread kimliğine bağlar ve threads.state'e
-Lead_Source / Lead_Status yazar. Ingester değildir.
+telefon/e-posta çeker, thread kimliğine bağlar, leads tablosuna
+status/atama yazar ve threads.state'e Lead_Source / Lead_Status yazar.
+Ingester değildir.
 
 Kimlik çözümleme N+1 yapmaz: tüm aday çiftler tek sorguda okunur,
-yeni thread/identity yazımları executemany ile batch edilir.
+yeni thread/identity/leads yazımları executemany ile batch edilir.
 
-Leads telefon alanları (inspect_zoho_module --module Leads, 2026-08):
-Phone, Mobile. Phone_2 yok.
+Leads alanları (inspect_zoho_module --module Leads):
+Phone, Mobile, Email, Secondary_Email, Lead_Source, Lead_Status,
+Owner, Created_Time. Ayrı Owner atama tarihi alanı yok → assigned_at
+= Created_Time.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Sequence
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -23,6 +27,7 @@ from psycopg.types.json import Json
 from pusula.config import get_org_id
 from pusula.db import client
 from pusula.db.identity import normalize_email, normalize_phone
+from pusula.ingest.base import to_istanbul
 from pusula.zoho.crm import coql
 
 logger = logging.getLogger(__name__)
@@ -38,19 +43,27 @@ _LEAD_FIELDS = [
     "Lead_Status",
     "Owner",
     "Full_Name",
+    "Created_Time",
 ]
 _BATCH_SIZE = 100
 
 IdentityMap = dict[tuple[str, str], str]  # (id_type, id_value) -> thread_id
+# (lead_id, thread_id, status, owner_rep_id, assigned_at, source)
+LeadRow = tuple[str, str | None, str | None, str | None, datetime | None, str | None]
 
 
 def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
-    """Lead id'ler için telefon/e-posta kimliklerini batch çeker ve bağlar.
+    """Lead id'ler için kimlik + leads satırını batch çeker ve yazar.
 
-    Dönüş: processed, phones_added, emails_added, errors.
-    Geçersiz telefon/e-posta sessizce atlanır.
+    Dönüş: processed, phones_added, emails_added, leads_written, errors.
     """
-    stats = {"processed": 0, "phones_added": 0, "emails_added": 0, "errors": 0}
+    stats = {
+        "processed": 0,
+        "phones_added": 0,
+        "emails_added": 0,
+        "leads_written": 0,
+        "errors": 0,
+    }
     cleaned = {lid.strip() for lid in lead_ids if lid and str(lid).strip()}
     with client.transaction() as conn:
         client.load_blocklist(conn)
@@ -80,10 +93,11 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
         all_pairs.extend(pairs)
     identity_map = _load_identity_map(all_pairs)
 
-    # 3) Bellekte çöz; yazılacakları biriktir (resolve_thread / N+1 yok).
+    # 3) Bellekte çöz; yazılacakları biriktir.
     threads_to_create: list[str] = []
-    identities_to_upsert: list[tuple[str, str, str]] = []  # thread, type, value
-    state_patches: list[tuple[str, dict[str, Any]]] = []  # thread_id, patch
+    identities_to_upsert: list[tuple[str, str, str]] = []
+    state_patches: list[tuple[str, dict[str, Any]]] = []
+    leads_to_upsert: list[LeadRow] = []
     merge_jobs: list[tuple[str, list[str], dict[tuple[str, str], str]]] = []
 
     matched_thread_ids: set[str] = set()
@@ -120,6 +134,16 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
                 patch["lead_status"] = lead_status
             if patch and thread_id is not None:
                 state_patches.append((thread_id, patch))
+            leads_to_upsert.append(
+                (
+                    lead_id,
+                    thread_id,
+                    lead_status,
+                    _owner_rep_id(record.get("Owner")),
+                    _parse_zoho_datetime(record.get("Created_Time")),
+                    lead_source,
+                )
+            )
             stats["processed"] += 1
             stats["phones_added"] += phones
             stats["emails_added"] += emails
@@ -127,12 +151,13 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
             logger.exception("lead kimlik senkronu başarısız (lead_id=%s)", lead_id)
             stats["errors"] += 1
 
-    # 4) Tek transaction: merge → thread → identity → state.
+    # 4) Tek transaction: merge → thread → identity → leads → state.
     if (
         threads_to_create
         or identities_to_upsert
         or state_patches
         or merge_jobs
+        or leads_to_upsert
     ):
         with client.transaction() as conn:
             for winner, losers, match_pairs in merge_jobs:
@@ -169,6 +194,44 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
                             for thread_id, id_type, id_value in identities_to_upsert
                         ],
                     )
+            if leads_to_upsert:
+                org_id = get_org_id()
+                with conn.cursor() as cur:
+                    cur.executemany(
+                        """
+                        INSERT INTO leads (
+                            org_id, lead_id, thread_id, status,
+                            owner_rep_id, assigned_at, source
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (org_id, lead_id) DO UPDATE SET
+                            thread_id = COALESCE(EXCLUDED.thread_id, leads.thread_id),
+                            status = EXCLUDED.status,
+                            owner_rep_id = EXCLUDED.owner_rep_id,
+                            assigned_at = EXCLUDED.assigned_at,
+                            source = EXCLUDED.source
+                        """,
+                        [
+                            (
+                                org_id,
+                                lead_id,
+                                thread_id,
+                                status,
+                                owner_rep_id,
+                                assigned_at,
+                                source,
+                            )
+                            for (
+                                lead_id,
+                                thread_id,
+                                status,
+                                owner_rep_id,
+                                assigned_at,
+                                source,
+                            ) in leads_to_upsert
+                        ],
+                    )
+                stats["leads_written"] = len(leads_to_upsert)
             for thread_id, patch in state_patches:
                 conn.execute(
                     """
@@ -230,14 +293,16 @@ def _plan_one_lead(
     elif len(matched_ids) == 1:
         thread_id = matched_ids[0]
     else:
-        # En eski created_at kazanır (resolve_thread ile aynı kural).
         thread_id = min(
             matched_ids,
-            key=lambda tid: (thread_created_at.get(tid) is None, thread_created_at.get(tid), tid),
+            key=lambda tid: (
+                thread_created_at.get(tid) is None,
+                thread_created_at.get(tid),
+                tid,
+            ),
         )
         losers = [tid for tid in matched_ids if tid != thread_id]
         merge_jobs.append((thread_id, losers, dict(matches)))
-        # Kaybeden thread kimliklerini kazananla güncelle (map).
         for pair, tid in list(identity_map.items()):
             if tid in losers:
                 identity_map[pair] = thread_id
@@ -295,6 +360,26 @@ def _fetch_leads(lead_ids: Sequence[str]) -> Iterable[dict[str, Any]]:
     fields = ", ".join(_LEAD_FIELDS)
     query = f"select {fields} from Leads where id in ({ids_sql})"
     return coql(query)
+
+
+def _owner_rep_id(owner: Any) -> str | None:
+    """Zoho Owner lookup → rep_id."""
+    if isinstance(owner, dict) and owner.get("id"):
+        return str(owner["id"])
+    return None
+
+
+def _parse_zoho_datetime(value: Any) -> datetime | None:
+    """Zoho ISO-8601 zamanını Europe/Istanbul datetime'a çevirir."""
+    if isinstance(value, datetime):
+        return to_istanbul(value)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        return to_istanbul(datetime.fromisoformat(text))
+    except ValueError:
+        return None
 
 
 def _normalized_phone(raw: str | None) -> str | None:

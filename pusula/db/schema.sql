@@ -154,6 +154,24 @@ CREATE TABLE IF NOT EXISTS blocked_domains (
 
 CREATE INDEX IF NOT EXISTS idx_identities_thread ON identities (thread_id);
 
+-- leads: Zoho Leads özeti (48s / 3 arama penceresi için).
+-- assigned_at = Created_Time; Zoho metadata'da ayrı Owner atama alanı yok.
+CREATE TABLE IF NOT EXISTS leads (
+    org_id         text NOT NULL DEFAULT 'rexven',
+    lead_id        text NOT NULL,
+    thread_id      text,
+    status         text,
+    owner_rep_id   text,
+    assigned_at    timestamptz,
+    source         text,
+    created_at     timestamptz DEFAULT now(),
+    PRIMARY KEY (org_id, lead_id),
+    FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_leads_thread ON leads (org_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_leads_assigned_at ON leads (org_id, assigned_at);
+
 -- reps: satış temsilcileri (Zoho kullanıcıları).
 -- category TÜRETİLMİŞ bir alandır; her sync'te şöyle hesaplanır:
 --   coalesce(category_override, role_category_map[zoho_role], 'other')
@@ -227,10 +245,13 @@ ALTER TABLE blocked_identifiers ADD COLUMN IF NOT EXISTS org_id text NOT NULL DE
 ALTER TABLE blocked_domains     ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
 ALTER TABLE reps                ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
 ALTER TABLE role_category_map   ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
+ALTER TABLE leads               ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
 
 -- threads PK'sı değişeceği için ona bağımlı FK önce bırakılır.
 ALTER TABLE identities DROP CONSTRAINT IF EXISTS identities_thread_id_fkey;
 ALTER TABLE identities DROP CONSTRAINT IF EXISTS identities_org_id_thread_id_fkey;
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_org_id_thread_id_fkey;
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_thread_id_fkey;
 
 -- threads: PK (org_id, thread_id) + segment FK'sı.
 ALTER TABLE threads DROP CONSTRAINT IF EXISTS threads_org_id_segment_fkey;
@@ -245,6 +266,11 @@ ALTER TABLE identities DROP CONSTRAINT IF EXISTS identities_org_id_id_type_id_va
 ALTER TABLE identities ADD CONSTRAINT identities_org_id_id_type_id_value_key
     UNIQUE (org_id, id_type, id_value);
 ALTER TABLE identities ADD CONSTRAINT identities_org_id_thread_id_fkey
+    FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id);
+
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_pkey;
+ALTER TABLE leads ADD CONSTRAINT leads_pkey PRIMARY KEY (org_id, lead_id);
+ALTER TABLE leads ADD CONSTRAINT leads_org_id_thread_id_fkey
     FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id);
 
 -- events: ingest tekilliği org bazlı.
@@ -307,3 +333,4 @@ CREATE TABLE IF NOT EXISTS call_statuses (
     status_key  text NOT NULL,  -- connected | no_answer | failed | unknown
     PRIMARY KEY (org_id, raw_value)
 );
+

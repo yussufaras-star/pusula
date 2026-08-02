@@ -183,9 +183,12 @@ def main() -> int:
             stats = getattr(ingester, "lead_identity_stats", None)
             if isinstance(stats, dict):
                 identity_notes.append(
-                    f"kimlik zenginleştirme: {stats.get('leads_seen', stats.get('processed', 0))} lead, "
+                    f"kimlik zenginlestirme: islenen={stats.get('processed', 0)} "
+                    f"(gorulen={stats.get('leads_seen', stats.get('processed', 0))}), "
                     f"+{stats.get('phones_added', 0)} telefon, "
-                    f"+{stats.get('emails_added', 0)} e-posta"
+                    f"+{stats.get('emails_added', 0)} e-posta, "
+                    f"leads yazilan={stats.get('leads_written', 0)}, "
+                    f"hata={stats.get('errors', 0)}"
                 )
             unknown_outcomes = getattr(ingester, "unknown_outcomes", None)
             if isinstance(unknown_outcomes, dict) and unknown_outcomes:

@@ -399,7 +399,7 @@ def reassign_thread_rows(
     conn: psycopg.Connection[Any], winner_thread_id: str, loser_thread_id: str
 ) -> None:
     """Kaybeden thread'in identities, events ve commitments satırlarını taşır."""
-    for table in ("identities", "events", "commitments"):
+    for table in ("identities", "events", "commitments", "leads"):
         conn.execute(
             f"UPDATE {table} SET thread_id = %s WHERE org_id = %s AND thread_id = %s",
             (winner_thread_id, get_org_id(), loser_thread_id),

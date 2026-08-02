@@ -75,3 +75,15 @@ class SyncState(BaseModel):
     last_synced_at: datetime | None = None
     last_cursor: str | None = None
     updated_at: datetime | None = None
+
+
+class Lead(BaseModel):
+    """leads tablosu: Zoho Leads özeti (status + atama zamanı)."""
+
+    lead_id: str
+    thread_id: str | None = None
+    status: str | None = None
+    owner_rep_id: str | None = None
+    assigned_at: datetime | None = None  # Zoho Created_Time
+    source: str | None = None
+    created_at: datetime | None = None

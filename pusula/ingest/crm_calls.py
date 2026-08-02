@@ -151,6 +151,7 @@ class CrmCallsIngester(Ingester):
                 "processed": 0,
                 "phones_added": 0,
                 "emails_added": 0,
+                "leads_written": 0,
                 "errors": 0,
                 "leads_seen": len(self._seen_lead_ids),
             }
@@ -164,6 +165,7 @@ class CrmCallsIngester(Ingester):
                 "processed": 0,
                 "phones_added": 0,
                 "emails_added": 0,
+                "leads_written": 0,
                 "errors": 0,
                 "leads_seen": 0,
             }
