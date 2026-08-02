@@ -5,6 +5,9 @@
   2. kayip_randevu    — Randevu Alındı var, Sunum Yok, sonrası temas yok
   3. gecikmis_taahhut — broken commitment, due_at son 14 gün
 
+Kontenjan: önce her tipten en fazla 1; kalan slot öncelik
+sırasıyla (pencere → kayıp randevu → taahhüt) doldurulur.
+
 Haftanın ilk iş gününde (Pazartesi, Europe/Istanbul) mesajın
 sonuna havuzdan bir kanıt eklenir. Aynı kanıt aynı temsilciye
 8 hafta içinde tekrar gitmez; evidence_id nudges.payload'a yazılır.
@@ -369,6 +372,11 @@ def _pick_evidence(
     return pool[int(digest[:8], 16) % len(pool)]
 
 
+def _first_name(full_name: str) -> str:
+    parts = full_name.strip().split()
+    return parts[0] if parts else full_name
+
+
 def _build_message(
     *,
     rep_name: str,
@@ -380,7 +388,12 @@ def _build_message(
     who = rep_name
     if rep_email:
         who = f"{rep_name} <{rep_email}>"
-    parts: list[str] = [f"[gölge] {who} için", ""]
+    parts: list[str] = [
+        f"[gölge] {who} için",
+        "",
+        f"Günaydın {_first_name(rep_name)}",
+        "",
+    ]
     by_type: dict[str, list[NudgeCandidate]] = defaultdict(list)
     for n in selected:
         by_type[n.nudge_type].append(n)
@@ -468,7 +481,7 @@ def _load_candidates(conn: psycopg.Connection, org_id: str) -> list[NudgeCandida
 
 
 def _select_for_rep(items: list[NudgeCandidate]) -> tuple[list[NudgeCandidate], int]:
-    """Tip sırasıyla doldur; temsilci başına en fazla _MAX_PER_REP."""
+    """Her tipten 1, kalan kontenjan öncelik sırasıyla; toplam max 3."""
     by_type: dict[str, list[NudgeCandidate]] = defaultdict(list)
     for n in items:
         by_type[n.nudge_type].append(n)
@@ -476,13 +489,36 @@ def _select_for_rep(items: list[NudgeCandidate]) -> tuple[list[NudgeCandidate], 
         by_type[nudge_type].sort(key=lambda x: x.sort_key, reverse=True)
 
     selected: list[NudgeCandidate] = []
+    selected_ids: set[tuple[str, str, str]] = set()
+
+    def _key(n: NudgeCandidate) -> tuple[str, str, str]:
+        return (n.nudge_type, n.thread_id, str(n.commitment_id or n.lead_id or ""))
+
+    # Tur 1: her tipten en fazla 1.
     for nudge_type in _TYPE_ORDER:
-        for n in by_type.get(nudge_type, []):
-            if len(selected) >= _MAX_PER_REP:
-                break
-            selected.append(n)
         if len(selected) >= _MAX_PER_REP:
             break
+        pool = by_type.get(nudge_type) or []
+        if not pool:
+            continue
+        n = pool[0]
+        selected.append(n)
+        selected_ids.add(_key(n))
+
+    # Tur 2: kalan slotları öncelik sırasıyla doldur.
+    if len(selected) < _MAX_PER_REP:
+        for nudge_type in _TYPE_ORDER:
+            if len(selected) >= _MAX_PER_REP:
+                break
+            for n in by_type.get(nudge_type) or []:
+                if len(selected) >= _MAX_PER_REP:
+                    break
+                k = _key(n)
+                if k in selected_ids:
+                    continue
+                selected.append(n)
+                selected_ids.add(k)
+
     stock = max(0, len(items) - len(selected))
     return selected, stock
 
