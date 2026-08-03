@@ -181,6 +181,48 @@ CREATE INDEX IF NOT EXISTS idx_leads_assigned_at ON leads (org_id, assigned_at);
 CREATE INDEX IF NOT EXISTS idx_leads_pusula_state
     ON leads (org_id, pusula_state, owner_rep_id);
 
+-- contacts: Zoho Contacts (Deal → Contact → Lead zinciri için).
+-- lead_id Zoho'da doğrudan yok; thread üzerindeki zoho_lead kimliğinden çözülür.
+CREATE TABLE IF NOT EXISTS contacts (
+    org_id         text NOT NULL DEFAULT 'rexven',
+    contact_id     text NOT NULL,
+    lead_id        text,
+    thread_id      text,
+    created_at     timestamptz,
+    owner_rep_id   text,
+    PRIMARY KEY (org_id, contact_id),
+    FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_thread ON contacts (org_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_contacts_lead ON contacts (org_id, lead_id);
+
+-- deals: Zoho Deals (satış). cycle_start_at = bağlı lead'in Zoho Created_Time
+-- (leads.assigned_at). Nisan 2026 toplu taşıma lead'lerinde
+-- cycle_start_reliable = false.
+CREATE TABLE IF NOT EXISTS deals (
+    org_id                 text NOT NULL DEFAULT 'rexven',
+    deal_id                text NOT NULL,
+    contact_id             text,
+    lead_id                text,
+    thread_id              text,
+    stage                  text,
+    amount                 numeric,
+    created_at             timestamptz,
+    closed_at              timestamptz,
+    owner_rep_id           text,
+    source                 text,
+    cycle_start_at         timestamptz,
+    cycle_start_reliable   boolean,
+    PRIMARY KEY (org_id, deal_id),
+    FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_deals_owner_created
+    ON deals (org_id, owner_rep_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_deals_thread ON deals (org_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_deals_contact ON deals (org_id, contact_id);
+
 -- reps: satış temsilcileri (Zoho kullanıcıları).
 -- category TÜRETİLMİŞ bir alandır; her sync'te şöyle hesaplanır:
 --   coalesce(category_override, role_category_map[zoho_role], 'other')
@@ -264,6 +306,42 @@ ALTER TABLE leads ADD CONSTRAINT leads_pusula_state_check
     ));
 CREATE INDEX IF NOT EXISTS idx_leads_pusula_state
     ON leads (org_id, pusula_state, owner_rep_id);
+
+-- contacts / deals: mevcut DB'lere idempotent ekleme.
+CREATE TABLE IF NOT EXISTS contacts (
+    org_id         text NOT NULL DEFAULT 'rexven',
+    contact_id     text NOT NULL,
+    lead_id        text,
+    thread_id      text,
+    created_at     timestamptz,
+    owner_rep_id   text,
+    PRIMARY KEY (org_id, contact_id),
+    FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id)
+);
+CREATE INDEX IF NOT EXISTS idx_contacts_thread ON contacts (org_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_contacts_lead ON contacts (org_id, lead_id);
+
+CREATE TABLE IF NOT EXISTS deals (
+    org_id                 text NOT NULL DEFAULT 'rexven',
+    deal_id                text NOT NULL,
+    contact_id             text,
+    lead_id                text,
+    thread_id              text,
+    stage                  text,
+    amount                 numeric,
+    created_at             timestamptz,
+    closed_at              timestamptz,
+    owner_rep_id           text,
+    source                 text,
+    cycle_start_at         timestamptz,
+    cycle_start_reliable   boolean,
+    PRIMARY KEY (org_id, deal_id),
+    FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id)
+);
+CREATE INDEX IF NOT EXISTS idx_deals_owner_created
+    ON deals (org_id, owner_rep_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_deals_thread ON deals (org_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_deals_contact ON deals (org_id, contact_id);
 
 -- threads PK'sı değişeceği için ona bağımlı FK önce bırakılır.
 ALTER TABLE identities DROP CONSTRAINT IF EXISTS identities_thread_id_fkey;

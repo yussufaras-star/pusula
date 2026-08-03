@@ -92,3 +92,30 @@ class Lead(BaseModel):
     pusula_state: PusulaLeadState | None = None
     pusula_state_at: datetime | None = None
     created_at: datetime | None = None
+
+
+class Contact(BaseModel):
+    """contacts tablosu: Zoho Contacts + opsiyonel lead/thread bağları."""
+
+    contact_id: str
+    lead_id: str | None = None
+    thread_id: str | None = None
+    created_at: datetime | None = None  # Zoho Created_Time
+    owner_rep_id: str | None = None
+
+
+class Deal(BaseModel):
+    """deals tablosu: Zoho Deals + satış döngüsü başlangıcı."""
+
+    deal_id: str
+    contact_id: str | None = None
+    lead_id: str | None = None
+    thread_id: str | None = None
+    stage: str | None = None
+    amount: float | None = None
+    created_at: datetime | None = None
+    closed_at: datetime | None = None
+    owner_rep_id: str | None = None
+    source: str | None = None
+    cycle_start_at: datetime | None = None
+    cycle_start_reliable: bool | None = None
