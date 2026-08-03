@@ -19,8 +19,8 @@ Kullanım:
     python scripts/send_nudges.py
     python scripts/send_nudges.py --apply
 
-Varsayılan dry-run. DATABASE_URL gerekir; --apply için ayrıca
-CLIQ_WEBHOOK_URL ve PUSULA_SHADOW_EMAIL.
+Varsayılan dry-run. DATABASE_URL_POOLED gerekir (pgbouncer 6543);
+--apply için ayrıca CLIQ_WEBHOOK_URL ve PUSULA_SHADOW_EMAIL.
 """
 
 from __future__ import annotations
@@ -579,9 +579,10 @@ def main() -> int:
     dry_run = not args.apply
 
     load_dotenv()
-    database_url = os.environ.get("DATABASE_URL")
+    database_url = os.environ.get("DATABASE_URL_POOLED")
     if not database_url:
-        print("DATABASE_URL ortam değişkeni tanımlı değil")
+        print("DATABASE_URL_POOLED ortam değişkeni tanımlı değil")
+        print("üretilen=0, gönderilen=0, hata=1")
         return 1
 
     webhook_url = os.environ.get("CLIQ_WEBHOOK_URL")
@@ -597,14 +598,16 @@ def main() -> int:
         ]
         if missing:
             print("eksik ortam değişkeni: " + ", ".join(missing))
+            print("üretilen=0, gönderilen=0, hata=1")
             return 1
 
     org_id = get_org_id()
+    produced = 0
+    sent = 0
     errors = 0
-    written = 0
 
     try:
-        with psycopg.connect(database_url) as conn:
+        with psycopg.connect(database_url, prepare_threshold=None) as conn:
             raw = _load_candidates(conn, org_id)
             filtered: list[NudgeCandidate] = []
             skipped_dup = 0
@@ -634,7 +637,6 @@ def main() -> int:
             plans: list[
                 tuple[str, list[NudgeCandidate], int, str, Evidence | None]
             ] = []
-            total_nudges = 0
             for rep_id, items in sorted(by_rep.items()):
                 selected, stock = _select_for_rep(items)
                 if not selected:
@@ -649,11 +651,11 @@ def main() -> int:
                     evidence=evidence,
                 )
                 plans.append((rep_id, selected, stock, msg, evidence))
-                total_nudges += len(selected)
+                produced += len(selected)
 
             print(
                 f"aday: {len(raw)} (dedup atlanan={skipped_dup}), "
-                f"temsilci={len(plans)}, dürtü={total_nudges} (org={org_id})"
+                f"temsilci={len(plans)}, dürtü={produced} (org={org_id})"
             )
             if evidence_day:
                 print("kanıt: haftanın ilk iş günü — mesaja eklenecek")
@@ -675,47 +677,50 @@ def main() -> int:
 
             if dry_run:
                 print("dry-run: gönderilmedi. Yazmak için --apply kullan.")
-                return 0
-
-            assert webhook_url and shadow_email
-            for rep_id, selected, stock, msg, evidence in plans:
-                name, email = reps.get(rep_id, (rep_id, None))
-                try:
-                    _post_cliq(webhook_url, msg, shadow_email)
-                except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
-                    errors += 1
-                    print(f"hata (cliq {name}): {exc}")
-                    continue
-
-                for n in selected:
+            else:
+                assert webhook_url and shadow_email
+                for rep_id, selected, stock, msg, evidence in plans:
+                    name, email = reps.get(rep_id, (rep_id, None))
                     try:
-                        payload: dict[str, Any] = {
-                            "shadow": True,
-                            "shadow_email": shadow_email,
-                            "intended_rep_id": rep_id,
-                            "intended_rep_name": name,
-                            "intended_rep_email": email,
-                            "nudge_type": n.nudge_type,
-                            "phone": n.phone,
-                            "stock": stock,
-                        }
-                        if evidence is not None:
-                            payload["evidence_id"] = evidence.id
-                        written += _insert_nudge(
-                            conn, org_id=org_id, n=n, payload=payload
-                        )
-                    except psycopg.Error as exc:
+                        _post_cliq(webhook_url, msg, shadow_email)
+                    except (
+                        urllib.error.URLError,
+                        urllib.error.HTTPError,
+                        TimeoutError,
+                    ) as exc:
                         errors += 1
-                        print(f"hata (nudges {name}/{n.nudge_type}): {exc}")
+                        print(f"hata (cliq {name}): {exc}")
+                        continue
 
-            print(
-                f"yazıldı: nudges={written}, temsilci_dm={len(plans) - errors}, "
-                f"hata={errors}"
-            )
+                    for n in selected:
+                        try:
+                            payload: dict[str, Any] = {
+                                "shadow": True,
+                                "shadow_email": shadow_email,
+                                "intended_rep_id": rep_id,
+                                "intended_rep_name": name,
+                                "intended_rep_email": email,
+                                "nudge_type": n.nudge_type,
+                                "phone": n.phone,
+                                "stock": stock,
+                            }
+                            if evidence is not None:
+                                payload["evidence_id"] = evidence.id
+                            sent += _insert_nudge(
+                                conn, org_id=org_id, n=n, payload=payload
+                            )
+                        except psycopg.Error as exc:
+                            errors += 1
+                            print(
+                                f"hata (nudges {name}/{n.nudge_type}): {exc}"
+                            )
     except psycopg.Error as exc:
-        print(f"dürtü üretimi başarısız: {exc}")
+        print(f"bağlantı/sorgu başarısız: {exc}")
+        errors += 1
+        print(f"üretilen={produced}, gönderilen={sent}, hata={errors}")
         return 1
 
+    print(f"üretilen={produced}, gönderilen={sent}, hata={errors}")
     return 1 if errors else 0
 
 
