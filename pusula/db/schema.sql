@@ -435,3 +435,20 @@ CREATE TABLE IF NOT EXISTS call_statuses (
     PRIMARY KEY (org_id, raw_value)
 );
 
+-- rep_snapshots: temsilci günlük metrikleri (haftalık karşılaştırma).
+-- scripts/take_snapshot.py yazar; (snapshot_date, rep_id) upsert.
+CREATE TABLE IF NOT EXISTS rep_snapshots (
+    snapshot_date   date NOT NULL,
+    rep_id          text NOT NULL,
+    bekleyen_lead   integer NOT NULL DEFAULT 0,
+    kayip_randevu   integer NOT NULL DEFAULT 0,
+    acik_taahhut    integer NOT NULL DEFAULT 0,
+    tutulan_hafta   integer NOT NULL DEFAULT 0,
+    bozulan_hafta   integer NOT NULL DEFAULT 0,
+    PRIMARY KEY (snapshot_date, rep_id)
+);
+
+-- nudges.nudge_type bilinen değerler (serbest text; yeni tip eklenince güncelle):
+-- pencere_aciliyor | kayip_randevu | gecikmis_taahhut | planlanmis_arama
+
+
