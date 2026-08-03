@@ -44,9 +44,9 @@ FIELD_MAP: dict[str, str] = {
     "call_type": "Call_Type",
     "description": "Description",
     "owner": "Owner",
-    "duration_sec": "Call_Duration_in_seconds",
+    "duration_sec": "Call_Duration_in_seconds",  # integer; snapshot doğrulandı
     # Saniye alanı boşsa metin süre (MM:SS / HH:MM:SS).
-    "duration_text": "Call_Duration",
+    "duration_text": "Call_Duration",  # text; snapshot doğrulandı
     "call_result": "Call_Result",
     # Gelen aramalarda Call_Result yerine dolu olabilen özel alan.
     "inbound_call_result": "Gelen_Arama_Sonucu",
@@ -272,6 +272,8 @@ class CrmCallsIngester(Ingester):
         subject = payload.get(f["subject"])
 
         meta: dict[str, Any] = {
+            "call_duration_sec": duration_sec,
+            # Eski anahtar; okuyucular geçene kadar aynı değer.
             "duration_sec": duration_sec,
             "duration_source": duration_source,
             "outcome_key": outcome_key,
