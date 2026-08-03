@@ -92,6 +92,7 @@ def sync_contacts(*, dry_run: bool = False) -> dict[str, int]:
                         "owner_rep_id": owner_rep_id,
                         "phone": phone,
                         "email": email,
+                        "full_name": _as_str(record.get("Full_Name")),
                     }
                 )
             except Exception:
@@ -172,6 +173,7 @@ def _write_contact_chunk_on_conn(
                 thread_id,
                 item["created_at"],
                 item["owner_rep_id"],
+                item.get("full_name"),
             )
         )
 
@@ -182,14 +184,15 @@ def _write_contact_chunk_on_conn(
             """
             INSERT INTO contacts (
                 org_id, contact_id, lead_id, thread_id,
-                created_at, owner_rep_id
+                created_at, owner_rep_id, full_name
             )
-            VALUES (%s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (org_id, contact_id) DO UPDATE SET
                 lead_id = EXCLUDED.lead_id,
                 thread_id = COALESCE(EXCLUDED.thread_id, contacts.thread_id),
                 created_at = COALESCE(EXCLUDED.created_at, contacts.created_at),
-                owner_rep_id = EXCLUDED.owner_rep_id
+                owner_rep_id = EXCLUDED.owner_rep_id,
+                full_name = EXCLUDED.full_name
             """,
             upserts,
         )

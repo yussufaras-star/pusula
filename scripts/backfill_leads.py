@@ -77,14 +77,15 @@ def main() -> int:
     with client.transaction() as conn:
         counts = conn.execute(
             """
-            SELECT count(*), count(assigned_at), count(status)
+            SELECT count(*), count(assigned_at), count(status), count(full_name)
             FROM leads WHERE org_id = %s
             """,
             (org_id,),
         ).fetchone()
     print(
         f"leads dogrulama: count(*)={counts[0]} "
-        f"assigned_at={counts[1]} status={counts[2]}"
+        f"assigned_at={counts[1]} status={counts[2]} "
+        f"full_name={counts[3]}"
     )
     return 0 if totals["errors"] == 0 else 1
 

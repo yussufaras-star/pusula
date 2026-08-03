@@ -166,6 +166,7 @@ CREATE TABLE IF NOT EXISTS leads (
     owner_rep_id      text,
     assigned_at       timestamptz,
     source            text,
+    full_name         text,  -- Zoho Full_Name; identities'e yazılmaz
     pusula_state      text
         CHECK (pusula_state IS NULL OR pusula_state IN (
             'active', 'stale', 'aging', 'archived', 'nurture', 'closed'
@@ -190,6 +191,7 @@ CREATE TABLE IF NOT EXISTS contacts (
     thread_id      text,
     created_at     timestamptz,
     owner_rep_id   text,
+    full_name      text,  -- Zoho Full_Name; identities'e yazılmaz
     PRIMARY KEY (org_id, contact_id),
     FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id)
 );
@@ -297,6 +299,7 @@ ALTER TABLE blocked_domains     ADD COLUMN IF NOT EXISTS org_id text NOT NULL DE
 ALTER TABLE reps                ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
 ALTER TABLE role_category_map   ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
 ALTER TABLE leads               ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
+ALTER TABLE leads               ADD COLUMN IF NOT EXISTS full_name text;
 ALTER TABLE leads               ADD COLUMN IF NOT EXISTS pusula_state text;
 ALTER TABLE leads               ADD COLUMN IF NOT EXISTS pusula_state_at timestamptz;
 ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_pusula_state_check;
@@ -315,9 +318,11 @@ CREATE TABLE IF NOT EXISTS contacts (
     thread_id      text,
     created_at     timestamptz,
     owner_rep_id   text,
+    full_name      text,
     PRIMARY KEY (org_id, contact_id),
     FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id)
 );
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS full_name text;
 CREATE INDEX IF NOT EXISTS idx_contacts_thread ON contacts (org_id, thread_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_lead ON contacts (org_id, lead_id);
 

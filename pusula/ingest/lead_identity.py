@@ -10,8 +10,9 @@ yeni thread/identity/leads yazımları executemany ile batch edilir.
 
 Leads alanları (inspect_zoho_module --module Leads):
 Phone, Mobile, Email, Secondary_Email, Lead_Source, Lead_Status,
-Owner, Created_Time. Ayrı Owner atama tarihi alanı yok → assigned_at
-= Created_Time.
+Owner, Full_Name, Created_Time. Ayrı Owner atama tarihi alanı yok →
+assigned_at = Created_Time. Full_Name → leads.full_name (identities'e
+yazılmaz).
 """
 
 from __future__ import annotations
@@ -48,8 +49,10 @@ _LEAD_FIELDS = [
 _BATCH_SIZE = 100
 
 IdentityMap = dict[tuple[str, str], str]  # (id_type, id_value) -> thread_id
-# (lead_id, thread_id, status, owner_rep_id, assigned_at, source)
-LeadRow = tuple[str, str | None, str | None, str | None, datetime | None, str | None]
+# (lead_id, thread_id, status, owner_rep_id, assigned_at, source, full_name)
+LeadRow = tuple[
+    str, str | None, str | None, str | None, datetime | None, str | None, str | None
+]
 
 
 def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
@@ -142,6 +145,7 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
                     _owner_rep_id(record.get("Owner")),
                     _parse_zoho_datetime(record.get("Created_Time")),
                     lead_source,
+                    _as_str(record.get("Full_Name")),
                 )
             )
             stats["processed"] += 1
@@ -201,15 +205,16 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
                         """
                         INSERT INTO leads (
                             org_id, lead_id, thread_id, status,
-                            owner_rep_id, assigned_at, source
+                            owner_rep_id, assigned_at, source, full_name
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (org_id, lead_id) DO UPDATE SET
                             thread_id = COALESCE(EXCLUDED.thread_id, leads.thread_id),
                             status = EXCLUDED.status,
                             owner_rep_id = EXCLUDED.owner_rep_id,
                             assigned_at = EXCLUDED.assigned_at,
-                            source = EXCLUDED.source
+                            source = EXCLUDED.source,
+                            full_name = EXCLUDED.full_name
                         """,
                         [
                             (
@@ -220,6 +225,7 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
                                 owner_rep_id,
                                 assigned_at,
                                 source,
+                                full_name,
                             )
                             for (
                                 lead_id,
@@ -228,6 +234,7 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
                                 owner_rep_id,
                                 assigned_at,
                                 source,
+                                full_name,
                             ) in leads_to_upsert
                         ],
                     )

@@ -89,6 +89,7 @@ class Lead(BaseModel):
     owner_rep_id: str | None = None
     assigned_at: datetime | None = None  # Zoho Created_Time
     source: str | None = None
+    full_name: str | None = None  # Zoho Full_Name; identities'e yazılmaz
     pusula_state: PusulaLeadState | None = None
     pusula_state_at: datetime | None = None
     created_at: datetime | None = None
@@ -102,6 +103,7 @@ class Contact(BaseModel):
     thread_id: str | None = None
     created_at: datetime | None = None  # Zoho Created_Time
     owner_rep_id: str | None = None
+    full_name: str | None = None  # Zoho Full_Name; identities'e yazılmaz
 
 
 class Deal(BaseModel):

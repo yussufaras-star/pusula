@@ -4,13 +4,18 @@
   1. pencere_aciliyor — active lead, outbound < 3
   2. kayip_randevu    — Randevu Alındı var, Sunum Yok, sonrası temas yok
   3. gecikmis_taahhut — broken commitment, due_at son 14 gün
+     (sahiplik: thread → leads.owner_rep_id)
 
-Kontenjan: önce her tipten en fazla 1; kalan slot öncelik
-sırasıyla (pencere → kayıp randevu → taahhüt) doldurulur.
+Kontenjan: tip başına sabit kota yok. Toplam 3 slot, uygun aday
+sayısına göre orantılı (largest remainder) dağıtılır.
 
-Haftanın ilk iş gününde (Pazartesi, Europe/Istanbul) mesajın
-sonuna havuzdan bir kanıt eklenir. Aynı kanıt aynı temsilciye
-8 hafta içinde tekrar gitmez; evidence_id nudges.payload'a yazılır.
+Haftanın ilk iş gününde (Pazartesi, Europe/Istanbul) ilgili
+bölümün altına sayı içeren kanıt eklenir. Aynı kanıt aynı
+temsilciye 8 hafta içinde tekrar gitmez; evidence_id
+nudges.payload'a yazılır.
+
+"Bu hafta" bölümü: rep_snapshots bu hafta vs geçen hafta.
+Her iki haftada da satır yoksa bölüm basılmaz.
 
 Gölge mod: --apply olsa bile tüm DM'ler PUSULA_SHADOW_EMAIL'e gider;
 gerçek temsilciye gitmez. Mesajda hangi temsilci için üretildiği yazar.
@@ -34,7 +39,7 @@ import urllib.error
 import urllib.request
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -55,6 +60,13 @@ _TYPE_TITLE = {
     "kayip_randevu": "Kayıp randevu",
     "gecikmis_taahhut": "Gecikmiş taahhüt",
 }
+_SNAPSHOT_LABELS = (
+    ("bekleyen_lead", "Bekleyen lead"),
+    ("kayip_randevu", "Kayıp randevu"),
+    ("acik_taahhut", "Açık taahhüt"),
+    ("tutulan_hafta", "Tutulan"),
+    ("bozulan_hafta", "Bozulan"),
+)
 
 EvidenceTip = Literal["ekip", "kisisel", "sistem"]
 
@@ -106,6 +118,12 @@ _EVIDENCE_POOL: tuple[Evidence, ...] = (
     ),
 )
 
+_TIP_TO_TYPE: dict[EvidenceTip, str] = {
+    "ekip": "kayip_randevu",
+    "kisisel": "gecikmis_taahhut",
+    "sistem": "pencere_aciliyor",
+}
+
 _USED_EVIDENCE_SQL = """
     SELECT DISTINCT payload->>'evidence_id'
     FROM nudges
@@ -141,7 +159,8 @@ _PENCERE_SQL = """
               AND i.id_type = 'phone'
             ORDER BY i.id_value
             LIMIT 1
-        ) AS phone
+        ) AS phone,
+        l.full_name AS contact_name
     FROM leads l
     WHERE l.org_id = %s
       AND l.pusula_state = 'active'
@@ -198,7 +217,25 @@ _KAYIP_SQL = """
             ORDER BY i.id_value
             LIMIT 1
         ) AS phone,
-        r.randevu_at
+        r.randevu_at,
+        (
+            SELECT coalesce(
+                (
+                    SELECT l.full_name FROM leads l
+                    WHERE l.org_id = r.org_id AND l.thread_id = r.thread_id
+                      AND l.full_name IS NOT NULL
+                    ORDER BY l.assigned_at DESC NULLS LAST
+                    LIMIT 1
+                ),
+                (
+                    SELECT ct.full_name FROM contacts ct
+                    WHERE ct.org_id = r.org_id AND ct.thread_id = r.thread_id
+                      AND ct.full_name IS NOT NULL
+                    ORDER BY ct.created_at DESC NULLS LAST
+                    LIMIT 1
+                )
+            )
+        ) AS contact_name
     FROM randevu r
     JOIN threads t
       ON t.org_id = r.org_id AND t.thread_id = r.thread_id
@@ -232,16 +269,12 @@ _KAYIP_SQL = """
     ORDER BY r.randevu_at DESC
 """
 
+# Sahiplik: thread → leads.owner_rep_id (event/thread owner değil).
 _TAAHHUT_SQL = """
     SELECT
-        coalesce(e.rep_id, t.owner_rep_id) AS rep_id,
+        l.owner_rep_id AS rep_id,
         c.thread_id,
-        (
-            SELECT l.lead_id FROM leads l
-            WHERE l.org_id = c.org_id AND l.thread_id = c.thread_id
-            ORDER BY l.assigned_at DESC NULLS LAST
-            LIMIT 1
-        ) AS lead_id,
+        l.lead_id,
         c.id AS commitment_id,
         'gecikmis_taahhut'::text AS nudge_type,
         extract(epoch FROM c.due_at) AS sort_key,
@@ -255,18 +288,23 @@ _TAAHHUT_SQL = """
             LIMIT 1
         ) AS phone,
         c.due_at,
-        c.text AS commitment_text
+        c.text AS commitment_text,
+        l.full_name AS contact_name
     FROM commitments c
-    LEFT JOIN events e ON e.id = c.source_event_id
-    LEFT JOIN threads t
-      ON t.org_id = c.org_id AND t.thread_id = c.thread_id
+    JOIN LATERAL (
+        SELECT lead_id, owner_rep_id, full_name
+        FROM leads
+        WHERE org_id = c.org_id AND thread_id = c.thread_id
+        ORDER BY assigned_at DESC NULLS LAST
+        LIMIT 1
+    ) l ON true
     WHERE c.org_id = %s
       AND c.status = 'broken'
       AND c.due_at IS NOT NULL
       AND c.due_at >= now() - interval '14 days'
       AND c.due_at < now()
       AND c.thread_id IS NOT NULL
-      AND coalesce(e.rep_id, t.owner_rep_id) IS NOT NULL
+      AND l.owner_rep_id IS NOT NULL
     ORDER BY c.due_at DESC
 """
 
@@ -281,6 +319,22 @@ _DEDUP_SQL = """
     LIMIT 1
 """
 
+_WEEK_SNAPSHOT_SQL = """
+    SELECT
+        snapshot_date,
+        bekleyen_lead,
+        kayip_randevu,
+        acik_taahhut,
+        tutulan_hafta,
+        bozulan_hafta
+    FROM rep_snapshots
+    WHERE rep_id = %s
+      AND snapshot_date >= %s
+      AND snapshot_date < %s
+    ORDER BY snapshot_date DESC
+    LIMIT 1
+"""
+
 
 @dataclass
 class NudgeCandidate:
@@ -291,10 +345,19 @@ class NudgeCandidate:
     nudge_type: str
     sort_key: float
     phone: str | None
+    contact_name: str | None = None
     outbound_calls: int | None = None
     randevu_at: datetime | None = None
     due_at: datetime | None = None
     commitment_text: str | None = None
+
+
+@dataclass(frozen=True)
+class WeekSnapshotPair:
+    this_date: date
+    last_date: date
+    this_vals: dict[str, int]
+    last_vals: dict[str, int]
 
 
 def _fmt_dt(value: datetime | None) -> str:
@@ -318,24 +381,33 @@ def _fmt_hours(value: Any) -> str:
     return f"{hours:.0f} saat"
 
 
-def _line_for(n: NudgeCandidate) -> str:
+def _identity_label(n: NudgeCandidate) -> str:
+    """İsim - telefon; isim yoksa sadece telefon (satır atlanmaz)."""
     phone = n.phone or "telefon yok"
+    name = (n.contact_name or "").strip()
+    if name:
+        return f"{name} - {phone}"
+    return phone
+
+
+def _line_for(n: NudgeCandidate) -> str:
+    who = _identity_label(n)
     if n.nudge_type == "pencere_aciliyor":
         calls = n.outbound_calls if n.outbound_calls is not None else 0
         return (
-            f"{phone} — pazarsız {_fmt_hours(n.sort_key)}, "
+            f"{who} — pazarsız {_fmt_hours(n.sort_key)}, "
             f"{calls} arama"
         )
     if n.nudge_type == "kayip_randevu":
-        return f"{phone} — randevu {_fmt_dt(n.randevu_at)}, sonrası temas yok"
+        return f"{who} — randevu {_fmt_dt(n.randevu_at)}, sonrası temas yok"
     due = _fmt_dt(n.due_at)
     note = (n.commitment_text or "").strip()
     if note:
         note = note.replace("\n", " ")
         if len(note) > 60:
             note = note[:57] + "..."
-        return f"{phone} — vade {due}: {note}"
-    return f"{phone} — vade {due}"
+        return f"{who} — vade {due}: {note}"
+    return f"{who} — vade {due}"
 
 
 def _is_first_business_day(now: datetime | None = None) -> bool:
@@ -372,9 +444,71 @@ def _pick_evidence(
     return pool[int(digest[:8], 16) % len(pool)]
 
 
+def _evidence_section(
+    evidence: Evidence,
+    suitable: dict[str, int],
+) -> tuple[str, str] | None:
+    """Kanıtın altına yazılacağı tip + sayı içeren cümle."""
+    preferred = _TIP_TO_TYPE.get(evidence.tip)
+    if preferred and suitable.get(preferred, 0) > 0:
+        nudge_type = preferred
+    else:
+        nudge_type = max(_TYPE_ORDER, key=lambda t: suitable.get(t, 0))
+        if suitable.get(nudge_type, 0) <= 0:
+            return None
+    count = suitable[nudge_type]
+    if nudge_type == "gecikmis_taahhut":
+        line = f"Son 14 günde {count} gecikmiş taahhüt. {evidence.metin}"
+    elif nudge_type == "kayip_randevu":
+        line = f"Şu an {count} kayıp randevu adayı. {evidence.metin}"
+    else:
+        line = f"Penceresi açık {count} lead. {evidence.metin}"
+    return nudge_type, line
+
+
 def _first_name(full_name: str) -> str:
     parts = full_name.strip().split()
     return parts[0] if parts else full_name
+
+
+def _row_to_snapshot_vals(row: tuple[Any, ...]) -> dict[str, int]:
+    # snapshot_date, bekleyen_lead, kayip_randevu, acik_taahhut,
+    # tutulan_hafta, bozulan_hafta
+    keys = [k for k, _ in _SNAPSHOT_LABELS]
+    return {k: int(row[i + 1] or 0) for i, k in enumerate(keys)}
+
+
+def _load_week_compare(
+    conn: psycopg.Connection,
+    rep_id: str,
+    *,
+    now: datetime | None = None,
+) -> WeekSnapshotPair | None:
+    """Bu hafta ve geçen hafta için en son snapshot; ikisi de yoksa None."""
+    local = now or datetime.now(_TZ)
+    if local.tzinfo is None:
+        local = local.replace(tzinfo=_TZ)
+    else:
+        local = local.astimezone(_TZ)
+    today = local.date()
+    this_monday = today - timedelta(days=today.weekday())
+    next_monday = this_monday + timedelta(days=7)
+    last_monday = this_monday - timedelta(days=7)
+
+    this_row = conn.execute(
+        _WEEK_SNAPSHOT_SQL, (rep_id, this_monday, next_monday)
+    ).fetchone()
+    last_row = conn.execute(
+        _WEEK_SNAPSHOT_SQL, (rep_id, last_monday, this_monday)
+    ).fetchone()
+    if this_row is None or last_row is None:
+        return None
+    return WeekSnapshotPair(
+        this_date=this_row[0],
+        last_date=last_row[0],
+        this_vals=_row_to_snapshot_vals(this_row),
+        last_vals=_row_to_snapshot_vals(last_row),
+    )
 
 
 def _build_message(
@@ -383,7 +517,9 @@ def _build_message(
     rep_email: str | None,
     selected: list[NudgeCandidate],
     stock: int,
+    suitable: dict[str, int],
     evidence: Evidence | None = None,
+    week: WeekSnapshotPair | None = None,
 ) -> str:
     who = rep_name
     if rep_email:
@@ -393,22 +529,44 @@ def _build_message(
         "",
         f"Günaydın {_first_name(rep_name)}",
         "",
+        "Bugün",
+        "",
     ]
     by_type: dict[str, list[NudgeCandidate]] = defaultdict(list)
     for n in selected:
         by_type[n.nudge_type].append(n)
+
+    evidence_block = (
+        _evidence_section(evidence, suitable) if evidence is not None else None
+    )
+    evidence_type = evidence_block[0] if evidence_block else None
+    evidence_line = evidence_block[1] if evidence_block else None
+
     for nudge_type in _TYPE_ORDER:
         items = by_type.get(nudge_type) or []
-        if not items:
+        if not items and nudge_type != evidence_type:
             continue
-        parts.append(_TYPE_TITLE[nudge_type])
-        for item in items:
-            parts.append(_line_for(item))
+        if items:
+            parts.append(_TYPE_TITLE[nudge_type])
+            for item in items:
+                parts.append(_line_for(item))
+            if evidence_type == nudge_type and evidence_line:
+                parts.append(evidence_line)
+            parts.append("")
+        elif evidence_type == nudge_type and evidence_line:
+            parts.append(_TYPE_TITLE[nudge_type])
+            parts.append(evidence_line)
+            parts.append("")
+
+    if week is not None:
+        parts.append("Bu hafta")
+        for key, label in _SNAPSHOT_LABELS:
+            this_v = week.this_vals.get(key, 0)
+            last_v = week.last_vals.get(key, 0)
+            parts.append(f"{label}: {this_v} (geçen {last_v})")
         parts.append("")
+
     parts.append(f"Bekleyen stok: {stock}")
-    if evidence is not None:
-        parts.append("")
-        parts.append(evidence.metin)
     return "\n".join(parts).rstrip() + "\n"
 
 
@@ -425,7 +583,7 @@ def _load_candidates(conn: psycopg.Connection, org_id: str) -> list[NudgeCandida
     for row in conn.execute(_PENCERE_SQL, (org_id,)).fetchall():
         (
             rep_id, thread_id, lead_id, commitment_id, nudge_type,
-            sort_key, outbound_calls, phone,
+            sort_key, outbound_calls, phone, contact_name,
         ) = row
         out.append(
             NudgeCandidate(
@@ -436,6 +594,7 @@ def _load_candidates(conn: psycopg.Connection, org_id: str) -> list[NudgeCandida
                 nudge_type=str(nudge_type),
                 sort_key=float(sort_key or 0),
                 phone=str(phone) if phone else None,
+                contact_name=str(contact_name) if contact_name else None,
                 outbound_calls=int(outbound_calls or 0),
             )
         )
@@ -443,7 +602,7 @@ def _load_candidates(conn: psycopg.Connection, org_id: str) -> list[NudgeCandida
     for row in conn.execute(_KAYIP_SQL, (org_id,)).fetchall():
         (
             rep_id, thread_id, lead_id, commitment_id, nudge_type,
-            sort_key, outbound_calls, phone, randevu_at,
+            sort_key, outbound_calls, phone, randevu_at, contact_name,
         ) = row
         out.append(
             NudgeCandidate(
@@ -454,6 +613,7 @@ def _load_candidates(conn: psycopg.Connection, org_id: str) -> list[NudgeCandida
                 nudge_type=str(nudge_type),
                 sort_key=float(sort_key or 0),
                 phone=str(phone) if phone else None,
+                contact_name=str(contact_name) if contact_name else None,
                 randevu_at=randevu_at,
             )
         )
@@ -462,6 +622,7 @@ def _load_candidates(conn: psycopg.Connection, org_id: str) -> list[NudgeCandida
         (
             rep_id, thread_id, lead_id, commitment_id, nudge_type,
             sort_key, outbound_calls, phone, due_at, commitment_text,
+            contact_name,
         ) = row
         out.append(
             NudgeCandidate(
@@ -472,6 +633,7 @@ def _load_candidates(conn: psycopg.Connection, org_id: str) -> list[NudgeCandida
                 nudge_type=str(nudge_type),
                 sort_key=float(sort_key or 0),
                 phone=str(phone) if phone else None,
+                contact_name=str(contact_name) if contact_name else None,
                 due_at=due_at,
                 commitment_text=str(commitment_text) if commitment_text else None,
             )
@@ -480,47 +642,56 @@ def _load_candidates(conn: psycopg.Connection, org_id: str) -> list[NudgeCandida
     return out
 
 
-def _select_for_rep(items: list[NudgeCandidate]) -> tuple[list[NudgeCandidate], int]:
-    """Her tipten 1, kalan kontenjan öncelik sırasıyla; toplam max 3."""
+def _allocate_slots(counts: dict[str, int], max_slots: int) -> dict[str, int]:
+    """Uygun sayıya orantılı kota (largest remainder); tip başına sabit yok."""
+    present = [(t, counts.get(t, 0)) for t in _TYPE_ORDER if counts.get(t, 0) > 0]
+    total = sum(c for _, c in present)
+    if total == 0:
+        return {t: 0 for t in _TYPE_ORDER}
+    max_slots = min(max_slots, total)
+    ideals = [(t, c, max_slots * c / total) for t, c in present]
+    floors = {t: min(c, int(ideal)) for t, c, ideal in ideals}
+    leftover = max_slots - sum(floors.values())
+    remainders = sorted(
+        (
+            (ideal - int(ideal), -_TYPE_ORDER.index(t), t)
+            for t, c, ideal in ideals
+        ),
+        reverse=True,
+    )
+    avail = {t: c for t, c in present}
+    for _, _, t in remainders:
+        if leftover <= 0:
+            break
+        if floors[t] < avail[t]:
+            floors[t] += 1
+            leftover -= 1
+    return {t: floors.get(t, 0) for t in _TYPE_ORDER}
+
+
+def _select_for_rep(
+    items: list[NudgeCandidate],
+) -> tuple[list[NudgeCandidate], dict[str, int], dict[str, int], int]:
+    """Orantılı dağılım; (selected, suitable, shown, stock)."""
     by_type: dict[str, list[NudgeCandidate]] = defaultdict(list)
     for n in items:
         by_type[n.nudge_type].append(n)
     for nudge_type in _TYPE_ORDER:
         by_type[nudge_type].sort(key=lambda x: x.sort_key, reverse=True)
 
+    suitable = {t: len(by_type[t]) for t in _TYPE_ORDER}
+    slots = _allocate_slots(suitable, _MAX_PER_REP)
+
     selected: list[NudgeCandidate] = []
-    selected_ids: set[tuple[str, str, str]] = set()
-
-    def _key(n: NudgeCandidate) -> tuple[str, str, str]:
-        return (n.nudge_type, n.thread_id, str(n.commitment_id or n.lead_id or ""))
-
-    # Tur 1: her tipten en fazla 1.
+    shown = {t: 0 for t in _TYPE_ORDER}
     for nudge_type in _TYPE_ORDER:
-        if len(selected) >= _MAX_PER_REP:
-            break
-        pool = by_type.get(nudge_type) or []
-        if not pool:
-            continue
-        n = pool[0]
-        selected.append(n)
-        selected_ids.add(_key(n))
-
-    # Tur 2: kalan slotları öncelik sırasıyla doldur.
-    if len(selected) < _MAX_PER_REP:
-        for nudge_type in _TYPE_ORDER:
-            if len(selected) >= _MAX_PER_REP:
-                break
-            for n in by_type.get(nudge_type) or []:
-                if len(selected) >= _MAX_PER_REP:
-                    break
-                k = _key(n)
-                if k in selected_ids:
-                    continue
-                selected.append(n)
-                selected_ids.add(k)
+        take = slots[nudge_type]
+        for n in by_type[nudge_type][:take]:
+            selected.append(n)
+            shown[nudge_type] += 1
 
     stock = max(0, len(items) - len(selected))
-    return selected, stock
+    return selected, suitable, shown, stock
 
 
 def _post_cliq(webhook_url: str, text: str, userids: str) -> None:
@@ -609,6 +780,20 @@ def main() -> int:
     try:
         with psycopg.connect(database_url, prepare_threshold=None) as conn:
             raw = _load_candidates(conn, org_id)
+            named = sum(1 for n in raw if (n.contact_name or "").strip())
+            if raw and named == 0:
+                print(
+                    "uyarı: leads/contacts.full_name boş — "
+                    "satırlar sadece telefon; backfill_leads çalıştırın"
+                )
+
+            # uygun = dedup öncesi havuz (doğrulama sayılarıyla aynı).
+            suitable_raw: dict[str, dict[str, int]] = defaultdict(
+                lambda: {t: 0 for t in _TYPE_ORDER}
+            )
+            for n in raw:
+                suitable_raw[n.rep_id][n.nudge_type] += 1
+
             filtered: list[NudgeCandidate] = []
             skipped_dup = 0
             for n in raw:
@@ -635,51 +820,74 @@ def main() -> int:
 
             evidence_day = _is_first_business_day()
             plans: list[
-                tuple[str, list[NudgeCandidate], int, str, Evidence | None]
+                tuple[
+                    str,
+                    list[NudgeCandidate],
+                    dict[str, int],
+                    dict[str, int],
+                    int,
+                    str,
+                    Evidence | None,
+                ]
             ] = []
             for rep_id, items in sorted(by_rep.items()):
-                selected, stock = _select_for_rep(items)
+                selected, _eligible, shown, stock = _select_for_rep(items)
                 if not selected:
                     continue
+                suitable = suitable_raw.get(
+                    rep_id, {t: 0 for t in _TYPE_ORDER}
+                )
                 name, email = reps.get(rep_id, (rep_id, None))
                 evidence = _pick_evidence(conn, org_id, rep_id)
+                week = _load_week_compare(conn, rep_id)
                 msg = _build_message(
                     rep_name=name,
                     rep_email=email,
                     selected=selected,
                     stock=stock,
+                    suitable=suitable,
                     evidence=evidence,
+                    week=week,
                 )
-                plans.append((rep_id, selected, stock, msg, evidence))
+                plans.append(
+                    (rep_id, selected, suitable, shown, stock, msg, evidence)
+                )
                 produced += len(selected)
 
             print(
                 f"aday: {len(raw)} (dedup atlanan={skipped_dup}), "
-                f"temsilci={len(plans)}, dürtü={produced} (org={org_id})"
+                f"isimli={named}, temsilci={len(plans)}, "
+                f"dürtü={produced} (org={org_id})"
             )
             if evidence_day:
                 print("kanıt: haftanın ilk iş günü — mesaja eklenecek")
             else:
                 print("kanıt: atlandı (haftanın ilk iş günü değil)")
-            for rep_id, selected, stock, _msg, evidence in plans:
+            for (
+                rep_id, selected, suitable, shown, stock, _msg, evidence
+            ) in plans:
                 name, _email = reps.get(rep_id, (rep_id, None))
-                by_t = defaultdict(int)
-                for n in selected:
-                    by_t[n.nudge_type] += 1
                 detail = ", ".join(
-                    f"{t}={by_t[t]}" for t in _TYPE_ORDER if by_t[t]
+                    f"{t} uygun={suitable[t]}/gösterilen={shown[t]}"
+                    for t in _TYPE_ORDER
+                    if suitable[t] or shown[t]
                 )
                 ev_s = evidence.id if evidence else "-"
                 print(
-                    f"  {name}: {len(selected)} dürtü ({detail}), "
+                    f"  {name}: toplam={len(selected)} ({detail}), "
                     f"stok={stock}, kanıt={ev_s}"
                 )
 
             if dry_run:
                 print("dry-run: gönderilmedi. Yazmak için --apply kullan.")
+                if plans:
+                    print("--- örnek mesaj ---")
+                    print(plans[0][5])
             else:
                 assert webhook_url and shadow_email
-                for rep_id, selected, stock, msg, evidence in plans:
+                for (
+                    rep_id, selected, suitable, shown, stock, msg, evidence
+                ) in plans:
                     name, email = reps.get(rep_id, (rep_id, None))
                     try:
                         _post_cliq(webhook_url, msg, shadow_email)
@@ -702,7 +910,10 @@ def main() -> int:
                                 "intended_rep_email": email,
                                 "nudge_type": n.nudge_type,
                                 "phone": n.phone,
+                                "contact_name": n.contact_name,
                                 "stock": stock,
+                                "suitable": suitable,
+                                "shown": shown,
                             }
                             if evidence is not None:
                                 payload["evidence_id"] = evidence.id
