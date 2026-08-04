@@ -1,11 +1,15 @@
 """Günlük dürtü üretir ve Cliq'e gölge modda gönderir.
 
-Sinyaller (temsilci başına toplam en fazla 3, orantılı dağılım):
+Sinyaller (temsilci başına toplam en fazla 3):
   1. pencere_aciliyor  — active lead, deneme (tüm outbound) < 3
+     (uygunsa en az 1 yer garanti)
   2. planlanmis_arama  — call_status=overdue, sonrası tamamlanmış yok
   3. kayip_randevu     — Randevu Alındı, sunum yok, sonrası temas yok
   4. gecikmis_taahhut  — broken commitment, due_at son 14 gün
      (sahiplik: thread → leads.owner_rep_id)
+
+Yalnızca reps.category='sales' AND active=true.
+Kalan kota diğer sinyallere orantılı; tek tip 3 yer alamaz.
 
 Temas: call_duration_sec >= 30 VE call_outcomes.category <> 'not_reached'.
 Deneme: her outbound çağrı (scheduled hariç). 10 sn altı temas sayılmaz.
@@ -24,7 +28,6 @@ Varsayılan dry-run. DATABASE_URL_POOLED gerekir (pgbouncer 6543);
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
@@ -34,7 +37,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -47,6 +50,8 @@ from pusula.config import get_org_id
 
 _TZ = ZoneInfo("Europe/Istanbul")
 _MAX_PER_REP = 3
+_EXPECTED_SALES_REPS = 4
+_PENCERE_TYPE = "pencere_aciliyor"
 _TYPE_ORDER = (
     "pencere_aciliyor",
     "planlanmis_arama",
@@ -84,69 +89,13 @@ _OUTCOME_JOIN = """
            )
 """
 
-EvidenceTip = Literal["ekip", "kisisel", "sistem"]
-
-
-@dataclass(frozen=True)
-class Evidence:
-    id: str
-    metin: str
-    tip: EvidenceTip
-    aktif: bool = True
-
-
-_EVIDENCE_POOL: tuple[Evidence, ...] = (
-    Evidence(
-        "ev_ekip_01",
-        "Randevu sonrası aynı gün temas kurulan hatlarda sunuma geçiş daha sıktı.",
-        "ekip",
-    ),
-    Evidence(
-        "ev_ekip_02",
-        "48 saat penceresinde üçüncü aramaya kalan lead'lerin çoğu arşive kaydı.",
-        "ekip",
-    ),
-    Evidence(
-        "ev_ekip_03",
-        "İlk iki aramada ulaşılamayanlarda üçüncü deneme çoğu zaman yapılmadı.",
-        "ekip",
-    ),
-    Evidence(
-        "ev_kisisel_01",
-        "Konu netleşmeden fiyat açılan görüşmelerde görüşme süresi kısalıyordu.",
-        "kisisel",
-    ),
-    Evidence(
-        "ev_kisisel_02",
-        "Taahhüt verilen ama vadesi geçen kayıtlarda sonraki adım çoğu zaman boş kaldı.",
-        "kisisel",
-    ),
-    Evidence(
-        "ev_sistem_01",
-        "Aging'e düşen lead'lerde ortalama ilk anlamlı temas birkaç gün gecikti.",
-        "sistem",
-    ),
-    Evidence(
-        "ev_sistem_02",
-        "Kayıp randevu adaylarında sunum kaydı olmadan hat soğumuş görünüyordu.",
-        "sistem",
-    ),
+# Kanıt: yalnızca hesaplanmış sayı cümlesi. Sabit/genel ifade yok.
+_EVIDENCE_TYPE_PRIORITY = (
+    "gecikmis_taahhut",
+    "kayip_randevu",
+    "planlanmis_arama",
+    "pencere_aciliyor",
 )
-
-_TIP_TO_TYPE: dict[EvidenceTip, str] = {
-    "ekip": "kayip_randevu",
-    "kisisel": "gecikmis_taahhut",
-    "sistem": "pencere_aciliyor",
-}
-
-_USED_EVIDENCE_SQL = """
-    SELECT DISTINCT payload->>'evidence_id'
-    FROM nudges
-    WHERE org_id = %s
-      AND rep_id = %s
-      AND sent_at >= now() - interval '8 weeks'
-      AND payload->>'evidence_id' IS NOT NULL
-"""
 
 _PENCERE_SQL = """
     SELECT
@@ -557,49 +506,35 @@ def _is_first_business_day(now: datetime | None = None) -> bool:
     return local.weekday() == 0
 
 
-def _pick_evidence(
-    conn: psycopg.Connection,
-    org_id: str,
-    rep_id: str,
+def _evidence_section(
+    suitable: dict[str, int],
     *,
     now: datetime | None = None,
-) -> Evidence | None:
+) -> tuple[str, str] | None:
+    """İlk iş gününde, yalnızca hesaplanmış sayı içeren cümle.
+
+    Sayı üretilemiyorsa None (sabit/genel ifade basılmaz).
+    """
     if not _is_first_business_day(now):
         return None
-    used = {
-        str(r[0])
-        for r in conn.execute(_USED_EVIDENCE_SQL, (org_id, rep_id)).fetchall()
-        if r[0]
-    }
-    pool = [e for e in _EVIDENCE_POOL if e.aktif and e.id not in used]
-    if not pool:
+    nudge_type = None
+    for t in _EVIDENCE_TYPE_PRIORITY:
+        if suitable.get(t, 0) > 0:
+            nudge_type = t
+            break
+    if nudge_type is None:
         return None
-    local = (now or datetime.now(_TZ)).astimezone(_TZ)
-    year, week, _ = local.isocalendar()
-    digest = hashlib.sha256(f"{rep_id}:{year}:{week}".encode()).hexdigest()
-    return pool[int(digest[:8], 16) % len(pool)]
-
-
-def _evidence_section(
-    evidence: Evidence,
-    suitable: dict[str, int],
-) -> tuple[str, str] | None:
-    preferred = _TIP_TO_TYPE.get(evidence.tip)
-    if preferred and suitable.get(preferred, 0) > 0:
-        nudge_type = preferred
-    else:
-        nudge_type = max(_TYPE_ORDER, key=lambda t: suitable.get(t, 0))
-        if suitable.get(nudge_type, 0) <= 0:
-            return None
     count = suitable[nudge_type]
+    if count <= 0:
+        return None
     if nudge_type == "gecikmis_taahhut":
-        line = f"Son 14 günde {count} gecikmiş taahhüt. {evidence.metin}"
+        line = f"Son 14 günde {count} gecikmiş taahhüt."
     elif nudge_type == "kayip_randevu":
-        line = f"Şu an {count} kayıp randevu adayı. {evidence.metin}"
+        line = f"Şu an {count} kayıp randevu adayı."
     elif nudge_type == "planlanmis_arama":
-        line = f"Şu an {count} planlanmış arama gecikmiş. {evidence.metin}"
+        line = f"Şu an {count} planlanmış arama gecikmiş."
     else:
-        line = f"Penceresi açık {count} lead. {evidence.metin}"
+        line = f"Penceresi açık {count} lead."
     return nudge_type, line
 
 
@@ -694,7 +629,6 @@ def _build_message(
     selected: list[NudgeCandidate],
     stock: int,
     suitable: dict[str, int],
-    evidence: Evidence | None = None,
     week: WeekSnapshotPair | None = None,
     dunden: DundenStats | None = None,
 ) -> str:
@@ -713,9 +647,7 @@ def _build_message(
     for n in selected:
         by_type[n.nudge_type].append(n)
 
-    evidence_block = (
-        _evidence_section(evidence, suitable) if evidence is not None else None
-    )
+    evidence_block = _evidence_section(suitable)
     evidence_type = evidence_block[0] if evidence_block else None
     evidence_line = evidence_block[1] if evidence_block else None
 
@@ -858,29 +790,66 @@ def _load_candidates(conn: psycopg.Connection, org_id: str) -> list[NudgeCandida
 
 
 def _allocate_slots(counts: dict[str, int], max_slots: int) -> dict[str, int]:
-    present = [(t, counts.get(t, 0)) for t in _TYPE_ORDER if counts.get(t, 0) > 0]
-    total = sum(c for _, c in present)
-    if total == 0:
-        return {t: 0 for t in _TYPE_ORDER}
-    max_slots = min(max_slots, total)
-    ideals = [(t, c, max_slots * c / total) for t, c in present]
-    floors = {t: min(c, int(ideal)) for t, c, ideal in ideals}
-    leftover = max_slots - sum(floors.values())
-    remainders = sorted(
-        (
-            (ideal - int(ideal), -_TYPE_ORDER.index(t), t)
-            for t, c, ideal in ideals
-        ),
-        reverse=True,
-    )
-    avail = {t: c for t, c in present}
-    for _, _, t in remainders:
-        if leftover <= 0:
-            break
-        if floors[t] < avail[t]:
-            floors[t] += 1
-            leftover -= 1
-    return {t: floors.get(t, 0) for t in _TYPE_ORDER}
+    """pencere en az 1 (uygunsa); kalan diğer sinyallere orantılı.
+
+    Tek sinyalin 3 yeri birden alması engellenir (birden fazla tip varken
+    tip başı en fazla 2).
+    """
+    slots = {t: 0 for t in _TYPE_ORDER}
+    present = {t: counts.get(t, 0) for t in _TYPE_ORDER if counts.get(t, 0) > 0}
+    if not present:
+        return slots
+
+    remaining = min(max_slots, sum(present.values()))
+    types_with = list(present.keys())
+
+    # 1) pencere_aciliyor: uygunsa 1 yer garanti.
+    if present.get(_PENCERE_TYPE, 0) > 0 and remaining > 0:
+        slots[_PENCERE_TYPE] = 1
+        remaining -= 1
+
+    # 2) Kalan yerler diğer sinyaller arasında (pencere hariç).
+    others = [
+        t for t in _TYPE_ORDER
+        if t != _PENCERE_TYPE and present.get(t, 0) > 0
+    ]
+    if remaining > 0 and others:
+        other_counts = {t: present[t] for t in others}
+        per_cap = 2 if len(types_with) > 1 else remaining
+        total_o = sum(other_counts.values())
+        ideals = [
+            (t, other_counts[t], remaining * other_counts[t] / total_o)
+            for t in others
+        ]
+        for t, avail, ideal in ideals:
+            take = min(avail, per_cap, int(ideal))
+            slots[t] = take
+        used = sum(slots[t] for t in others)
+        leftover = remaining - used
+        remainders = sorted(
+            (
+                (ideal - int(ideal), -_TYPE_ORDER.index(t), t)
+                for t, avail, ideal in ideals
+            ),
+            reverse=True,
+        )
+        for _, _, t in remainders:
+            if leftover <= 0:
+                break
+            cap = min(other_counts[t], per_cap)
+            if slots[t] < cap:
+                slots[t] += 1
+                leftover -= 1
+        remaining = leftover
+
+    # 3) Yalnız pencere kaldıysa doldur; tek tipte en fazla 2.
+    if remaining > 0 and present.get(_PENCERE_TYPE, 0) > slots[_PENCERE_TYPE]:
+        if not others:
+            cap = min(2, present[_PENCERE_TYPE])
+            add = min(remaining, cap - slots[_PENCERE_TYPE])
+            slots[_PENCERE_TYPE] += max(0, add)
+
+    return slots
 
 
 def _select_for_rep(
@@ -994,7 +963,36 @@ def main() -> int:
 
     try:
         with psycopg.connect(database_url, prepare_threshold=None) as conn:
-            raw = _load_candidates(conn, org_id)
+            sales_reps = {
+                str(r[0]): (str(r[1]), str(r[2]) if r[2] else None)
+                for r in conn.execute(
+                    """
+                    SELECT rep_id, full_name, email
+                    FROM reps
+                    WHERE org_id = %s
+                      AND category = 'sales'
+                      AND active = true
+                    ORDER BY full_name
+                    """,
+                    (org_id,),
+                ).fetchall()
+            }
+            sales_ids = set(sales_reps.keys())
+            sales_names = [sales_reps[rid][0] for rid in sorted(
+                sales_reps.keys(), key=lambda x: sales_reps[x][0]
+            )]
+            print(
+                f"seçilen temsilci={len(sales_names)}: "
+                + ", ".join(sales_names)
+            )
+            if len(sales_names) != _EXPECTED_SALES_REPS:
+                print(
+                    f"uyarı: beklenen satışçı={_EXPECTED_SALES_REPS}, "
+                    f"bulunan={len(sales_names)}"
+                )
+
+            raw_all = _load_candidates(conn, org_id)
+            raw = [n for n in raw_all if n.rep_id in sales_ids]
             named = sum(1 for n in raw if (n.contact_name or "").strip())
             if raw and named == 0:
                 print(
@@ -1040,18 +1038,6 @@ def main() -> int:
             for n in filtered:
                 by_rep[n.rep_id].append(n)
 
-            reps = {
-                str(r[0]): (str(r[1]), str(r[2]) if r[2] else None)
-                for r in conn.execute(
-                    """
-                    SELECT rep_id, full_name, email
-                    FROM reps
-                    WHERE org_id = %s
-                    """,
-                    (org_id,),
-                ).fetchall()
-            }
-
             evidence_day = _is_first_business_day()
             plans: list[
                 tuple[
@@ -1061,18 +1047,20 @@ def main() -> int:
                     dict[str, int],
                     int,
                     str,
-                    Evidence | None,
                 ]
             ] = []
-            for rep_id, items in sorted(by_rep.items()):
-                selected, _eligible, shown, stock = _select_for_rep(items)
+            for rep_id, items in sorted(
+                by_rep.items(),
+                key=lambda kv: sales_reps.get(kv[0], (kv[0], None))[0],
+            ):
+                selected, suitable_elig, shown, stock = _select_for_rep(items)
                 if not selected:
                     continue
-                suitable = suitable_raw.get(
+                # Kanıt için ham havuz; çıktı uygun/gösterilen = seçilebilir.
+                suitable_pool = suitable_raw.get(
                     rep_id, {t: 0 for t in _TYPE_ORDER}
                 )
-                name, email = reps.get(rep_id, (rep_id, None))
-                evidence = _pick_evidence(conn, org_id, rep_id)
+                name, email = sales_reps.get(rep_id, (rep_id, None))
                 week = _load_week_compare(conn, rep_id)
                 dunden = _load_dunden(conn, org_id, rep_id)
                 msg = _build_message(
@@ -1080,13 +1068,12 @@ def main() -> int:
                     rep_email=email,
                     selected=selected,
                     stock=stock,
-                    suitable=suitable,
-                    evidence=evidence,
+                    suitable=suitable_pool,
                     week=week,
                     dunden=dunden,
                 )
                 plans.append(
-                    (rep_id, selected, suitable, shown, stock, msg, evidence)
+                    (rep_id, selected, suitable_elig, shown, stock, msg)
                 )
                 produced += len(selected)
 
@@ -1096,22 +1083,27 @@ def main() -> int:
                 f"temsilci={len(plans)}, dürtü={produced} (org={org_id})"
             )
             if evidence_day:
-                print("kanıt: haftanın ilk iş günü — mesaja eklenecek")
+                print("kanıt: haftanın ilk iş günü — sayılı cümle eklenecek")
             else:
                 print("kanıt: atlandı (haftanın ilk iş günü değil)")
             for (
-                rep_id, selected, suitable, shown, stock, _msg, evidence
+                rep_id, selected, suitable, shown, stock, _msg
             ) in plans:
-                name, _email = reps.get(rep_id, (rep_id, None))
+                name, _email = sales_reps.get(rep_id, (rep_id, None))
                 detail = ", ".join(
                     f"{t} uygun={suitable[t]}/gösterilen={shown[t]}"
                     for t in _TYPE_ORDER
                     if suitable[t] or shown[t]
                 )
-                ev_s = evidence.id if evidence else "-"
+                # Ham pencere var ama dedup sonrası yoksa açıkla.
+                pool_p = suitable_raw.get(rep_id, {}).get(_PENCERE_TYPE, 0)
+                elig_p = suitable.get(_PENCERE_TYPE, 0)
+                extra = ""
+                if pool_p > 0 and elig_p == 0:
+                    extra = f", pencere ham={pool_p} (3g dedup)"
                 print(
                     f"  {name}: toplam={len(selected)} ({detail}), "
-                    f"stok={stock}, kanıt={ev_s}"
+                    f"stok={stock}{extra}"
                 )
 
             if dry_run:
@@ -1122,9 +1114,9 @@ def main() -> int:
             else:
                 assert webhook_url and shadow_email
                 for (
-                    rep_id, selected, suitable, shown, stock, msg, evidence
+                    rep_id, selected, suitable, shown, stock, msg
                 ) in plans:
-                    name, email = reps.get(rep_id, (rep_id, None))
+                    name, email = sales_reps.get(rep_id, (rep_id, None))
                     try:
                         _post_cliq(webhook_url, msg, shadow_email)
                     except (
@@ -1151,8 +1143,6 @@ def main() -> int:
                                 "suitable": suitable,
                                 "shown": shown,
                             }
-                            if evidence is not None:
-                                payload["evidence_id"] = evidence.id
                             sent += _insert_nudge(
                                 conn, org_id=org_id, n=n, payload=payload
                             )
