@@ -8,7 +8,7 @@ Sinyaller (temsilci başına toplam en fazla 3):
   4. gecikmis_taahhut  — broken commitment, due_at son 14 gün
      (sahiplik: thread → leads.owner_rep_id)
 
-Alicilar: reps.category IN (sales, management, other) AND active.
+Alicilar: reps.category='sales' + PUSULA_EXTRA_RECIPIENTS (rep_id CSV).
 Kalan kota diğer sinyallere orantılı; tek tip 3 yer alamaz.
 
 Stok = tüm sinyallerdeki uygun aday toplamı (tip toplamı).
@@ -53,7 +53,6 @@ from pusula.config import get_org_id
 _TZ = ZoneInfo("Europe/Istanbul")
 _MAX_PER_REP = 3
 _AVG_MIN_TALKS = 5  # kendi/ekip ortalama basmak için min 30 sn+ görüşme
-_RECIPIENT_CATEGORIES = ("sales", "management", "other")
 _PENCERE_TYPE = "pencere_aciliyor"
 _TYPE_ORDER = (
     "pencere_aciliyor",
@@ -489,6 +488,7 @@ class NetFlow:
 
     closed: int
     added: int
+    reason: str | None = None  # sifirsa neden (sessiz 0 yok)
 
 
 def _fmt_dt(value: datetime | None, *, now: datetime | None = None) -> str:
@@ -832,7 +832,116 @@ def _load_net_flow(
         + int(added_meeting[0] or 0)
         + int(added_broken[0] or 0)
     )
-    return NetFlow(closed=closed, added=added)
+    reason: str | None = None
+    if closed == 0 and added == 0:
+        reason = (
+            f"bu hafta ({week_start.date()}..{week_end.date()}) "
+            f"kapanış/ekleme olayı yok "
+            f"[kapanan: temas={int(closed_temas[0] or 0)} "
+            f"overdue→connected={int(closed_overdue[0] or 0)} "
+            f"fulfilled={int(closed_commit[0] or 0)}; "
+            f"yeni: lead={int(added_leads[0] or 0)} "
+            f"overdue={int(added_overdue[0] or 0)} "
+            f"randevu={int(added_meeting[0] or 0)} "
+            f"broken={int(added_broken[0] or 0)}]"
+        )
+    return NetFlow(closed=closed, added=added, reason=reason)
+
+
+def _parse_extra_recipients() -> list[str]:
+    raw = os.environ.get("PUSULA_EXTRA_RECIPIENTS") or ""
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def _load_recipients(
+    conn: psycopg.Connection, org_id: str
+) -> dict[str, tuple[str, str | None, str]]:
+    """sales + PUSULA_EXTRA_RECIPIENTS → rep_id → (name, email, category)."""
+    sales = conn.execute(
+        """
+        SELECT rep_id, full_name, email, category
+        FROM reps
+        WHERE org_id = %s
+          AND active = true
+          AND category = 'sales'
+        ORDER BY full_name
+        """,
+        (org_id,),
+    ).fetchall()
+    out: dict[str, tuple[str, str | None, str]] = {
+        str(r[0]): (str(r[1]), str(r[2]) if r[2] else None, str(r[3]))
+        for r in sales
+    }
+    extras = _parse_extra_recipients()
+    if extras:
+        rows = conn.execute(
+            """
+            SELECT rep_id, full_name, email, category
+            FROM reps
+            WHERE org_id = %s AND rep_id = ANY(%s)
+            """,
+            (org_id, extras),
+        ).fetchall()
+        found = {
+            str(r[0]): (str(r[1]), str(r[2]) if r[2] else None, str(r[3]))
+            for r in rows
+        }
+        for rid in extras:
+            if rid in found:
+                out[rid] = found[rid]
+            else:
+                print(f"uyarı: PUSULA_EXTRA_RECIPIENTS bilinmeyen rep_id={rid}")
+    elif not out:
+        print("uyarı: sales yok ve PUSULA_EXTRA_RECIPIENTS boş")
+    return out
+
+
+def _count_talks_30s(
+    conn: psycopg.Connection,
+    org_id: str,
+    day: date,
+    *,
+    category: str | None = "sales",
+) -> int:
+    """Belirli günde 30 sn+ outbound çağrı sayısı (scheduled hariç)."""
+    y0, y1 = _day_bounds(day)
+    if category:
+        row = conn.execute(
+            """
+            SELECT count(*)::int
+            FROM events e
+            JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+            WHERE e.org_id = %s
+              AND r.category = %s
+              AND e.channel = 'call'
+              AND e.direction = 'outbound'
+              AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+              AND """
+            + _DURATION_SEC
+            + """ >= 30
+              AND e.occurred_at >= %s
+              AND e.occurred_at < %s
+            """,
+            (org_id, category, y0, y1),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT count(*)::int
+            FROM events e
+            WHERE e.org_id = %s
+              AND e.channel = 'call'
+              AND e.direction = 'outbound'
+              AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+              AND """
+            + _DURATION_SEC
+            + """ >= 30
+              AND e.occurred_at >= %s
+              AND e.occurred_at < %s
+            """,
+            (org_id, y0, y1),
+        ).fetchone()
+    return int(row[0] or 0) if row else 0
 
 
 def _day_bounds(day: date) -> tuple[datetime, datetime]:
@@ -971,10 +1080,20 @@ def _build_message(
 
     parts.append(f"Bekleyen: {stock}")
     if net_flow is not None:
-        parts.append(
-            f"Bu hafta kapanan: {net_flow.closed}, "
-            f"yeni eklenen: {net_flow.added}"
-        )
+        if (
+            net_flow.closed == 0
+            and net_flow.added == 0
+            and net_flow.reason
+        ):
+            parts.append(
+                f"Bu hafta kapanan: 0, yeni eklenen: 0 "
+                f"({net_flow.reason})"
+            )
+        else:
+            parts.append(
+                f"Bu hafta kapanan: {net_flow.closed}, "
+                f"yeni eklenen: {net_flow.added}"
+            )
     parts.append("")
 
     if week is not None:
@@ -1267,25 +1386,13 @@ def main() -> int:
 
     try:
         with psycopg.connect(database_url, prepare_threshold=None) as conn:
-            recipients = {
-                str(r[0]): (
-                    str(r[1]),
-                    str(r[2]) if r[2] else None,
-                    str(r[3]),
-                )
-                for r in conn.execute(
-                    """
-                    SELECT rep_id, full_name, email, category
-                    FROM reps
-                    WHERE org_id = %s
-                      AND active = true
-                      AND category = ANY(%s)
-                    ORDER BY category, full_name
-                    """,
-                    (org_id, list(_RECIPIENT_CATEGORIES)),
-                ).fetchall()
-            }
+            recipients = _load_recipients(conn, org_id)
             recipient_ids = set(recipients.keys())
+            extras = _parse_extra_recipients()
+            print(
+                f"PUSULA_EXTRA_RECIPIENTS: {len(extras)} id"
+                + (f" ({', '.join(extras)})" if extras else " (bos)")
+            )
             listed = ", ".join(
                 f"{recipients[rid][0]} ({recipients[rid][2]})"
                 for rid in sorted(
@@ -1294,6 +1401,20 @@ def main() -> int:
                 )
             )
             print(f"alıcı={len(recipients)}: {listed}")
+
+            # Dün 30 sn+ (eşik mi / veri eksik mi ayrımı).
+            yesterday = datetime.now(_TZ).date() - timedelta(days=1)
+            talks_sales = _count_talks_30s(
+                conn, org_id, yesterday, category="sales"
+            )
+            talks_all = _count_talks_30s(
+                conn, org_id, yesterday, category=None
+            )
+            print(
+                f"dün ({yesterday}) 30sn+ çağrı: "
+                f"sales={talks_sales}, tüm={talks_all} "
+                f"(ekip ort. eşik={_AVG_MIN_TALKS} görüşme/rep)"
+            )
 
             raw_all = _load_candidates(conn, org_id)
             raw = [n for n in raw_all if n.rep_id in recipient_ids]
@@ -1433,8 +1554,8 @@ def main() -> int:
                             break
                     print("--- örnek mesaj ---")
                     print(sample)
-                    # Ekip ortalaması farkını doğrula (sales).
-                    print("--- dünden ekip ort. (sales) ---")
+                    # Ekip ortalaması: veri yoksa başlık basma.
+                    ekip_lines: list[str] = []
                     for p in plans:
                         rid = p[0]
                         name, _e, cat = recipients[rid]
@@ -1442,10 +1563,21 @@ def main() -> int:
                             continue
                         d = _load_dunden(conn, org_id, rid)
                         if d and d.team_avg_sec is not None:
-                            print(
+                            ekip_lines.append(
                                 f"  {name}: ekip_ort="
                                 f"{_fmt_duration(d.team_avg_sec)}"
                             )
+                    if ekip_lines:
+                        print("--- dünden ekip ort. (sales) ---")
+                        for line in ekip_lines:
+                            print(line)
+                    else:
+                        print(
+                            f"ekip ort. yok — dün ({yesterday}) "
+                            f"sales 30sn+={talks_sales} "
+                            f"(eşik ≥{_AVG_MIN_TALKS} konuşma/rep, "
+                            "veya mesaj sahibi hariç ekip yetersiz)"
+                        )
             else:
                 assert webhook_url and shadow_email
                 for (

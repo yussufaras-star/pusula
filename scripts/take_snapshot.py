@@ -6,8 +6,10 @@ Metrikler (Europe/Istanbul takvim haftası):
   bekleyen_lead  — pusula_state = 'active' lead sayısı
   kayip_randevu  — kayıp randevu aday sayısı (send_nudges ile aynı kural)
   acik_taahhut   — status = open commitment (lead owner üzerinden)
-  tutulan_hafta  — bu hafta fulfilled (fulfilled event occurred_at)
+  tutulan_hafta  — bu hafta fulfilled (fulfill event occurred_at bu haftada)
   bozulan_hafta  — bu hafta broken (due_at bu haftada)
+
+Alicilar: category='sales' + PUSULA_EXTRA_RECIPIENTS (rep_id CSV).
 
 Kullanım:
     python scripts/take_snapshot.py
@@ -111,6 +113,11 @@ _KAYIP_COUNT_SQL = """
 """
 
 
+def _parse_extra_recipients() -> list[str]:
+    raw = os.environ.get("PUSULA_EXTRA_RECIPIENTS") or ""
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
 def _verify_columns(conn: psycopg.Connection) -> list[str]:
     rows = conn.execute(
         """
@@ -137,6 +144,39 @@ def _week_bounds(day: date) -> tuple[datetime, datetime]:
     return start, end
 
 
+def _load_snapshot_reps(
+    conn: psycopg.Connection, org_id: str
+) -> list[tuple[str, str]]:
+    """(rep_id, full_name) — sales + PUSULA_EXTRA_RECIPIENTS."""
+    sales = conn.execute(
+        """
+        SELECT rep_id, full_name FROM reps
+        WHERE org_id = %s AND active = true AND category = 'sales'
+        ORDER BY full_name
+        """,
+        (org_id,),
+    ).fetchall()
+    out: dict[str, str] = {str(r[0]): str(r[1]) for r in sales}
+    extras = _parse_extra_recipients()
+    if extras:
+        rows = conn.execute(
+            """
+            SELECT rep_id, full_name FROM reps
+            WHERE org_id = %s AND rep_id = ANY(%s)
+            """,
+            (org_id, extras),
+        ).fetchall()
+        found = {str(r[0]): str(r[1]) for r in rows}
+        for rid in extras:
+            if rid in found:
+                out[rid] = found[rid]
+            else:
+                print(f"uyarı: PUSULA_EXTRA_RECIPIENTS bilinmeyen rep_id={rid}")
+    elif not out:
+        print("uyarı: sales yok ve PUSULA_EXTRA_RECIPIENTS boş")
+    return sorted(out.items(), key=lambda x: x[1])
+
+
 def take_snapshot(
     conn: psycopg.Connection,
     org_id: str,
@@ -144,31 +184,55 @@ def take_snapshot(
 ) -> int:
     _verify_columns(conn)
     week_start, week_end = _week_bounds(snapshot_day)
+    print(
+        f"hafta={week_start.date()} .. {week_end.date()} "
+        f"(snapshot_date={snapshot_day})"
+    )
 
-    reps = [
-        str(r[0])
-        for r in conn.execute(
-            """
-            SELECT rep_id FROM reps
-            WHERE org_id = %s AND active = true AND category = 'sales'
-            ORDER BY rep_id
-            """,
-            (org_id,),
-        ).fetchall()
-    ]
+    reps = _load_snapshot_reps(conn, org_id)
     if not reps:
-        # sales yoksa tüm aktifler
-        reps = [
-            str(r[0])
-            for r in conn.execute(
-                """
-                SELECT rep_id FROM reps
-                WHERE org_id = %s AND active = true
-                ORDER BY rep_id
-                """,
-                (org_id,),
-            ).fetchall()
-        ]
+        print("yazilacak temsilci yok")
+        return 0
+    rep_ids = [r[0] for r in reps]
+    names = {r[0]: r[1] for r in reps}
+
+    # Haftalık olay teşhisi (tutulan/bozulan 0 ise sebep net olsun).
+    n_fulfill = conn.execute(
+        """
+        SELECT count(*)::int
+        FROM commitments c
+        JOIN events e ON e.id = c.fulfilled_event_id
+        WHERE c.org_id = %s
+          AND c.status = 'fulfilled'
+          AND e.occurred_at >= %s
+          AND e.occurred_at < %s
+        """,
+        (org_id, week_start, week_end),
+    ).fetchone()
+    n_broken_due = conn.execute(
+        """
+        SELECT count(*)::int
+        FROM commitments c
+        WHERE c.org_id = %s
+          AND c.status = 'broken'
+          AND c.due_at >= %s
+          AND c.due_at < %s
+        """,
+        (org_id, week_start, week_end),
+    ).fetchone()
+    print(
+        f"hafta olay: fulfilled_event={int(n_fulfill[0] or 0)}, "
+        f"broken_due_at={int(n_broken_due[0] or 0)}"
+    )
+    if int(n_fulfill[0] or 0) == 0:
+        print(
+            "not: tutulan_hafta=0 olacak — bu hafta fulfill event "
+            "(occurred_at) yok"
+        )
+    if int(n_broken_due[0] or 0) == 0:
+        print(
+            "not: bozulan_hafta=0 olacak — bu hafta due_at'li broken yok"
+        )
 
     bekleyen = {
         str(r[0]): int(r[1])
@@ -212,6 +276,7 @@ def take_snapshot(
         ).fetchall()
     }
 
+    # tutulan: fulfill call'ın occurred_at'i bu takvim haftasında
     tutulan = {
         str(r[0]): int(r[1])
         for r in conn.execute(
@@ -237,6 +302,7 @@ def take_snapshot(
         ).fetchall()
     }
 
+    # bozulan: due_at bu takvim haftasında + status=broken
     bozulan = {
         str(r[0]): int(r[1])
         for r in conn.execute(
@@ -261,8 +327,10 @@ def take_snapshot(
         ).fetchall()
     }
 
-    rows = [
-        (
+    rows = []
+    print("metrikler:")
+    for rep_id in rep_ids:
+        row = (
             snapshot_day,
             rep_id,
             bekleyen.get(rep_id, 0),
@@ -271,8 +339,20 @@ def take_snapshot(
             tutulan.get(rep_id, 0),
             bozulan.get(rep_id, 0),
         )
-        for rep_id in reps
-    ]
+        rows.append(row)
+        print(
+            f"  {names[rep_id]}: bekleyen={row[2]} kayip={row[3]} "
+            f"acik={row[4]} tutulan={row[5]} bozulan={row[6]}"
+        )
+
+    print(
+        "toplam: "
+        f"bekleyen={sum(r[2] for r in rows)} "
+        f"kayip={sum(r[3] for r in rows)} "
+        f"acik={sum(r[4] for r in rows)} "
+        f"tutulan={sum(r[5] for r in rows)} "
+        f"bozulan={sum(r[6] for r in rows)}"
+    )
 
     with conn.cursor() as cur:
         cur.executemany(
@@ -313,6 +393,12 @@ def main() -> int:
     if not database_url:
         print("DATABASE_URL_POOLED / DATABASE_URL yok")
         return 1
+
+    extras = _parse_extra_recipients()
+    print(
+        f"PUSULA_EXTRA_RECIPIENTS: "
+        f"{len(extras)} id" + (f" ({', '.join(extras)})" if extras else " (bos)")
+    )
 
     if args.date:
         snapshot_day = date.fromisoformat(args.date)
