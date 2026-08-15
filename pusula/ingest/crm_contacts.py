@@ -28,12 +28,13 @@ from pusula.zoho.crm import coql
 
 logger = logging.getLogger(__name__)
 
-# zoho_schema_check --module Contacts ile doğrulandı (Mobile yok).
+# zoho_schema_check --module Contacts: Phone + Mobile var; Lead_Id yok.
 _CONTACT_FIELDS = [
     "id",
     "Created_Time",
     "Owner",
     "Phone",
+    "Mobile",
     "Email",
     "Secondary_Email",
     "Full_Name",
@@ -74,9 +75,20 @@ def sync_contacts(*, dry_run: bool = False) -> dict[str, int]:
                     else None
                 )
                 phone = None
-                raw_phone = _as_str(record.get("Phone"))
-                if raw_phone:
+                for key in ("Phone", "Mobile"):
+                    raw_phone = _as_str(record.get(key))
+                    if not raw_phone:
+                        continue
                     phone = normalize_phone(raw_phone)
+                    if phone:
+                        break
+                # Mobile ayrı kimlik olarak da bağlanır (Phone'dan farklıysa).
+                mobile = None
+                raw_mobile = _as_str(record.get("Mobile"))
+                if raw_mobile:
+                    mobile = normalize_phone(raw_mobile)
+                    if mobile and mobile == phone:
+                        mobile = None
                 email = None
                 for key in ("Email", "Secondary_Email"):
                     raw_email = _as_str(record.get(key))
@@ -91,6 +103,7 @@ def sync_contacts(*, dry_run: bool = False) -> dict[str, int]:
                         "created_at": _parse_dt(record.get("Created_Time")),
                         "owner_rep_id": owner_rep_id,
                         "phone": phone,
+                        "mobile": mobile,
                         "email": email,
                         "full_name": _as_str(record.get("Full_Name")),
                     }
@@ -153,6 +166,13 @@ def _write_contact_chunk_on_conn(
                 zoho_contact_id=contact_id,
                 conn=conn,
             )
+            # İkinci telefon (Mobile ≠ Phone) aynı thread'e eklenir.
+            if thread_id and item.get("mobile"):
+                resolve_thread_detailed(
+                    phone=item["mobile"],
+                    zoho_contact_id=contact_id,
+                    conn=conn,
+                )
         except Exception:
             logger.exception("contact thread çözülemedi id=%s", contact_id)
             stats["errors"] += 1
@@ -188,7 +208,7 @@ def _write_contact_chunk_on_conn(
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (org_id, contact_id) DO UPDATE SET
-                lead_id = EXCLUDED.lead_id,
+                lead_id = COALESCE(EXCLUDED.lead_id, contacts.lead_id),
                 thread_id = COALESCE(EXCLUDED.thread_id, contacts.thread_id),
                 created_at = COALESCE(EXCLUDED.created_at, contacts.created_at),
                 owner_rep_id = EXCLUDED.owner_rep_id,

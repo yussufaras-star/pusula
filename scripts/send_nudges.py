@@ -1118,6 +1118,99 @@ def _is_dup(conn: psycopg.Connection, org_id: str, n: NudgeCandidate) -> bool:
     return row is not None
 
 
+def _print_taahhut_funnel(conn: psycopg.Connection, org_id: str) -> None:
+    """gecikmis_taahhut filtre adımlarını bas (temas bu sorguda yok)."""
+    print("--- gecikmis_taahhut filtre ---")
+    totals = conn.execute(
+        """
+        SELECT
+          count(*) FILTER (WHERE status = 'broken') AS broken,
+          count(*) FILTER (
+            WHERE status = 'broken' AND due_at IS NOT NULL
+          ) AS with_due,
+          count(*) FILTER (
+            WHERE status = 'broken' AND due_at IS NOT NULL AND due_at < now()
+          ) AS past_due,
+          count(*) FILTER (
+            WHERE status = 'broken'
+              AND due_at >= now() - interval '14 days'
+              AND due_at < now()
+          ) AS in_14d,
+          count(*) FILTER (
+            WHERE status = 'broken'
+              AND due_at >= now() - interval '14 days'
+              AND due_at < now()
+              AND thread_id IS NOT NULL
+          ) AS with_thread,
+          count(*) FILTER (
+            WHERE status = 'broken'
+              AND due_at >= now() - interval '14 days'
+              AND due_at < now()
+              AND thread_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM leads l
+                WHERE l.org_id = c.org_id AND l.thread_id = c.thread_id
+                  AND l.owner_rep_id IS NOT NULL
+              )
+          ) AS with_owner
+        FROM commitments c
+        WHERE org_id = %s
+        """,
+        (org_id,),
+    ).fetchone()
+    print(
+        f"  ham broken={totals[0]} due_dolu={totals[1]} "
+        f"gecmis_due={totals[2]} son_14g={totals[3]} "
+        f"threadli={totals[4]} owner_lead={totals[5]}"
+    )
+    if int(totals[2] or 0) > 0 and int(totals[3] or 0) == 0:
+        print(
+            "  not: son 14g=0 — due_at'ler 14 günden eski "
+            "(temas filtresi bu sinyalde yok)"
+        )
+    elif int(totals[3] or 0) > int(totals[5] or 0):
+        print(
+            "  not: owner_lead < son_14g — thread'de owner'lı lead yok"
+        )
+
+    per_rep = conn.execute(
+        """
+        SELECT r.full_name,
+          count(*) FILTER (
+            WHERE c.status = 'broken' AND c.due_at < now()
+          ) AS past_due,
+          count(*) FILTER (
+            WHERE c.status = 'broken'
+              AND c.due_at >= now() - interval '14 days'
+              AND c.due_at < now()
+          ) AS in_14d
+        FROM commitments c
+        JOIN LATERAL (
+          SELECT owner_rep_id FROM leads
+          WHERE org_id = c.org_id AND thread_id = c.thread_id
+          ORDER BY assigned_at DESC NULLS LAST
+          LIMIT 1
+        ) l ON true
+        JOIN reps r ON r.org_id = c.org_id AND r.rep_id = l.owner_rep_id
+        WHERE c.org_id = %s
+          AND r.category = 'sales'
+          AND r.active = true
+        GROUP BY r.full_name
+        HAVING count(*) FILTER (
+            WHERE c.status = 'broken' AND c.due_at < now()
+          ) > 0
+        ORDER BY r.full_name
+        """,
+        (org_id,),
+    ).fetchall()
+    for name, past, in14 in per_rep:
+        elenen = int(past or 0) - int(in14 or 0)
+        print(
+            f"  {name}: gecmis_due={past} → son_14g={in14} "
+            f"(14g dışı elenen={elenen})"
+        )
+
+
 def _load_candidates(conn: psycopg.Connection, org_id: str) -> list[NudgeCandidate]:
     out: list[NudgeCandidate] = []
 
@@ -1415,6 +1508,8 @@ def main() -> int:
                 f"sales={talks_sales}, tüm={talks_all} "
                 f"(ekip ort. eşik={_AVG_MIN_TALKS} görüşme/rep)"
             )
+
+            _print_taahhut_funnel(conn, org_id)
 
             raw_all = _load_candidates(conn, org_id)
             raw = [n for n in raw_all if n.rep_id in recipient_ids]

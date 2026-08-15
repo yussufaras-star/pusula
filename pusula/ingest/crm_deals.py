@@ -31,6 +31,7 @@ _DEAL_FIELDS = [
     "Amount",
     "Closing_Date",
     "Created_Time",
+    "Modified_Time",
     "Contact_Name",
     "Lead_Source",
     "Owner",
@@ -42,7 +43,12 @@ _MIGRATION_END = date(2026, 5, 1)
 
 
 def sync_deals(*, since: datetime, dry_run: bool = False) -> dict[str, int]:
-    """Deals'i since (Created_Time) ile sync eder."""
+    """Deals'i since ile sync eder.
+
+    Pencere: Created_Time >= since OR Modified_Time >= since.
+    Sadece Created_Time kullanılırsa Ağustos'ta güncellenen eski
+    deal'ler kaçmaz; yeni oluşturulanlar da Created ile gelir.
+    """
     stats = {
         "fetched": 0,
         "written": 0,
@@ -56,9 +62,11 @@ def sync_deals(*, since: datetime, dry_run: bool = False) -> dict[str, int]:
     org_id = get_org_id()
     since_local = to_istanbul(since)
     since_str = _format_zoho_dt(since_local)
+    # COQL OR ile hem yeni oluşturulan hem güncellenen deal'ler.
     query = (
         "select " + ", ".join(_DEAL_FIELDS) + " from Deals "
         f"where Created_Time >= '{since_str}' "
+        f"or Modified_Time >= '{since_str}' "
         "order by Created_Time asc"
     )
 
@@ -171,8 +179,10 @@ def sync_deals(*, since: datetime, dry_run: bool = False) -> dict[str, int]:
                         %s, %s, %s, %s
                     )
                     ON CONFLICT (org_id, deal_id) DO UPDATE SET
-                        contact_id = EXCLUDED.contact_id,
-                        lead_id = EXCLUDED.lead_id,
+                        contact_id = COALESCE(
+                            EXCLUDED.contact_id, deals.contact_id
+                        ),
+                        lead_id = COALESCE(EXCLUDED.lead_id, deals.lead_id),
                         thread_id = COALESCE(EXCLUDED.thread_id, deals.thread_id),
                         stage = EXCLUDED.stage,
                         amount = EXCLUDED.amount,
@@ -180,8 +190,11 @@ def sync_deals(*, since: datetime, dry_run: bool = False) -> dict[str, int]:
                         closed_at = EXCLUDED.closed_at,
                         owner_rep_id = EXCLUDED.owner_rep_id,
                         source = EXCLUDED.source,
-                        cycle_start_at = EXCLUDED.cycle_start_at,
+                        cycle_start_at = COALESCE(
+                            EXCLUDED.cycle_start_at, deals.cycle_start_at
+                        ),
                         cycle_start_reliable = EXCLUDED.cycle_start_reliable
+                            OR deals.cycle_start_reliable
                     """,
                     upserts,
                 )

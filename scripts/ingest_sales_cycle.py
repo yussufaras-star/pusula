@@ -6,7 +6,8 @@ Kullanım:
     python scripts/ingest_sales_cycle.py --contacts-only
     python scripts/ingest_sales_cycle.py --deals-only --since 2026-04-01
 
-Varsayılan: contacts tam sync, deals --since 2026-04-01.
+Varsayılan: contacts tam sync, deals --since 2026-04-01
+(Created_Time OR Modified_Time).
 .env otomatik yüklenir; eksik Zoho anahtarları .env.txt ile doldurulabilir.
 """
 
@@ -40,7 +41,7 @@ def main() -> int:
     parser.add_argument(
         "--since",
         default="2026-04-01T00:00:00",
-        help="Deals Created_Time alt sınırı (ISO 8601, varsayılan 2026-04-01)",
+        help="Deals Created/Modified_Time alt sınırı (ISO 8601, varsayılan 2026-04-01)",
     )
     parser.add_argument(
         "--contacts-only",

@@ -362,11 +362,33 @@ def _load_thread_created_at(thread_ids: set[str]) -> dict[str, Any]:
 
 
 def _fetch_leads(lead_ids: Sequence[str]) -> Iterable[dict[str, Any]]:
-    """COQL ile id in (...) batch çeker."""
+    """COQL ile id in (...) batch çeker.
+
+    Dönüştürülmüş lead'ler düz `id in (...)` ile boş gelebilir;
+    eksikler Converted__s = true ile tekrar denenir.
+    """
     ids_sql = ", ".join(lead_ids)
     fields = ", ".join(_LEAD_FIELDS)
+    wanted = {str(x) for x in lead_ids}
+    found: dict[str, dict[str, Any]] = {}
     query = f"select {fields} from Leads where id in ({ids_sql})"
-    return coql(query)
+    for record in coql(query):
+        rid = record.get("id")
+        if rid is not None:
+            found[str(rid)] = record
+    missing = sorted(wanted - set(found))
+    if missing:
+        miss_sql = ", ".join(missing)
+        q2 = (
+            f"select {fields} from Leads "
+            f"where Converted__s = true and id in ({miss_sql})"
+        )
+        for record in coql(q2):
+            rid = record.get("id")
+            if rid is not None:
+                found[str(rid)] = record
+    return found.values()
+
 
 
 def _owner_rep_id(owner: Any) -> str | None:
