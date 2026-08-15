@@ -13,7 +13,8 @@ Kalan kota diğer sinyallere orantılı; tek tip 3 yer alamaz.
 
 Stok = tüm sinyallerdeki uygun aday toplamı (tip toplamı).
 
-Temas: call_duration_sec >= 30 VE call_outcomes.category <> 'not_reached'.
+Temas: pusula.temas — call_duration_sec >= 30 VE
+call_outcomes.category <> 'not_reached'.
 Deneme: her outbound çağrı (scheduled hariç). 10 sn altı temas sayılmaz.
 
 Bölümler: Bugün / Dünden (süre + ekip ort.) / net akış / Bu hafta
@@ -49,6 +50,12 @@ from psycopg.types.json import Json
 from dotenv import load_dotenv
 
 from pusula.config import get_org_id
+from pusula.temas import (
+    CALL_MIN_SEC,
+    TEMAS_MIN_SEC,
+    duration_sec,
+    outcome_join,
+)
 
 _TZ = ZoneInfo("Europe/Istanbul")
 _MAX_PER_REP = 3
@@ -74,30 +81,9 @@ _SNAPSHOT_LABELS = (
     ("bozulan_hafta", "Bozulan"),
 )
 
-# Süre: call_duration_sec yoksa duration_sec (eski anahtar).
-_DURATION_SEC = """
-    COALESCE(
-        NULLIF(e.meta->>'call_duration_sec', '')::numeric,
-        NULLIF(e.meta->>'duration_sec', '')::numeric
-    )
-"""
-
-# call_outcomes join: outcome_key varsa onu, yoksa call_result → raw_value.
-_OUTCOME_JOIN = """
-          LEFT JOIN call_outcomes co
-            ON co.org_id = {alias}.org_id
-           AND (
-                (
-                    nullif({alias}.meta->>'outcome_key', '') IS NOT NULL
-                    AND co.outcome_key = {alias}.meta->>'outcome_key'
-                )
-                OR (
-                    nullif({alias}.meta->>'outcome_key', '') IS NULL
-                    AND nullif({alias}.meta->>'call_result', '') IS NOT NULL
-                    AND co.raw_value = {alias}.meta->>'call_result'
-                )
-           )
-"""
+# Tek kaynak: pusula.temas
+_DURATION_SEC = duration_sec("e")
+_OUTCOME_JOIN = outcome_join  # callable(alias) -> SQL; geriye dönük .format yok
 
 # Kanıt: yalnızca hesaplanmış sayı cümlesi. Sabit/genel ifade yok.
 _EVIDENCE_TYPE_PRIORITY = (
@@ -129,14 +115,14 @@ _PENCERE_SQL = """
         (
             SELECT count(*)::int
             FROM events e
-""" + _OUTCOME_JOIN.format(alias="e") + """
+""" + outcome_join("e") + """
             WHERE e.org_id = l.org_id
               AND e.thread_id = l.thread_id
               AND e.channel = 'call'
               AND e.direction = 'outbound'
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
               AND e.occurred_at >= coalesce(l.assigned_at, l.created_at)
-              AND (e.meta->>'call_duration_sec')::numeric >= 30
+              AND """ + duration_sec("e") + """ >= 30
               AND coalesce(co.category, '') <> 'not_reached'
         ) AS temas_calls,
         (
@@ -324,7 +310,7 @@ _KAYIP_SQL = """
       AND NOT EXISTS (
           SELECT 1
           FROM events e3
-""" + _OUTCOME_JOIN.format(alias="e3") + """
+""" + outcome_join("e3") + """
           WHERE e3.org_id = r.org_id
             AND e3.thread_id = r.thread_id
             AND e3.occurred_at > r.randevu_at
@@ -334,7 +320,7 @@ _KAYIP_SQL = """
                 OR e3.channel = 'meeting'
                 OR (
                     e3.channel = 'call'
-                    AND (e3.meta->>'call_duration_sec')::numeric >= 30
+                    AND """ + duration_sec("e3") + """ >= 30
                     AND coalesce(co.category, '') <> 'not_reached'
                 )
             )
@@ -702,7 +688,7 @@ def _load_net_flow(
         SELECT count(DISTINCT e.thread_id)::int
         FROM events e
         """
-        + _OUTCOME_JOIN.format(alias="e")
+        + outcome_join("e")
         + """
         WHERE e.org_id = %s
           AND e.rep_id = %s
