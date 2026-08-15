@@ -97,7 +97,7 @@ def diagnose(conn: Any, org_id: str) -> dict[str, int]:
         (org_id,),
     ).fetchone()
     stats["lead_deal_thread_join"] = int(row[0])
-    print(f"lead↔deal aynı thread (distinct lead): {row[0]}")
+    print(f"lead-deal ayni thread (distinct lead): {row[0]}")
 
     # Aynı telefon kimliği lead+contact satırında farklı thread?
     # identities unique → aynı id_value tek thread; yine de ölç.
@@ -180,18 +180,385 @@ def diagnose(conn: Any, org_id: str) -> dict[str, int]:
     return stats
 
 
-def _fetch_converted_pairs() -> list[tuple[str, str]]:
-    """(lead_id, contact_id) — Converted_Contact dolu olanlar."""
-    pairs: list[tuple[str, str]] = []
+def _fetch_converted_pairs_raw() -> list[dict[str, Any]]:
+    """Ham Zoho kayıtları + parse edilmiş id'ler (teşhis için)."""
+    out: list[dict[str, Any]] = []
     for rec in coql(
         "select id, Converted_Contact from Leads "
         "where Converted__s = true"
     ):
+        raw_cc = rec.get("Converted_Contact")
         lead_id = _as_str(rec.get("id"))
-        contact_id = _lookup_id(rec.get("Converted_Contact"))
-        if lead_id and contact_id:
-            pairs.append((lead_id, contact_id))
+        contact_id = _lookup_id(raw_cc)
+        out.append(
+            {
+                "zoho_raw_id": rec.get("id"),
+                "zoho_raw_id_type": type(rec.get("id")).__name__,
+                "Converted_Contact_raw": raw_cc,
+                "Converted_Contact_raw_type": type(raw_cc).__name__,
+                "lead_id": lead_id,
+                "contact_id": contact_id,
+            }
+        )
+    return out
+
+
+def diagnose_converted_path(conn: Any, org_id: str) -> None:
+    """Converted_Contact yolunu kategori bazında say (yazmadan)."""
+    print("\n=== Converted_Contact yol teşhisi (kategori) ===")
+    print(
+        "sayac aciklamasi: dry-run'da 'resolved' = cift sayildi "
+        "(resolve_thread CAGRILMAZ); 'linked' yalniz --apply ve "
+        "thread_id donunce artar. Bu yuzden resolved>0 linked=0 "
+        "dry-run'da beklenen celiski, baglama basarisizligi degil."
+    )
+    raw_rows = _fetch_converted_pairs_raw()
+    # Cift = Converted_Contact id parse edilebilenler
+    pairs = [r for r in raw_rows if r["lead_id"] and r["contact_id"]]
+    cats: dict[str, int] = defaultdict(int)
+    samples: list[dict[str, Any]] = []
+
+    for r in raw_rows:
+        if not r["lead_id"]:
+            cats["lead_id parse edilemedi"] += 1
+            continue
+        if not r["contact_id"]:
+            cats["Converted_Contact bos/parse yok"] += 1
+            continue
+
+        lead_id = r["lead_id"]
+        contact_id = r["contact_id"]
+
+        c_row = conn.execute(
+            """
+            SELECT contact_id, lead_id, thread_id FROM contacts
+            WHERE org_id = %s AND contact_id = %s
+            """,
+            (org_id, contact_id),
+        ).fetchone()
+        c_lead: str | None = None
+        c_thread: str | None = None
+
+        if c_row is None:
+            # Tip/cast alternatif: ayni string baska yolda bulunur mu?
+            id_row = conn.execute(
+                """
+                SELECT thread_id FROM identities
+                WHERE org_id = %s AND id_type = 'zoho_contact'
+                  AND id_value = %s
+                LIMIT 1
+                """,
+                (org_id, contact_id),
+            ).fetchone()
+            if id_row is None:
+                cats["contact bulunamadi (contacts+identities)"] += 1
+                _maybe_sample(samples, r, None, None, "contact yok")
+                continue
+            c_thread = str(id_row[0])
+            c_lead = None
+            # contacts satir yok ama identity var — ayri kategori
+            # asagida lead_id / thread ile devam; once bu etiketi basmak
+            # icin exclusive kategori kullan (identity-only)
+            cats_prefix = "contact satiri yok ama zoho_contact identity var; "
+        else:
+            cats_prefix = ""
+            c_lead = str(c_row[1]) if c_row[1] else None
+            c_thread = str(c_row[2]) if c_row[2] else None
+
+        l_row = conn.execute(
+            """
+            SELECT lead_id, thread_id FROM leads
+            WHERE org_id = %s AND lead_id = %s
+            """,
+            (org_id, lead_id),
+        ).fetchone()
+        zl_row = conn.execute(
+            """
+            SELECT thread_id FROM identities
+            WHERE org_id = %s AND id_type = 'zoho_lead' AND id_value = %s
+            LIMIT 1
+            """,
+            (org_id, lead_id),
+        ).fetchone()
+        l_thread = (
+            str(l_row[1])
+            if l_row and l_row[1]
+            else (str(zl_row[0]) if zl_row else None)
+        )
+
+        if c_lead == lead_id:
+            cats[cats_prefix + "lead_id zaten dolu (dogru lead)"] += 1
+            _maybe_sample(samples, r, c_lead, l_thread, "zaten dolu")
+            continue
+
+        if c_lead is not None and c_lead != lead_id:
+            cats[cats_prefix + "lead_id dolu ama farkli lead"] += 1
+            _maybe_sample(samples, r, c_lead, l_thread, "farkli lead_id")
+            continue
+
+        if c_thread and l_thread and c_thread == l_thread:
+            cats[cats_prefix + "thread eslesiyor ama lead_id bos (refill adayi)"] += 1
+            _maybe_sample(samples, r, c_lead, l_thread, "refill adayi")
+            continue
+
+        if c_thread and l_thread and c_thread != l_thread:
+            cats[cats_prefix + "thread eslesmiyor (merge gerekir)"] += 1
+            _maybe_sample(samples, r, c_lead, l_thread, "thread farkli")
+            continue
+
+        if l_thread is None and zl_row is None and l_row is None:
+            cats[cats_prefix + "lead bulunamadi (leads+zoho_lead identity yok)"] += 1
+            _maybe_sample(samples, r, c_lead, None, "lead yok")
+            continue
+
+        if c_thread is None:
+            cats[cats_prefix + "contact thread yok"] += 1
+            _maybe_sample(samples, r, c_lead, l_thread, "contact thread yok")
+            continue
+
+        cats[cats_prefix + "kosul disi / diger"] += 1
+        _maybe_sample(samples, r, c_lead, l_thread, "diger")
+
+    # Id tip/format ozeti (exclusive degil; ayri rapor)
+    fmt_lead_strip = 0
+    fmt_cc_strip = 0
+    fmt_cc_dict = 0
+    fmt_cc_str = 0
+    for raw in pairs:
+        if str(raw["zoho_raw_id"]).strip() != raw["lead_id"]:
+            fmt_lead_strip += 1
+        cc = raw["Converted_Contact_raw"]
+        if isinstance(cc, dict):
+            fmt_cc_dict += 1
+            cid = cc.get("id")
+            if cid is not None and str(cid).strip() != raw["contact_id"]:
+                fmt_cc_strip += 1
+        elif isinstance(cc, str):
+            fmt_cc_str += 1
+    print(
+        f"id format ozeti (ciftler, exclusive degil): "
+        f"Converted_Contact dict={fmt_cc_dict} str={fmt_cc_str}, "
+        f"lead strip farki={fmt_lead_strip}, contact strip farki={fmt_cc_strip}"
+    )
+
+    total_in = len(raw_rows)
+    cat_sum = sum(cats.values())
+    print(f"girdi (Zoho Converted__s=true kayit): {total_in}")
+    print(f"parse edilmis cift (lead+contact id): {len(pairs)}")
+    for k in sorted(cats.keys()):
+        print(f"  {k}: {cats[k]}")
+    print(f"kategori toplami: {cat_sum} (girdi ile esit mi: {cat_sum == total_in})")
+
+    print(
+        f"\nmevcut dry-run sayac simulasyonu: "
+        f"resolved={len(pairs)} linked=0 "
+        f"(apply=False → resolve_thread atlanir, linked hic artmaz)"
+    )
+
+    print("\n=== 5 ornek kayit (ham) ===")
+    shown = samples[:5]
+    if len(shown) < 5:
+        for r in pairs[:(5 - len(shown))]:
+            shown.append(
+                {
+                    "raw": r,
+                    "local_lead_id": None,
+                    "lead_thread": None,
+                    "note": "ornek",
+                }
+            )
+    for i, s in enumerate(shown, 1):
+        r = s["raw"]
+        print(f"--- ornek {i} ({s.get('note')}) ---")
+        print(f"  Zoho id ham: {r['zoho_raw_id']!r} type={r['zoho_raw_id_type']}")
+        print(
+            f"  Converted_Contact ham: {r['Converted_Contact_raw']!r} "
+            f"type={r['Converted_Contact_raw_type']}"
+        )
+        print(f"  parse lead_id: {r['lead_id']!r}")
+        print(f"  parse contact_id: {r['contact_id']!r}")
+        print(f"  local contacts.lead_id: {s.get('local_lead_id')!r}")
+        print(f"  lead/identity thread: {s.get('lead_thread')!r}")
+
+
+def _maybe_sample(
+    samples: list[dict[str, Any]],
+    raw: dict[str, Any],
+    local_lead_id: str | None,
+    lead_thread: str | None,
+    note: str,
+) -> None:
+    if len(samples) >= 8:
+        return
+    # Cesitlilik: ayni note'tan en fazla 2
+    same = sum(1 for s in samples if s.get("note") == note)
+    if same >= 2:
+        return
+    samples.append(
+        {
+            "raw": raw,
+            "local_lead_id": local_lead_id,
+            "lead_thread": lead_thread,
+            "note": note,
+        }
+    )
+
+
+def diagnose_rematch_path(conn: Any, org_id: str) -> None:
+    """Rematch yolunu kategori bazında say (yazmadan, tek sorgular).
+
+    Rematch leads tablosunda telefon aramaz: contact thread'indeki
+    identities phone/email + zoho_contact ile resolve_thread_detailed
+    cagirir; lead_id sonra _lead_for_thread (zoho_lead identity → leads)
+    ile bulunur. Degerler zaten identities'te normalize halde durur
+    (ingest'te normalize_phone/email).
+    """
+    print("\n=== rematch yol teşhisi (kategori) ===")
+    print(
+        "arama yolu: identities (phone/email on contact.thread) + "
+        "resolve_thread(zoho_contact); leads.phone kolonu YOK. "
+        "normalize: ingest yazarken yapildi; rematch id_value'yu "
+        "oldugu gibi resolve_thread'e verir (normalize_phone tekrar)."
+    )
+    print(
+        "mevcut dry-run: rematch() erken return → resolved=0 leadli=0 "
+        "(hic kategori sayilmaz; asagidaki bu boslugu doldurur)."
+    )
+
+    from pusula.db.identity import normalize_email, normalize_phone
+
+    row = conn.execute(
+        """
+        WITH base AS (
+          SELECT
+            c.contact_id,
+            c.lead_id AS c_lead,
+            c.thread_id,
+            (
+              SELECT i.id_value FROM identities i
+              WHERE i.org_id = c.org_id AND i.thread_id = c.thread_id
+                AND i.id_type = 'phone'
+              ORDER BY i.id_value LIMIT 1
+            ) AS phone,
+            (
+              SELECT i.id_value FROM identities i
+              WHERE i.org_id = c.org_id AND i.thread_id = c.thread_id
+                AND i.id_type = 'email'
+              ORDER BY i.id_value LIMIT 1
+            ) AS email,
+            (
+              SELECT i.id_value FROM identities i
+              WHERE i.org_id = c.org_id AND i.thread_id = c.thread_id
+                AND i.id_type = 'zoho_lead'
+              ORDER BY i.id_value LIMIT 1
+            ) AS thread_zoho_lead,
+            (
+              SELECT l.lead_id FROM leads l
+              WHERE l.org_id = c.org_id AND l.thread_id = c.thread_id
+              ORDER BY l.assigned_at ASC NULLS LAST LIMIT 1
+            ) AS thread_lead_row
+          FROM contacts c
+          WHERE c.org_id = %s
+        ),
+        classified AS (
+          SELECT
+            contact_id,
+            phone,
+            email,
+            CASE
+              WHEN c_lead IS NOT NULL
+                   AND coalesce(thread_zoho_lead, thread_lead_row) = c_lead
+                THEN 'lead_id zaten dolu'
+              WHEN c_lead IS NOT NULL
+                   AND coalesce(thread_zoho_lead, thread_lead_row) IS NOT NULL
+                   AND coalesce(thread_zoho_lead, thread_lead_row) <> c_lead
+                THEN 'lead_id dolu ama thread''de farkli zoho_lead'
+              WHEN c_lead IS NOT NULL
+                THEN 'lead_id dolu ama thread''de lead bulunamadi'
+              WHEN coalesce(thread_zoho_lead, thread_lead_row) IS NOT NULL
+                THEN 'lead bulundu (refill adayi, lead_id bos)'
+              WHEN phone IS NULL AND email IS NULL
+                THEN 'telefon/email yok (identity)'
+              WHEN EXISTS (
+                SELECT 1 FROM identities i
+                JOIN identities zl
+                  ON zl.org_id = i.org_id AND zl.thread_id = i.thread_id
+                 AND zl.id_type = 'zoho_lead'
+                WHERE i.org_id = %s
+                  AND (
+                    (phone IS NOT NULL AND i.id_type = 'phone'
+                     AND i.id_value = phone)
+                    OR (email IS NOT NULL AND i.id_type = 'email'
+                     AND i.id_value = email)
+                  )
+              )
+                THEN 'lead identity ayni phone/email thread''de (resolve bulur)'
+              ELSE 'lead bulunamadi (phone/email ile zoho_lead yok)'
+            END AS cat
+          FROM base
+        )
+        SELECT cat, count(*)::int FROM classified GROUP BY 1 ORDER BY 1
+        """,
+        (org_id, org_id),
+    ).fetchall()
+
+    cats = {str(r[0]): int(r[1]) for r in row}
+    total_in = sum(cats.values())
+    print(f"girdi (contacts): {total_in}")
+    for k in sorted(cats.keys()):
+        print(f"  {k}: {cats[k]}")
+    print(
+        f"kategori toplami: {total_in} "
+        f"(girdi ile esit mi: {total_in == total_in})"
+    )
+
+    # Normalize drift: sample phones/emails from identities on contact threads
+    samples = conn.execute(
+        """
+        SELECT i.id_type, i.id_value
+        FROM identities i
+        JOIN contacts c ON c.org_id = i.org_id AND c.thread_id = i.thread_id
+        WHERE i.org_id = %s AND i.id_type IN ('phone', 'email')
+        """,
+        (org_id,),
+    ).fetchall()
+    norm_phone_ok = norm_phone_drift = 0
+    norm_email_ok = norm_email_drift = 0
+    for id_type, id_value in samples:
+        val = str(id_value)
+        if id_type == "phone":
+            renorm = normalize_phone(val)
+            if renorm == val:
+                norm_phone_ok += 1
+            else:
+                norm_phone_drift += 1
+        else:
+            renorm_e = normalize_email(val)
+            if renorm_e == val:
+                norm_email_ok += 1
+            else:
+                norm_email_drift += 1
+    print(
+        f"normalize dogrulama: phone ok={norm_phone_ok} "
+        f"drift={norm_phone_drift}, "
+        f"email ok={norm_email_ok} drift={norm_email_drift}"
+    )
+    print(
+        f"\nmevcut dry-run sayac simulasyonu: "
+        f"contacts={total_in} resolved=0 leadli=0 "
+        f"(apply=False → fonksiyon hemen return)"
+    )
+
+
+
+def _fetch_converted_pairs() -> list[tuple[str, str]]:
+    """(lead_id, contact_id) — Converted_Contact dolu olanlar."""
+    pairs: list[tuple[str, str]] = []
+    for rec in _fetch_converted_pairs_raw():
+        if rec["lead_id"] and rec["contact_id"]:
+            pairs.append((rec["lead_id"], rec["contact_id"]))
     return pairs
+
 
 
 def _contact_phones_emails(
@@ -526,7 +893,29 @@ def main() -> int:
     with client.transaction() as conn:
         before = diagnose(conn, org_id)
 
+    # Uzun Zoho + kategori teshisi ayri baglantida (pool timeout onlemi)
+    with client.transaction() as conn:
+        diagnose_converted_path(conn, org_id)
+    with client.transaction() as conn:
+        diagnose_rematch_path(conn, org_id)
+
     if args.diagnose_only:
+        return 0
+
+    if not args.apply:
+        print(
+            "\n=== dry-run notu ===\n"
+            "link_converted_pairs: apply=False iken her cift icin "
+            "resolved+=1, resolve_thread CAGIRILMAZ, linked hic artmaz.\n"
+            "rematch: apply=False iken erken return → resolved=0.\n"
+            "Bu yuzden resolved=N linked=0 / rematch resolved=0 "
+            "baglama basarisizligi degil; yazma kapali."
+        )
+        print("\n=== teşhis (sonra) ===")
+        print("(dry-run: DB degismedi, once ile ayni)")
+        with client.transaction() as conn:
+            diagnose(conn, org_id)
+        print("\ndry-run: yazılmadı. Uygulamak için --apply kullan.")
         return 0
 
     lead_ids: list[str] = []
@@ -602,7 +991,7 @@ def main() -> int:
             f"{after['contacts_with_lead_id']}, "
             f"deals.lead_id {before['deals_with_lead_id']}→"
             f"{after['deals_with_lead_id']}, "
-            f"lead↔deal thread {before['lead_deal_thread_join']}→"
+            f"lead-deal thread {before['lead_deal_thread_join']}->"
             f"{after['lead_deal_thread_join']}"
         )
     return 0
