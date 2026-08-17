@@ -50,6 +50,7 @@ from psycopg.types.json import Json
 from dotenv import load_dotenv
 
 from pusula.config import get_org_id
+from pusula.freshness import print_call_stale_warning
 from pusula.temas import (
     CALL_MIN_SEC,
     TEMAS_MIN_SEC,
@@ -110,6 +111,7 @@ _PENCERE_SQL = """
               AND e.channel = 'call'
               AND e.direction = 'outbound'
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+              AND e.occurred_at <= now()
               AND e.occurred_at >= coalesce(l.assigned_at, l.created_at)
         ) AS outbound_calls,
         (
@@ -121,6 +123,7 @@ _PENCERE_SQL = """
               AND e.channel = 'call'
               AND e.direction = 'outbound'
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+              AND e.occurred_at <= now()
               AND e.occurred_at >= coalesce(l.assigned_at, l.created_at)
               AND """ + duration_sec("e") + """ >= 30
               AND coalesce(co.category, '') <> 'not_reached'
@@ -146,6 +149,7 @@ _PENCERE_SQL = """
               AND e.channel = 'call'
               AND e.direction = 'outbound'
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+              AND e.occurred_at <= now()
               AND e.occurred_at >= coalesce(l.assigned_at, l.created_at)
       ) < 3
     ORDER BY sort_key DESC NULLS LAST
@@ -251,6 +255,7 @@ _KAYIP_SQL = """
               e.meta->>'outcome_key' = 'meeting_booked'
               OR e.meta->>'call_result' = 'Randevu Alındı'
           )
+          AND e.occurred_at <= now()
     )
     SELECT
         coalesce(r.rep_id, t.owner_rep_id) AS rep_id,
@@ -314,6 +319,7 @@ _KAYIP_SQL = """
           WHERE e3.org_id = r.org_id
             AND e3.thread_id = r.thread_id
             AND e3.occurred_at > r.randevu_at
+            AND e3.occurred_at <= now()
             AND coalesce(e3.meta->>'scheduled', 'false') <> 'true'
             AND (
                 (e3.channel = 'call' AND e3.direction = 'inbound')
@@ -407,6 +413,7 @@ _DUNDEN_SQL = """
       AND e.direction = 'outbound'
       AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
       AND """ + _DURATION_SEC + """ >= 30
+      AND e.occurred_at <= now()
       AND e.occurred_at >= %s
       AND e.occurred_at < %s
 """
@@ -427,6 +434,7 @@ _DUNDEN_TEAM_SQL = """
       AND e.direction = 'outbound'
       AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
       AND """ + _DURATION_SEC + """ >= 30
+      AND e.occurred_at <= now()
       AND e.occurred_at >= %s
       AND e.occurred_at < %s
 """
@@ -699,6 +707,7 @@ def _load_net_flow(
         + _DURATION_SEC
         + """ >= 30
           AND coalesce(co.category, '') <> 'not_reached'
+          AND e.occurred_at <= now()
           AND e.occurred_at >= %s
           AND e.occurred_at < %s
         """,
@@ -713,6 +722,7 @@ def _load_net_flow(
           AND e.channel = 'call'
           AND e.meta->>'call_status' = 'connected'
           AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+          AND e.occurred_at <= now()
           AND e.occurred_at >= %s
           AND e.occurred_at < %s
           AND EXISTS (
@@ -722,6 +732,7 @@ def _load_net_flow(
                 AND o.channel = 'call'
                 AND o.meta->>'call_status' = 'overdue'
                 AND o.occurred_at < e.occurred_at
+                AND o.occurred_at <= now()
           )
         """,
         (org_id, rep_id, week_start, week_end),
@@ -741,6 +752,7 @@ def _load_net_flow(
         WHERE c.org_id = %s
           AND c.status = 'fulfilled'
           AND l.owner_rep_id = %s
+          AND fe.occurred_at <= now()
           AND fe.occurred_at >= %s
           AND fe.occurred_at < %s
         """,
@@ -766,6 +778,7 @@ def _load_net_flow(
           AND e.rep_id = %s
           AND e.channel = 'call'
           AND e.meta->>'call_status' = 'overdue'
+          AND e.occurred_at <= now()
           AND e.occurred_at >= %s
           AND e.occurred_at < %s
         """,
@@ -782,6 +795,7 @@ def _load_net_flow(
               e.meta->>'outcome_key' = 'meeting_booked'
               OR e.meta->>'call_result' = 'Randevu Alındı'
           )
+          AND e.occurred_at <= now()
           AND e.occurred_at >= %s
           AND e.occurred_at < %s
         """,
@@ -905,6 +919,7 @@ def _count_talks_30s(
               AND """
             + _DURATION_SEC
             + """ >= 30
+              AND e.occurred_at <= now()
               AND e.occurred_at >= %s
               AND e.occurred_at < %s
             """,
@@ -922,6 +937,7 @@ def _count_talks_30s(
               AND """
             + _DURATION_SEC
             + """ >= 30
+              AND e.occurred_at <= now()
               AND e.occurred_at >= %s
               AND e.occurred_at < %s
             """,
@@ -1465,6 +1481,7 @@ def main() -> int:
 
     try:
         with psycopg.connect(database_url, prepare_threshold=None) as conn:
+            print_call_stale_warning(conn, org_id)
             recipients = _load_recipients(conn, org_id)
             recipient_ids = set(recipients.keys())
             extras = _parse_extra_recipients()

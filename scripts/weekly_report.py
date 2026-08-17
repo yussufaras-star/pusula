@@ -39,6 +39,7 @@ import psycopg
 from dotenv import load_dotenv
 
 from pusula.config import get_org_id
+from pusula.freshness import print_call_stale_warning
 from pusula.temas import (
     CALL_MIN_SEC,
     TEMAS_MIN_SEC,
@@ -156,6 +157,7 @@ def metric_kayit_disiplini(
           AND e.channel = 'call' AND e.direction = 'outbound'
           AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
           AND {_DUR} >= {TEMAS_MIN_SEC}
+          AND e.occurred_at <= now()
           AND e.occurred_at >= %s AND e.occurred_at < %s
         GROUP BY r.full_name
         ORDER BY
@@ -191,6 +193,7 @@ def metric_hic_aranmamis(
               AND e.channel = 'call'
               AND e.direction = 'outbound'
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+              AND e.occurred_at <= now()
               AND {_DUR} >= {CALL_MIN_SEC}
           )
         GROUP BY r.full_name
@@ -221,6 +224,7 @@ def _randevu_open_sql() -> str:
               e.meta->>'outcome_key' = 'meeting_booked'
               OR e.meta->>'call_result' = 'Randevu Alındı'
           )
+          AND e.occurred_at <= now()
     ),
     open_r AS (
         SELECT
@@ -239,6 +243,7 @@ def _randevu_open_sql() -> str:
               WHERE e.org_id = r.org_id
                 AND e.thread_id = r.thread_id
                 AND e.occurred_at > r.randevu_at
+                AND e.occurred_at <= now()
                 AND e.channel = 'call'
                 AND e.direction = 'outbound'
                 AND {_DUR} >= {TEMAS_MIN_SEC}
@@ -290,6 +295,7 @@ def metric_donulmemis(
                   e.meta->>'outcome_key' = 'meeting_booked'
                   OR e.meta->>'call_result' = 'Randevu Alındı'
               )
+              AND e.occurred_at <= now()
         ),
         first_temas AS (
             SELECT r.thread_id, r.randevu_at,
@@ -300,6 +306,7 @@ def metric_donulmemis(
             {_JOIN}
             WHERE r.rn = 1
               AND e.occurred_at > r.randevu_at
+              AND e.occurred_at <= now()
               AND e.channel = 'call' AND e.direction = 'outbound'
               AND {_DUR} >= {TEMAS_MIN_SEC}
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
@@ -348,6 +355,7 @@ def metric_arama_verimi(
               AND e.channel = 'call' AND e.direction = 'outbound'
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
               AND {_DUR} >= {CALL_MIN_SEC}
+              AND e.occurred_at <= now()
         ),
         calls AS (
             SELECT * FROM ranked
@@ -405,6 +413,7 @@ def metric_hareket(
           AND r.category = 'sales' AND r.active = true
           AND e.channel = 'call' AND e.direction = 'outbound'
           AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+          AND e.occurred_at <= now()
           AND e.occurred_at >= %s AND e.occurred_at < %s
         """,
         (org_id, week.start, week.end),
@@ -418,6 +427,7 @@ def metric_hareket(
         FROM commitments c
         JOIN events e ON e.id = c.source_event_id
         WHERE c.org_id = %s
+          AND e.occurred_at <= now()
           AND e.occurred_at >= %s AND e.occurred_at < %s
         """,
         (org_id, week.start, week.end),
@@ -431,6 +441,7 @@ def metric_hareket(
         JOIN events e ON e.id = c.fulfilled_event_id
         WHERE c.org_id = %s
           AND c.status = 'fulfilled'
+          AND e.occurred_at <= now()
           AND e.occurred_at >= %s AND e.occurred_at < %s
         """,
         (org_id, week.start, week.end),
@@ -507,6 +518,7 @@ def _latest_week_ago_with_calls(
           AND e.channel = 'call' AND e.direction = 'outbound'
           AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
           AND {_DUR} >= {CALL_MIN_SEC}
+          AND e.occurred_at <= now()
         ORDER BY w DESC
         LIMIT 1
         """,
@@ -545,6 +557,7 @@ def build_report(
               AND e.channel = 'call' AND e.direction = 'outbound'
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
               AND {_DUR} >= {CALL_MIN_SEC}
+              AND e.occurred_at <= now()
               AND e.occurred_at >= %s AND e.occurred_at < %s
             """,
             (org_id, probe.start, probe.end),
@@ -557,6 +570,7 @@ def build_report(
               AND e.channel = 'call' AND e.direction = 'outbound'
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
               AND {_DUR} >= {CALL_MIN_SEC}
+              AND e.occurred_at <= now()
               AND e.occurred_at >= %s AND e.occurred_at < %s
             """,
             (
@@ -629,6 +643,7 @@ def build_report(
             """
             SELECT count(*)::int FROM events e
             WHERE e.org_id = %s
+              AND e.occurred_at <= now()
               AND e.occurred_at >= %s AND e.occurred_at < %s
               AND (
                 e.meta->>'outcome_key' = 'meeting_booked'
@@ -774,6 +789,7 @@ def main() -> int:
     org_id = get_org_id()
     try:
         with psycopg.connect(database_url, prepare_threshold=None) as conn:
+            print_call_stale_warning(conn, org_id)
             reps = _sales_reps(conn, org_id)
             print(f"sales={len(reps)}: " + ", ".join(n for _, n in reps))
             if args.weeks_ago:
