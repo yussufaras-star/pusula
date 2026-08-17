@@ -1,18 +1,21 @@
 """Haftalık yönetici raporu — Cliq DM (gölge mod).
 
-Metrikler (bu hafta / geçen hafta), yalnız sayı:
+Metrikler (özetlenen hafta / bir önceki), yalnız sayı:
   a) Kayıt disiplini — 30 sn+ outbound'ta call_result dolu %
-  b) Hiç aranmamış lead — active/stale/aging, outbound (≥10 sn) yok
+  b) Hiç aranmamış lead — active/stale/aging, sayılabilir outbound yok
   c) Dönülmemiş randevu — Randevu Alındı, sonrası temas yok
   d) Arama verimi — 1/2/3. denemede temas %; 15:00+ temas % ve çağrı
   e) Haftanın hareketi — çağrı, 30 sn+, yeni/tutulan/bozulan taahhüt
 
 Temas: pusula.temas (send_nudges ile aynı).
 Hafta: pazartesi 00:00 — sonraki pazartesi 00:00 (orgs.timezone).
+Varsayılan: tamamlanmış son hafta (pazartesi sabahı → önceki Pzt–Paz).
+--hafta bu: içinde bulunulan (devam eden) takvim haftası.
 events.occurred_at; leads.created_at kullanılmaz.
 
 Kullanım:
     python scripts/weekly_report.py
+    python scripts/weekly_report.py --hafta bu
     python scripts/weekly_report.py --apply
 
 Varsayılan dry-run. --apply: CLIQ_WEBHOOK_URL + PUSULA_SHADOW_EMAIL.
@@ -44,11 +47,15 @@ from pusula.temas import (
     CALL_MIN_SEC,
     TEMAS_MIN_SEC,
     duration_sec,
+    is_countable_call_sql,
     outcome_join,
 )
 
 _DUR = duration_sec("e")
 _JOIN = outcome_join("e")
+_COUNTABLE = is_countable_call_sql("e")
+# Oran paydası bunun altındaysa "(dusuk orneklem)" eklenir.
+_MIN_SAMPLE = 20
 
 
 @dataclass(frozen=True)
@@ -75,7 +82,7 @@ def _org_tz(conn: psycopg.Connection, org_id: str) -> ZoneInfo:
 
 
 def _week_bounds(tz: ZoneInfo, *, weeks_ago: int = 0) -> WeekBounds:
-    """Pazartesi 00:00 — +7 gün (org TZ). weeks_ago=0 bu hafta."""
+    """Pazartesi 00:00 — +7 gün (org TZ). weeks_ago=0 içinde bulunulan hafta."""
     now = datetime.now(tz)
     today = now.date()
     monday = today - timedelta(days=today.weekday())
@@ -98,10 +105,22 @@ def _week_bounds(tz: ZoneInfo, *, weeks_ago: int = 0) -> WeekBounds:
     return WeekBounds(start=start, end=end, label=label)
 
 
+def _hafta_to_weeks_ago(hafta: str) -> int:
+    """bu=0 (devam eden), onceki=1 (tamamlanmış son hafta)."""
+    if hafta == "bu":
+        return 0
+    if hafta == "onceki":
+        return 1
+    raise ValueError(f"bilinmeyen --hafta: {hafta!r}")
+
+
 def _fmt_pct(num: int, den: int) -> str:
     if den <= 0:
         return "-"
-    return f"%{100.0 * num / den:.0f}"
+    s = f"%{100.0 * num / den:.0f}"
+    if den < _MIN_SAMPLE:
+        s += " (dusuk orneklem)"
+    return s
 
 
 def _fmt_pair(this: str, last: str) -> str:
@@ -175,7 +194,7 @@ def metric_kayit_disiplini(
 def metric_hic_aranmamis(
     conn: psycopg.Connection, org_id: str
 ) -> tuple[list[tuple[str, int]], int]:
-    """Snapshot (haftadan bağımsız stok)."""
+    """Snapshot: sayılabilir outbound yok (<10 sn ve scheduled hariç)."""
     rows = conn.execute(
         f"""
         SELECT r.full_name, count(*)::int
@@ -192,9 +211,8 @@ def metric_hic_aranmamis(
               AND e.thread_id = l.thread_id
               AND e.channel = 'call'
               AND e.direction = 'outbound'
-              AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
               AND e.occurred_at <= now()
-              AND {_DUR} >= {CALL_MIN_SEC}
+              AND {_COUNTABLE}
           )
         GROUP BY r.full_name
         ORDER BY 2 DESC, r.full_name
@@ -546,9 +564,9 @@ def build_report(
     counts: dict[str, int] = {}
     tz = _org_tz(conn, org_id)
     used_ago = weeks_ago
-    if auto_last_data and weeks_ago == 0:
-        # Bu + geçen hafta çağrı yoksa son veri haftasına kay.
-        probe = _week_bounds(tz, weeks_ago=0)
+    if auto_last_data:
+        # Seçilen + bir önceki haftada çağrı yoksa son veri haftasına kay.
+        probe = _week_bounds(tz, weeks_ago=weeks_ago)
         n_probe = conn.execute(
             f"""
             SELECT count(*)::int FROM events e
@@ -562,6 +580,7 @@ def build_report(
             """,
             (org_id, probe.start, probe.end),
         ).fetchone()
+        prev_w = _week_bounds(tz, weeks_ago=weeks_ago + 1)
         n_prev = conn.execute(
             f"""
             SELECT count(*)::int FROM events e
@@ -573,17 +592,14 @@ def build_report(
               AND e.occurred_at <= now()
               AND e.occurred_at >= %s AND e.occurred_at < %s
             """,
-            (
-                org_id,
-                _week_bounds(tz, weeks_ago=1).start,
-                _week_bounds(tz, weeks_ago=1).end,
-            ),
+            (org_id, prev_w.start, prev_w.end),
         ).fetchone()
         if int(n_probe[0] or 0) == 0 and int(n_prev[0] or 0) == 0:
-            used_ago = _latest_week_ago_with_calls(conn, org_id, tz)
-            if used_ago > 0:
+            latest = _latest_week_ago_with_calls(conn, org_id, tz)
+            if latest > weeks_ago:
+                used_ago = latest
                 print(
-                    f"not: bu/geçen hafta çağrı yok → "
+                    f"not: seçilen haftalarda çağrı yok → "
                     f"son veri haftası weeks_ago={used_ago}"
                 )
     this_w = _week_bounds(tz, weeks_ago=used_ago)
@@ -591,9 +607,11 @@ def build_report(
 
     parts: list[str] = [
         f"[gölge] Haftalık rapor — {this_w.label}",
-        f"Bu hafta: {this_w.start.date()} .. "
-        f"{(this_w.end - timedelta(days=1)).date()} (TZ={tz.key})",
-        f"Geçen: {last_w.label}",
+        f"Özetlenen hafta: {this_w.label} "
+        f"({this_w.start.date()} .. {(this_w.end - timedelta(days=1)).date()}, "
+        f"TZ={tz.key})",
+        f"Kıyas: {last_w.label} "
+        f"({last_w.start.date()} .. {(last_w.end - timedelta(days=1)).date()})",
         "",
     ]
 
@@ -619,7 +637,7 @@ def build_report(
     try:
         rows, n = metric_hic_aranmamis(conn, org_id)
         counts["hic_aranmamis"] = n
-        parts.append("Hiç aranmamış lead (active/stale/aging, outbound≥10sn yok)")
+        parts.append("Hiç aranmamış lead (active/stale/aging, sayılabilir outbound yok)")
         if not rows:
             parts.append("  (veri yok)")
         else:
@@ -746,10 +764,19 @@ def main() -> int:
         help="Cliq'e gölge DM gönder",
     )
     parser.add_argument(
+        "--hafta",
+        choices=("onceki", "bu"),
+        default="onceki",
+        help=(
+            "onceki=tamamlanmış son hafta (varsayılan); "
+            "bu=içinde bulunulan devam eden hafta"
+        ),
+    )
+    parser.add_argument(
         "--weeks-ago",
         type=int,
-        default=0,
-        help="Bu hafta kaydırması (0=içinde bulunulan takvim haftası)",
+        default=None,
+        help="Gelişmiş: pazartesi kaydırması (verilirse --hafta yerine geçer)",
     )
     args = parser.parse_args()
     load_dotenv()
@@ -762,10 +789,13 @@ def main() -> int:
         return 1
 
     recipients = _parse_recipients()
-    print(
-        f"PUSULA_REPORT_RECIPIENTS: {len(recipients)}"
-        + (f" ({', '.join(recipients)})" if recipients else " (bos)")
-    )
+    if not recipients:
+        print(
+            "UYARI: PUSULA_REPORT_RECIPIENTS bos — "
+            "--apply kimseye gondermez (orn. email1,email2)"
+        )
+    else:
+        print(f"PUSULA_REPORT_RECIPIENTS: {len(recipients)} ({', '.join(recipients)})")
 
     dry_run = not args.apply
     webhook_url = os.environ.get("CLIQ_WEBHOOK_URL")
@@ -783,8 +813,20 @@ def main() -> int:
             print("eksik ortam değişkeni: " + ", ".join(missing))
             return 1
         if not recipients:
-            print("PUSULA_REPORT_RECIPIENTS boş")
+            print("PUSULA_REPORT_RECIPIENTS boş — gönderim iptal")
             return 1
+
+    if args.weeks_ago is not None:
+        if args.weeks_ago < 0:
+            print("--weeks-ago >= 0 olmali")
+            return 1
+        weeks_ago = args.weeks_ago
+        # Explicit kaydırma: otomatik son-veri kayması yok.
+        auto_last = False
+    else:
+        weeks_ago = _hafta_to_weeks_ago(args.hafta)
+        # onceki: veri yoksa geri kay; bu: devam eden haftayı olduğu gibi göster.
+        auto_last = args.hafta == "onceki"
 
     org_id = get_org_id()
     try:
@@ -792,13 +834,13 @@ def main() -> int:
             print_call_stale_warning(conn, org_id)
             reps = _sales_reps(conn, org_id)
             print(f"sales={len(reps)}: " + ", ".join(n for _, n in reps))
-            if args.weeks_ago:
-                print(f"weeks_ago={args.weeks_ago}")
+            print(f"hafta={args.hafta if args.weeks_ago is None else 'weeks-ago'} "
+                  f"weeks_ago={weeks_ago}")
             text, counts, errors = build_report(
                 conn,
                 org_id,
-                weeks_ago=args.weeks_ago,
-                auto_last_data=(args.weeks_ago == 0),
+                weeks_ago=weeks_ago,
+                auto_last_data=auto_last,
             )
     except psycopg.Error as exc:
         print(f"hata: {exc}")
