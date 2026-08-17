@@ -148,8 +148,10 @@ class Ingester(ABC):
           yeniden denenir; yine olmazsa failed.
         - Her _POOL_REFRESH_EVERY kayıtta bağlantı havuzu yenilenir.
         - Watermark sadece run'ın TAMAMI başarılıysa (failed == 0)
-          güncellenir; yarıda hata watermark'ı ilerletmez, bir sonraki
-          run aynı aralığı yeniden çeker (insert idempotent).
+          ve fetch penceresi tamamlandıysa güncellenir. Yarıda hata,
+          failed > 0 veya kısmi çekim (--limit / fetch_truncated)
+          watermark'ı ilerletmez; bir sonraki run aynı aralığı
+          yeniden çeker (insert idempotent).
         - dry_run=True: DB'ye hiçbir şey yazılmaz; sayılar ve ilk 5
           Event döner.
         """
@@ -171,6 +173,8 @@ class Ingester(ABC):
         )
         consecutive_failures = 0
         last_processed_at: datetime | None = None
+        # Alt sınıf / run_ingest --limit kısmi pencerede True yapar.
+        self.fetch_truncated = False
 
         # b) fetch(since) ile kayıtları al.
         for raw in self.fetch(watermark_before):
@@ -277,10 +281,40 @@ class Ingester(ABC):
             consecutive_failures = 0
             last_processed_at = raw.occurred_at
 
-        # g) Watermark yalnızca tamamı başarılıysa en son işlenen kaydın
-        # occurred_at değerine çekilir. h) Hata yükselirse buraya
-        # gelinmez, watermark olduğu gibi kalır.
-        if not dry_run and result.failed == 0 and last_processed_at is not None:
+        # g) Watermark yalnızca tamamı başarılıysa ve pencere bittiyse
+        # en son işlenen kaydın occurred_at değerine çekilir.
+        # h) Hata yükselirse buraya gelinmez, watermark olduğu gibi kalır.
+        fetch_limit = getattr(self, "fetch_limit", None)
+        truncated = bool(getattr(self, "fetch_truncated", False))
+        if (
+            not truncated
+            and fetch_limit is not None
+            and result.fetched >= fetch_limit
+        ):
+            truncated = True
+            self.fetch_truncated = True
+
+        if truncated:
+            logger.warning(
+                "%s: kismi cekim (fetched=%s, limit=%s); watermark guncellenmedi "
+                "(onceki=%s)",
+                self.source_name,
+                result.fetched,
+                fetch_limit,
+                watermark_before.isoformat(timespec="seconds")
+                if watermark_before is not None
+                else None,
+            )
+        elif result.failed > 0:
+            logger.warning(
+                "%s: failed=%s; watermark guncellenmedi",
+                self.source_name,
+                result.failed,
+            )
+        elif (
+            not dry_run
+            and last_processed_at is not None
+        ):
             client.set_sync_state(
                 SyncState(source_name=self.source_name, last_synced_at=last_processed_at)
             )

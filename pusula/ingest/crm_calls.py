@@ -120,6 +120,8 @@ class CrmCallsIngester(Ingester):
         self.last_skip_sample: dict[str, Any] | None = None
         # run_ingest --limit ile set edilir; None = sınırsız.
         self.fetch_limit: int | None = None
+        # True ise run() watermark ilerletmez (kısmi pencere).
+        self.fetch_truncated = False
         # run_ingest --debug-query: COQL'i ekrana bas.
         self.debug_query: bool = False
         self.last_coql_query: str | None = None
@@ -216,6 +218,8 @@ class CrmCallsIngester(Ingester):
             )
             yielded += 1
             if self.fetch_limit is not None and yielded >= self.fetch_limit:
+                # Pencere tamamlanmadı — run() watermark ilerletmesin.
+                self.fetch_truncated = True
                 return
 
     def to_event(self, raw: RawRecord) -> Event | None:

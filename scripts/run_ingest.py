@@ -121,6 +121,8 @@ def _apply_fetch_options(
                 logger.info("%s kayıt işlendi", count)
             yield raw
             if limit is not None and count >= limit:
+                # base.run watermark'ı ilerletmesin.
+                setattr(ingester, "fetch_truncated", True)
                 break
 
     ingester.fetch = fetch_with_progress  # type: ignore[method-assign]
@@ -133,7 +135,13 @@ def main() -> int:
         default="all",
         help="ingester adı veya 'all' (varsayılan: all)",
     )
-    parser.add_argument("--since", help="ISO 8601 başlangıç zamanı (watermark yerine)")
+    parser.add_argument(
+        "--since",
+        help=(
+            "ISO 8601 baslangic (sync_state watermark yerine). "
+            "Ornek: 2026-08-01 — boslugu idempotent geri doldurur"
+        ),
+    )
     parser.add_argument(
         "--limit",
         type=int,
@@ -190,7 +198,14 @@ def main() -> int:
             result = ingester.run(since=since, dry_run=args.dry_run)
             results.append(result)
             written = result.inserted
-            if written == 0:
+            if getattr(ingester, "fetch_truncated", False):
+                print(
+                    f"{result.source_name}: KISMI CEKIM — watermark guncellenmedi "
+                    f"(fetched={result.fetched}, yazilan={written}, "
+                    f"duplicated={result.duplicated}, skipped={result.skipped}, "
+                    f"failed={result.failed})"
+                )
+            elif written == 0:
                 print(
                     f"{result.source_name}: 0 kayit yazildi "
                     f"(fetched={result.fetched}, duplicated={result.duplicated}, "
