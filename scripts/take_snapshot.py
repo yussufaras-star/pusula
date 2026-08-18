@@ -86,7 +86,7 @@ _KAYIP_COUNT_SQL = """
 """ + outcome_join("e3") + """
           WHERE e3.org_id = r.org_id
             AND e3.thread_id = r.thread_id
-            AND e3.occurred_at >= r.randevu_at
+            AND e3.occurred_at > r.randevu_at
             AND coalesce(e3.meta->>'scheduled', 'false') <> 'true'
             AND (
                 (e3.channel = 'call' AND e3.direction = 'inbound')

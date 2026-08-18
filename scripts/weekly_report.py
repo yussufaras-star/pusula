@@ -2,12 +2,14 @@
 
 Metrikler (özetlenen hafta / bir önceki), yalnız sayı:
   a) Kayıt disiplini — 10 sn+ outbound'ta call_result dolu %
-  b) Hiç aranmamış lead — active/stale/aging, sayılabilir outbound yok
-  c) Dönülmemiş randevu — Randevu Alındı, 10 sn+ temas yok
-  d) Arama verimi — 1/2/3. denemede temas %; 15:00+ temas % ve çağrı
-  e) Haftanın hareketi — çağrı, 10 sn+, bağlanmadı, yeni/tutulan/bozulan taahhüt
+  b) Lead durumu — dokunulmamış / denendi / ulaşıldı (Zoho status)
+  c) Görüşme süresi — ULASILDI lead'lerde 10 sn+ outbound ort/medyan
+  d) Dönülmemiş randevu — Randevu Alındı, sonrası ulaşılmış çağrı yok
+  e) Arama verimi — 1/2/3. denemede temas %; 15:00+ temas % ve çağrı
+  f) Haftanın hareketi — çağrı, 10 sn+ görüşme, yeni/tutulan/bozulan taahhüt
 
-Temas: pusula.temas (send_nudges ile aynı).
+Temas (çağrı): scheduled değil, category <> 'not_reached' (süre yok).
+Süre eşiği yalnız kayıt disiplini ve 10 sn+ görüşme satırında.
 Hafta: pazartesi 00:00 — sonraki pazartesi 00:00 (orgs.timezone).
 Varsayılan: tamamlanmış son hafta (pazartesi sabahı → önceki Pzt–Paz).
 --hafta bu: içinde bulunulan (devam eden) takvim haftası.
@@ -44,20 +46,23 @@ from dotenv import load_dotenv
 
 from pusula.config import get_org_id
 from pusula.freshness import print_call_stale_warning
+from pusula.lead_reach import (
+    DENENDI,
+    DOKUNULMAMIS,
+    ULASILDI,
+    reach_bucket_sql,
+)
 from pusula.temas import (
-    CALL_MIN_SEC,
     TEMAS_MIN_SEC,
-    TEMAS_MIN_SEC_OLD,
     duration_sec,
-    is_countable_call_sql,
     is_temas_sql,
     outcome_join,
 )
 
 _DUR = duration_sec("e")
 _JOIN = outcome_join("e")
-_COUNTABLE = is_countable_call_sql("e")
 _TEMAS = is_temas_sql("e")
+_REACH = reach_bucket_sql("l.status")
 # Oran paydası bunun altındaysa "—" / "veri yetersiz".
 _MIN_SAMPLE = 20
 _MONTHS_LONG = (
@@ -152,6 +157,13 @@ def _fmt_pct_short(num: int, den: int) -> str:
     return f"%{pct:.0f}"
 
 
+def _fmt_talk_sec(seconds: float) -> str:
+    """3 dk 20 sn; saniye iki haneli."""
+    total = max(0, int(round(float(seconds))))
+    minutes, secs = divmod(total, 60)
+    return f"{minutes} dk {secs:02d} sn"
+
+
 def _rate_row(
     name: str,
     this_num: int,
@@ -170,21 +182,6 @@ def _rate_row(
         f"{name} — {this_s} "
         f"(önceki hafta {last_s}, {this_den} {unit})"
     )
-
-
-def _disiplin_row(
-    name: str,
-    new_num: int,
-    new_den: int,
-    old_num: int,
-    old_den: int,
-) -> str:
-    """Abdullah Benli — %12 (eski %0, 95 görüşme)."""
-    if new_den < _MIN_SAMPLE:
-        return f"{name} — veri yetersiz ({new_den} görüşme)"
-    new_s = _fmt_pct_short(new_num, new_den)
-    old_s = _fmt_pct_short(old_num, old_den)
-    return f"{name} — {new_s} (eski {old_s}, {new_den} görüşme)"
 
 
 def _count_cmp(name: str, this_n: int, last_n: int) -> str:
@@ -226,25 +223,18 @@ def metric_kayit_disiplini(
     week: WeekBounds,
     *,
     debug: bool = False,
-) -> tuple[list[tuple[str, int, int, int, int]], int]:
-    """(name, filled_new, total_new, filled_old, total_old)."""
+) -> tuple[list[tuple[str, int, int]], int]:
+    """(name, filled, total) — 10 sn+ outbound, call_result dolu."""
     rows = conn.execute(
         f"""
         SELECT r.full_name,
           count(*) FILTER (
             WHERE {_DUR} >= {TEMAS_MIN_SEC}
               AND nullif(e.meta->>'call_result', '') IS NOT NULL
-          )::int AS filled_new,
+          )::int AS filled,
           count(*) FILTER (
             WHERE {_DUR} >= {TEMAS_MIN_SEC}
-          )::int AS total_new,
-          count(*) FILTER (
-            WHERE {_DUR} >= {TEMAS_MIN_SEC_OLD}
-              AND nullif(e.meta->>'call_result', '') IS NOT NULL
-          )::int AS filled_old,
-          count(*) FILTER (
-            WHERE {_DUR} >= {TEMAS_MIN_SEC_OLD}
-          )::int AS total_old
+          )::int AS total
         FROM events e
         JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
         WHERE e.org_id = %s
@@ -265,12 +255,9 @@ def metric_kayit_disiplini(
         """,
         (org_id, week.start, week.end),
     ).fetchall()
-    out = [
-        (str(n), int(fn), int(tn), int(fo), int(to))
-        for n, fn, tn, fo, to in rows
-    ]
+    out = [(str(n), int(f), int(t)) for n, f, t in rows]
     if debug:
-        for name, filled, total, _fo, _to in out:
+        for name, filled, total in out:
             if filled == 0 and total >= 10:
                 samples = conn.execute(
                     f"""
@@ -301,61 +288,165 @@ def metric_kayit_disiplini(
                         f"  id={eid} occurred_at={occurred} "
                         f"call_result={cr!r} dur={dur}"
                     )
-    return out, sum(t for _, _, t, _, _ in out)
+    return out, sum(t for _, _, t in out)
 
 
-def metric_hic_aranmamis(
+def metric_lead_durumu(
     conn: psycopg.Connection, org_id: str
-) -> tuple[list[tuple[str, int]], int]:
-    """Snapshot: deneme (süre > 0) outbound yok."""
+) -> tuple[list[tuple[str, int, int, int, int]], dict[str, int]]:
+    """Temsilci bazında dokunulmamış / denendi / ulaşıldı + toplam.
+
+    Evren: satış temsilcisine ait, statusu dolu lead.
+    meta: cat_total, sales_leads, table_leads, empty_status.
+    """
     rows = conn.execute(
         f"""
-        SELECT r.full_name, count(*)::int
+        SELECT r.full_name,
+          count(*) FILTER (WHERE {_REACH} = '{DOKUNULMAMIS}')::int AS dok,
+          count(*) FILTER (WHERE {_REACH} = '{DENENDI}')::int AS den,
+          count(*) FILTER (WHERE {_REACH} = '{ULASILDI}')::int AS ula,
+          count(*) FILTER (WHERE {_REACH} IS NOT NULL)::int AS tot
         FROM leads l
         JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
         WHERE l.org_id = %s
-          AND l.pusula_state IN ('active', 'stale', 'aging')
-          AND l.owner_rep_id IS NOT NULL
-          AND l.thread_id IS NOT NULL
+          AND r.category = 'sales' AND r.active = true
+        GROUP BY r.full_name
+        ORDER BY
+          count(*) FILTER (WHERE {_REACH} = '{DOKUNULMAMIS}') DESC,
+          count(*) FILTER (WHERE {_REACH} = '{DENENDI}') DESC,
+          r.full_name
+        """,
+        (org_id,),
+    ).fetchall()
+    out = [
+        (str(n), int(dok), int(den), int(ula), int(tot))
+        for n, dok, den, ula, tot in rows
+    ]
+    sums = conn.execute(
+        f"""
+        SELECT
+          count(*) FILTER (WHERE {_REACH} = '{DOKUNULMAMIS}')::int,
+          count(*) FILTER (WHERE {_REACH} = '{DENENDI}')::int,
+          count(*) FILTER (WHERE {_REACH} = '{ULASILDI}')::int,
+          count(*) FILTER (WHERE {_REACH} IS NOT NULL)::int,
+          count(*)::int,
+          count(*) FILTER (
+            WHERE l.status IS NULL OR btrim(l.status) = ''
+          )::int
+        FROM leads l
+        JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
+        WHERE l.org_id = %s
+          AND r.category = 'sales' AND r.active = true
+        """,
+        (org_id,),
+    ).fetchone()
+    table_n = conn.execute(
+        "SELECT count(*)::int FROM leads WHERE org_id = %s",
+        (org_id,),
+    ).fetchone()
+    assert sums is not None and table_n is not None
+    meta = {
+        "dok": int(sums[0] or 0),
+        "den": int(sums[1] or 0),
+        "ula": int(sums[2] or 0),
+        "cat_total": int(sums[3] or 0),
+        "sales_leads": int(sums[4] or 0),
+        "empty_status": int(sums[5] or 0),
+        "table_leads": int(table_n[0] or 0),
+    }
+    return out, meta
+
+
+def metric_gorusme_suresi(
+    conn: psycopg.Connection, org_id: str
+) -> tuple[list[tuple[str, float, float, int]], dict[str, float | int]]:
+    """ULASILDI lead'lerde 10 sn+ outbound süreleri (görüşme başına).
+
+    Temsilci: lead'in owner_rep_id. Ortalama/medyan çağrı satırından.
+    """
+    rows = conn.execute(
+        f"""
+        SELECT r.full_name,
+          avg({_DUR})::float AS avg_sec,
+          percentile_cont(0.5) WITHIN GROUP (
+            ORDER BY {_DUR}
+          )::float AS med_sec,
+          count(*)::int AS n
+        FROM events e
+        JOIN leads l
+          ON l.org_id = e.org_id AND l.thread_id = e.thread_id
+        JOIN reps r
+          ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
+        WHERE e.org_id = %s
+          AND {_REACH} = '{ULASILDI}'
+          AND r.category = 'sales' AND r.active = true
+          AND e.channel = 'call' AND e.direction = 'outbound'
+          AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+          AND {_DUR} >= {TEMAS_MIN_SEC}
+          AND e.occurred_at <= now()
+        GROUP BY r.full_name
+        ORDER BY avg({_DUR}) DESC NULLS LAST, r.full_name
+        """,
+        (org_id,),
+    ).fetchall()
+    out = [
+        (str(n), float(avg_s), float(med_s), int(c))
+        for n, avg_s, med_s, c in rows
+        if avg_s is not None and med_s is not None
+    ]
+    team = conn.execute(
+        f"""
+        SELECT
+          avg({_DUR})::float,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY {_DUR})::float,
+          count(*)::int
+        FROM events e
+        JOIN leads l
+          ON l.org_id = e.org_id AND l.thread_id = e.thread_id
+        JOIN reps r
+          ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
+        WHERE e.org_id = %s
+          AND {_REACH} = '{ULASILDI}'
+          AND r.category = 'sales' AND r.active = true
+          AND e.channel = 'call' AND e.direction = 'outbound'
+          AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+          AND {_DUR} >= {TEMAS_MIN_SEC}
+          AND e.occurred_at <= now()
+        """,
+        (org_id,),
+    ).fetchone()
+    no_talk = conn.execute(
+        f"""
+        SELECT count(*)::int
+        FROM leads l
+        JOIN reps r
+          ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
+        WHERE l.org_id = %s
+          AND {_REACH} = '{ULASILDI}'
           AND r.category = 'sales' AND r.active = true
           AND NOT EXISTS (
             SELECT 1 FROM events e
             WHERE e.org_id = l.org_id
               AND e.thread_id = l.thread_id
-              AND e.channel = 'call'
-              AND e.direction = 'outbound'
+              AND e.channel = 'call' AND e.direction = 'outbound'
+              AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+              AND {_DUR} >= {TEMAS_MIN_SEC}
               AND e.occurred_at <= now()
-              AND {_COUNTABLE}
           )
-        GROUP BY r.full_name
-        ORDER BY 2 DESC, r.full_name
         """,
         (org_id,),
-    ).fetchall()
-    out = [(str(n), int(c)) for n, c in rows]
-    return out, sum(c for _, c in out)
+    ).fetchone()
+    meta: dict[str, float | int] = {
+        "team_avg": float(team[0]) if team and team[0] is not None else 0.0,
+        "team_med": float(team[1]) if team and team[1] is not None else 0.0,
+        "team_n": int(team[2] or 0) if team else 0,
+        "no_talk": int(no_talk[0] or 0) if no_talk else 0,
+    }
+    return out, meta
 
 
-def _randevu_open_sql(
-    *,
-    min_sec: int,
-    after_cmp: str,
-    legacy: bool = False,
-) -> str:
-    """Açık dönülmemiş randevu thread'leri.
-
-    after_cmp '>=': randevu anındaki çağrı da temas sayılır (10 sn tanımı).
-    after_cmp '>': yalnız randevu sonrası (eski 30 sn raporu).
-    legacy: eski kategori kuralı (boş outcome temas sayılırdı).
-    """
-    if legacy:
-        temas = f"""
-                coalesce(e.meta->>'scheduled', 'false') <> 'true'
-                AND {_DUR} >= {min_sec}
-                AND coalesce(co.category, '') <> 'not_reached'
-        """
-    else:
-        temas = is_temas_sql("e", min_sec=min_sec)
+def _randevu_open_sql() -> str:
+    """Açık dönülmemiş randevu (latest randevu, sonrası ulaşılmış çağrı yok)."""
     return f"""
     WITH randevu AS (
         SELECT
@@ -391,11 +482,11 @@ def _randevu_open_sql(
               {_JOIN}
               WHERE e.org_id = r.org_id
                 AND e.thread_id = r.thread_id
-                AND e.occurred_at {after_cmp} r.randevu_at
+                AND e.occurred_at > r.randevu_at
                 AND e.occurred_at <= now()
                 AND e.channel = 'call'
                 AND e.direction = 'outbound'
-                AND {temas}
+                AND {_TEMAS}
           )
     )
     """
@@ -406,24 +497,16 @@ def metric_donulmemis(
     org_id: str,
     week: WeekBounds,
 ) -> tuple[dict[str, int], int]:
-    """total açık (yeni/eski tanım); bu hafta eklenen; bu hafta kapanan."""
-    base_new = _randevu_open_sql(min_sec=TEMAS_MIN_SEC, after_cmp=">=")
-    base_old = _randevu_open_sql(
-        min_sec=TEMAS_MIN_SEC_OLD, after_cmp=">", legacy=True
-    )
+    """total açık; bu hafta eklenen; bu hafta kapanan."""
+    base = _randevu_open_sql()
     total_row = conn.execute(
-        base_new + " SELECT count(*)::int FROM open_r",
+        base + " SELECT count(*)::int FROM open_r",
         (org_id,),
     ).fetchone()
     total = int(total_row[0] or 0)
-    old_row = conn.execute(
-        base_old + " SELECT count(*)::int FROM open_r",
-        (org_id,),
-    ).fetchone()
-    total_old = int(old_row[0] or 0)
 
     added_row = conn.execute(
-        base_new
+        base
         + """
         SELECT count(*)::int FROM open_r
         WHERE randevu_at >= %s AND randevu_at < %s
@@ -432,7 +515,7 @@ def metric_donulmemis(
     ).fetchone()
     added = int(added_row[0] or 0)
 
-    # Kapanan: randevu sonrası ilk temas bu haftada (randevu anı hariç).
+    # Kapanan: randevu sonrası ilk ulaşılmış çağrı bu haftada.
     closed_row = conn.execute(
         f"""
         WITH randevu AS (
@@ -473,12 +556,7 @@ def metric_donulmemis(
     ).fetchone()
     closed = int(closed_row[0] or 0)
     n = total + added + closed
-    return {
-        "total": total,
-        "total_old": total_old,
-        "added": added,
-        "closed": closed,
-    }, n
+    return {"total": total, "added": added, "closed": closed}, n
 
 
 def metric_arama_verimi(
@@ -489,23 +567,19 @@ def metric_arama_verimi(
 ) -> tuple[dict[str, Any], int]:
     """1/2/3. deneme temas oranı; 15:00+ temas oranı ve çağrı sayısı.
 
-    Deneme numarası: thread'in süre > 0 outbound geçmişi (bağlanmadı hariç).
+    Deneme numarası: thread'in scheduled-olmayan outbound geçmişi (süre yok).
     Hafta filtresi yalnız o hafta gerçekleşen satırları seçer.
 
-    Temas: süre >= 10 VE call_outcomes.category <> 'not_reached'.
-    category NULL ise temas sayılmaz (SQL üç değerli mantık; coalesce yok).
+    Temas: call_outcomes.category <> 'not_reached'.
+    category NULL ise temas sayılmaz.
     """
-    # coalesce(cat,'') kullanma — boş outcome'u temas yapıyordu (~%80).
-    temas = (
-        f"dur >= {TEMAS_MIN_SEC} AND cat IS NOT NULL AND cat <> 'not_reached'"
-    )
+    temas = "cat IS NOT NULL AND cat <> 'not_reached'"
     rows = conn.execute(
         f"""
         WITH ranked AS (
             SELECT
                 e.thread_id,
                 e.occurred_at,
-                {_DUR} AS dur,
                 co.category AS cat,
                 row_number() OVER (
                     PARTITION BY e.org_id, e.thread_id
@@ -519,7 +593,6 @@ def metric_arama_verimi(
               AND r.category = 'sales' AND r.active = true
               AND e.channel = 'call' AND e.direction = 'outbound'
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
-              AND {_DUR} > 0
               AND e.thread_id IS NOT NULL
               AND e.occurred_at <= now()
         ),
@@ -574,11 +647,8 @@ def metric_hareket(
     calls = conn.execute(
         f"""
         SELECT
-          count(*) FILTER (WHERE {_DUR} > 0)::int AS calls,
-          count(*) FILTER (WHERE {_DUR} >= {TEMAS_MIN_SEC})::int AS talks10,
-          count(*) FILTER (
-            WHERE {_DUR} IS NULL OR {_DUR} = 0
-          )::int AS baglanmadi
+          count(*)::int AS calls,
+          count(*) FILTER (WHERE {_DUR} >= {TEMAS_MIN_SEC})::int AS talks10
         FROM events e
         JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
         WHERE e.org_id = %s
@@ -592,7 +662,6 @@ def metric_hareket(
     ).fetchone()
     n_calls = int(calls[0] or 0) if calls else 0
     n_10 = int(calls[1] or 0) if calls else 0
-    n_bag = int(calls[2] or 0) if calls else 0
 
     yeni = conn.execute(
         """
@@ -675,7 +744,6 @@ def metric_hareket(
     data = {
         "calls": n_calls,
         "talks10": n_10,
-        "baglanmadi": n_bag,
         "yeni": n_yeni,
         "tutulan": n_tut,
         "bozulan": n_boz,
@@ -693,7 +761,7 @@ def metric_hareket(
 def _latest_week_ago_with_calls(
     conn: psycopg.Connection, org_id: str, tz: ZoneInfo
 ) -> int:
-    """En son outbound (≥10sn) olan takvim haftasının weeks_ago değeri."""
+    """En son outbound olan takvim haftasının weeks_ago değeri."""
     row = conn.execute(
         f"""
         SELECT date_trunc(
@@ -706,7 +774,6 @@ def _latest_week_ago_with_calls(
           AND r.category = 'sales' AND r.active = true
           AND e.channel = 'call' AND e.direction = 'outbound'
           AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
-          AND {_DUR} >= {CALL_MIN_SEC}
           AND e.occurred_at <= now()
         ORDER BY w DESC
         LIMIT 1
@@ -745,7 +812,6 @@ def build_report(
             WHERE e.org_id = %s AND r.category = 'sales'
               AND e.channel = 'call' AND e.direction = 'outbound'
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
-              AND {_DUR} >= {CALL_MIN_SEC}
               AND e.occurred_at <= now()
               AND e.occurred_at >= %s AND e.occurred_at < %s
             """,
@@ -759,7 +825,6 @@ def build_report(
             WHERE e.org_id = %s AND r.category = 'sales'
               AND e.channel = 'call' AND e.direction = 'outbound'
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
-              AND {_DUR} >= {CALL_MIN_SEC}
               AND e.occurred_at <= now()
               AND e.occurred_at >= %s AND e.occurred_at < %s
             """,
@@ -790,29 +855,31 @@ def build_report(
         this_d, n_this = metric_kayit_disiplini(
             conn, org_id, this_w, debug=debug
         )
-        _, n_last = metric_kayit_disiplini(
+        last_d, n_last = metric_kayit_disiplini(
             conn, org_id, last_w, debug=False
         )
         counts["kayit_disiplini"] = n_this + n_last
         parts.append("KAYIT DİSİPLİNİ")
         parts.append("10 saniyeden uzun görüşmelerde sonuç girilme oranı")
-        this_map = {n: (fn, tn, fo, to) for n, fn, tn, fo, to in this_d}
+        last_map = {n: (f, t) for n, f, t in last_d}
+        this_map = {n: (f, t) for n, f, t in this_d}
 
         def disc_key(n: str) -> tuple[float, str]:
-            fn, tn, _fo, _to = this_map.get(n, (0, 0, 0, 0))
-            if tn < _MIN_SAMPLE:
+            f, t = this_map.get(n, (0, 0))
+            if t < _MIN_SAMPLE:
                 return (999.0, n)
-            return (fn / tn, n)
+            return (f / t, n)
 
-        names = sorted(this_map, key=disc_key)
+        names = sorted(set(this_map) | set(last_map), key=disc_key)
         if not names:
             parts.append("(veri yok)")
         else:
             for name in names:
-                fn, tn, fo, to = this_map[name]
-                if tn <= 0 and to <= 0:
+                tf, tt = this_map.get(name, (0, 0))
+                lf, lt = last_map.get(name, (0, 0))
+                if tt <= 0 and lt <= 0:
                     continue
-                parts.append(_disiplin_row(name, fn, tn, fo, to))
+                parts.append(_rate_row(name, tf, tt, lf, lt, unit="görüşme"))
         if debug:
             parts.append(f"kayit={n_this} bu / {n_last} onceki hafta")
         parts.append("")
@@ -821,35 +888,85 @@ def build_report(
         parts.append(f"KAYIT DİSİPLİNİ: hata ({exc})")
         parts.append("")
 
-    # b) Hiç aranmamış
+    # b) Lead durumu
     try:
-        rows, n = metric_hic_aranmamis(conn, org_id)
-        counts["hic_aranmamis"] = n
-        parts.append("HİÇ ARANMAMIŞ LEAD")
-        parts.append("Aktif/stale/aging, sayılabilir outbound yok")
+        rows, meta = metric_lead_durumu(conn, org_id)
+        counts["lead_durumu"] = meta["cat_total"]
+        parts.append("LEAD DURUMU")
+        parts.append("dokunulmamış / denendi / ulaşıldı (Zoho status)")
         if not rows:
             parts.append("(veri yok)")
         else:
-            for name, c in rows:
-                parts.append(f"{name} — {c}")
+            for name, dok, den, ula, tot in rows:
+                if tot <= 0:
+                    continue
+                parts.append(f"{name} — {dok} / {den} / {ula} ({tot})")
+        parts.append(
+            f"Toplam — {meta['dok']} / {meta['den']} / {meta['ula']} "
+            f"({meta['cat_total']})"
+        )
+        parts.append(
+            f"Lead tablosu — {meta['table_leads']} "
+            f"(satış {meta['sales_leads']}, "
+            f"status boş {meta['empty_status']})"
+        )
+        if meta["dok"] + meta["den"] + meta["ula"] != meta["cat_total"]:
+            parts.append("veri yetersiz: kova toplamı statusu dolu satış lead ile örtüşmüyor")
         if debug:
-            parts.append(f"kayit={n}")
+            parts.append(
+                f"kayit={meta['cat_total']} "
+                f"dok+den+ula={meta['dok'] + meta['den'] + meta['ula']}"
+            )
         parts.append("")
     except Exception as exc:
         errors += 1
-        parts.append(f"HİÇ ARANMAMIŞ LEAD: hata ({exc})")
+        parts.append(f"LEAD DURUMU: hata ({exc})")
         parts.append("")
 
-    # c) Dönülmemiş randevu
+    # c) Görüşme süresi (ULASILDI, 10 sn+)
+    try:
+        rows_gs, gs = metric_gorusme_suresi(conn, org_id)
+        counts["gorusme_suresi"] = int(gs["team_n"])
+        parts.append("GÖRÜŞME SÜRESİ")
+        parts.append("Ulaşılan lead'lerde 10 sn üstü görüşmelerin süresi")
+        if not rows_gs:
+            parts.append("(veri yok)")
+        else:
+            for name, avg_s, med_s, n_talk in rows_gs:
+                if n_talk < _MIN_SAMPLE:
+                    parts.append(f"{name} — veri yetersiz ({n_talk} görüşme)")
+                    continue
+                parts.append(
+                    f"{name} — ort. {_fmt_talk_sec(avg_s)}, "
+                    f"medyan {_fmt_talk_sec(med_s)} ({n_talk} görüşme)"
+                )
+        team_n = int(gs["team_n"])
+        if team_n < _MIN_SAMPLE:
+            parts.append(f"Ekip ortalaması — veri yetersiz ({team_n} görüşme)")
+        else:
+            parts.append(
+                f"Ekip ortalaması — {_fmt_talk_sec(float(gs['team_avg']))}, "
+                f"medyan {_fmt_talk_sec(float(gs['team_med']))}"
+            )
+        parts.append(
+            f"Ulaşıldı, 10 sn+ çağrı yok — {int(gs['no_talk'])}"
+        )
+        if debug:
+            parts.append(f"kayit={team_n} gorusme / no_talk={gs['no_talk']}")
+        parts.append("")
+    except Exception as exc:
+        errors += 1
+        parts.append(f"GÖRÜŞME SÜRESİ: hata ({exc})")
+        parts.append("")
+
+    # d) Dönülmemiş randevu
     try:
         this_r, n1 = metric_donulmemis(conn, org_id, this_w)
         last_r, n2 = metric_donulmemis(conn, org_id, last_w)
         counts["donulmemis_randevu"] = n1 + n2
         parts.append("DÖNÜLMEMİŞ RANDEVU")
-        parts.append("Randevu alınmış, 10 sn+ ulaşılmış görüşme yok")
-        parts.append(
-            f"Açık toplam — {this_r['total']} (eski {this_r['total_old']})"
-        )
+        parts.append("Randevu alınmış, sonrası ulaşılmış çağrı yok")
+        parts.append(f"Açık toplam — {this_r['total']}")
         parts.append(
             f"Bu hafta eklendi — {this_r['added']} "
             f"(önceki hafta {last_r['added']})"
@@ -875,13 +992,13 @@ def build_report(
         parts.append(f"DÖNÜLMEMİŞ RANDEVU: hata ({exc})")
         parts.append("")
 
-    # d) Arama verimi
+    # e) Arama verimi
     try:
         this_v, n1 = metric_arama_verimi(conn, org_id, this_w, tz)
         last_v, n2 = metric_arama_verimi(conn, org_id, last_w, tz)
         counts["arama_verimi"] = n1 + n2
         parts.append("ARAMA VERİMİ")
-        parts.append("Temas: 10 sn üstü ve ulaşılabilmiş görüşme")
+        parts.append("Temas: ulaşılabilmiş görüşme (süre yok)")
         parts.append("Deneme sırası lead ömrü boyunca")
 
         def attempt(label: str, t_key: str, a_key: str) -> str:
@@ -915,7 +1032,7 @@ def build_report(
         parts.append(f"ARAMA VERİMİ: hata ({exc})")
         parts.append("")
 
-    # e) Hareket
+    # f) Hareket
     try:
         this_h, n1, this_meta = metric_hareket(conn, org_id, this_w)
         last_h, n2, last_meta = metric_hareket(conn, org_id, last_w)
@@ -924,7 +1041,6 @@ def build_report(
         rows_h = (
             ("Toplam çağrı", "calls"),
             ("10sn+ görüşme", "talks10"),
-            ("Bağlanmadı", "baglanmadi"),
             ("Yeni taahhüt", "yeni"),
             ("Tutulan", "tutulan"),
             ("Bozulan", "bozulan"),

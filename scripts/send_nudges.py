@@ -13,9 +13,10 @@ Kalan kota diğer sinyallere orantılı; tek tip 3 yer alamaz.
 
 Stok = tüm sinyallerdeki uygun aday toplamı (tip toplamı).
 
-Temas: pusula.temas — call_duration_sec >= 10 VE
-call_outcomes.category <> 'not_reached'.
-Deneme: süre > 0 outbound (scheduled hariç). 0/süre yok = bağlanmadı.
+Temas (çağrı): scheduled değil, category <> 'not_reached' (süre yok).
+Deneme: scheduled olmayan outbound (süre yok).
+Süre eşiği yalnız dün 10 sn+ görüşme satırında.
+Lead ilerleme: pusula.lead_reach. pencere_aciliyor dokunulmamış'ı öne alır.
 
 Bölümler: Bugün / Dünden (süre + ekip ort.) / net akış / Bu hafta
 (rep_snapshots, ≥7 gün aralık). Gölge mod aynen kalır.
@@ -51,6 +52,7 @@ from dotenv import load_dotenv
 
 from pusula.config import get_org_id
 from pusula.freshness import print_call_stale_warning
+from pusula.lead_reach import is_dokunulmamis_sql
 from pusula.temas import (
     TEMAS_MIN_SEC,
     duration_sec,
@@ -139,12 +141,16 @@ _PENCERE_SQL = """
             ORDER BY i.id_value
             LIMIT 1
         ) AS phone,
-        l.full_name AS contact_name
+        l.full_name AS contact_name,
+        (""" + is_dokunulmamis_sql("l.status") + """) AS is_dokunulmamis
     FROM leads l
     WHERE l.org_id = %s
-      AND l.pusula_state = 'active'
       AND l.owner_rep_id IS NOT NULL
       AND l.thread_id IS NOT NULL
+      AND (
+            l.pusula_state = 'active'
+            OR (""" + is_dokunulmamis_sql("l.status") + """)
+      )
       AND (
             SELECT count(*)::int FROM events e
             WHERE e.org_id = l.org_id
@@ -156,7 +162,7 @@ _PENCERE_SQL = """
               AND e.occurred_at >= coalesce(l.assigned_at, l.created_at)
               AND """ + _ATTEMPT_E + """
       ) < 3
-    ORDER BY sort_key DESC NULLS LAST
+    ORDER BY is_dokunulmamis DESC, sort_key DESC NULLS LAST
 """
 
 _PLANLANMIS_SQL = """
@@ -322,7 +328,7 @@ _KAYIP_SQL = """
 """ + outcome_join("e3") + """
           WHERE e3.org_id = r.org_id
             AND e3.thread_id = r.thread_id
-            AND e3.occurred_at >= r.randevu_at
+            AND e3.occurred_at > r.randevu_at
             AND e3.occurred_at <= now()
             AND coalesce(e3.meta->>'scheduled', 'false') <> 'true'
             AND (
@@ -459,6 +465,7 @@ class NudgeCandidate:
     due_at: datetime | None = None
     planned_at: datetime | None = None
     commitment_text: str | None = None
+    is_dokunulmamis: bool = False
 
 
 @dataclass(frozen=True)
@@ -1221,6 +1228,7 @@ def _load_candidates(conn: psycopg.Connection, org_id: str) -> list[NudgeCandida
         (
             rep_id, thread_id, lead_id, commitment_id, nudge_type,
             sort_key, outbound_calls, temas_calls, phone, contact_name,
+            is_dokunulmamis,
         ) = row
         out.append(
             NudgeCandidate(
@@ -1234,6 +1242,7 @@ def _load_candidates(conn: psycopg.Connection, org_id: str) -> list[NudgeCandida
                 contact_name=str(contact_name) if contact_name else None,
                 outbound_calls=int(outbound_calls or 0),
                 temas_calls=int(temas_calls or 0),
+                is_dokunulmamis=bool(is_dokunulmamis),
             )
         )
 
@@ -1378,6 +1387,10 @@ def _select_for_rep(
                     0 if (x.contact_name or "").strip() else 1,
                     x.sort_key,
                 )
+            )
+        elif nudge_type == "pencere_aciliyor":
+            by_type[nudge_type].sort(
+                key=lambda x: (0 if x.is_dokunulmamis else 1, -x.sort_key)
             )
         else:
             by_type[nudge_type].sort(key=lambda x: x.sort_key, reverse=True)
