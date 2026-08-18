@@ -136,14 +136,6 @@ def _window_str(week: WeekBounds) -> str:
     return f"{week.start.date()} .. {last}"
 
 
-def _arrow(this: float, last: float) -> str:
-    if this > last:
-        return "↑"
-    if this < last:
-        return "↓"
-    return ""
-
-
 def _pct_value(num: int, den: int) -> float | None:
     if den < _MIN_SAMPLE:
         return None
@@ -153,7 +145,7 @@ def _pct_value(num: int, den: int) -> float | None:
 def _fmt_pct_short(num: int, den: int) -> str:
     pct = _pct_value(num, den)
     if pct is None:
-        return "—"
+        return "veri yetersiz"
     return f"%{pct:.0f}"
 
 
@@ -166,20 +158,19 @@ def _rate_row(
     *,
     unit: str = "görüşme",
 ) -> str:
-    """'%17   ↓ onceki hafta %23    455 görüşme' veya veri yetersiz."""
-    name_col = f"  {name:<18}"
+    """Abdullah Benli — %0 (önceki hafta %70, 68 görüşme)."""
     if this_den < _MIN_SAMPLE:
-        return f"{name_col}—    veri yetersiz          {this_den} {unit}"
+        return f"{name} — veri yetersiz ({this_den} {unit})"
     this_s = _fmt_pct_short(this_num, this_den)
     last_s = _fmt_pct_short(last_num, last_den)
-    this_pct = _pct_value(this_num, this_den)
-    last_pct = _pct_value(last_num, last_den)
-    if this_pct is not None and last_pct is not None:
-        arr = _arrow(this_pct, last_pct)
-        mid = f"{arr} onceki hafta {last_s}".strip() if arr else f"onceki hafta {last_s}"
-    else:
-        mid = f"onceki hafta {last_s}"
-    return f"{name_col}{this_s:<5} {mid:<28} {this_den} {unit}"
+    return (
+        f"{name} — {this_s} "
+        f"(önceki hafta {last_s}, {this_den} {unit})"
+    )
+
+
+def _count_cmp(name: str, this_n: int, last_n: int) -> str:
+    return f"{name} — {this_n} (önceki hafta {last_n})"
 
 
 def _post_cliq(webhook_url: str, text: str, userids: str) -> None:
@@ -725,10 +716,7 @@ def build_report(
 
     parts: list[str] = [
         "Pusula — haftalık rapor",
-        f"{this_label}  ·  kıyas: {last_label} (önceki hafta)",
-        "",
-        f"Özetlenen hafta: {this_label} ({_window_str(this_w)})",
-        f"Kıyas haftası: {last_label} ({_window_str(last_w)})",
+        f"{this_label} (kiyas: {last_label})",
         "",
     ]
 
@@ -743,7 +731,6 @@ def build_report(
         counts["kayit_disiplini"] = n_this + n_last
         parts.append("KAYIT DİSİPLİNİ")
         parts.append("30 saniyeden uzun görüşmelerde sonuç girilme oranı")
-        parts.append("")
         last_map = {n: (f, t) for n, f, t in last_d}
         this_map = {n: (f, t) for n, f, t in this_d}
 
@@ -755,7 +742,7 @@ def build_report(
 
         names = sorted(set(this_map) | set(last_map), key=disc_key)
         if not names:
-            parts.append("  (veri yok)")
+            parts.append("(veri yok)")
         else:
             for name in names:
                 tf, tt = this_map.get(name, (0, 0))
@@ -763,10 +750,9 @@ def build_report(
                 if tt <= 0 and lt <= 0:
                     continue
                 parts.append(_rate_row(name, tf, tt, lf, lt, unit="görüşme"))
-        parts.append("")
         if debug:
-            parts.append(f"  kayit={n_this} bu / {n_last} onceki hafta")
-            parts.append("")
+            parts.append(f"kayit={n_this} bu / {n_last} onceki hafta")
+        parts.append("")
     except Exception as exc:
         errors += 1
         parts.append(f"KAYIT DİSİPLİNİ: hata ({exc})")
@@ -777,19 +763,15 @@ def build_report(
         rows, n = metric_hic_aranmamis(conn, org_id)
         counts["hic_aranmamis"] = n
         parts.append("HİÇ ARANMAMIŞ LEAD")
-        parts.append(
-            "Aktif/stale/aging lead; sayılabilir outbound (≥10 sn) yok"
-        )
-        parts.append("")
+        parts.append("Aktif/stale/aging, sayılabilir outbound yok")
         if not rows:
-            parts.append("  (veri yok)")
+            parts.append("(veri yok)")
         else:
             for name, c in rows:
-                parts.append(f"  {name:<18}{c}")
-        parts.append("")
+                parts.append(f"{name} — {c}")
         if debug:
-            parts.append(f"  kayit={n}")
-            parts.append("")
+            parts.append(f"kayit={n}")
+        parts.append("")
     except Exception as exc:
         errors += 1
         parts.append(f"HİÇ ARANMAMIŞ LEAD: hata ({exc})")
@@ -802,14 +784,13 @@ def build_report(
         counts["donulmemis_randevu"] = n1 + n2
         parts.append("DÖNÜLMEMİŞ RANDEVU")
         parts.append("Randevu alınmış, sonrasında hiç görüşülmemiş")
-        parts.append("")
-        parts.append(f"  {'Açık toplam':<18}{this_r['total']}")
+        parts.append(f"Açık toplam — {this_r['total']}")
         parts.append(
-            f"  {'Bu hafta eklendi':<18}{this_r['added']:<5} "
+            f"Bu hafta eklendi — {this_r['added']} "
             f"(önceki hafta {last_r['added']})"
         )
         parts.append(
-            f"  {'Bu hafta kapandı':<18}{this_r['closed']:<5} "
+            f"Bu hafta kapandı — {this_r['closed']} "
             f"(önceki hafta {last_r['closed']})"
         )
         net = this_r["added"] - this_r["closed"]
@@ -820,11 +801,10 @@ def build_report(
             note = "yığın küçülüyor"
         else:
             note = "yığın aynı"
-        parts.append(f"  {'Net değişim':<18}{net_s:<5} {note}")
-        parts.append("")
+        parts.append(f"Net değişim — {net_s} ({note})")
         if debug:
-            parts.append(f"  kayit={n1} bu / {n2} onceki hafta")
-            parts.append("")
+            parts.append(f"kayit={n1} bu / {n2} onceki hafta")
+        parts.append("")
     except Exception as exc:
         errors += 1
         parts.append(f"DÖNÜLMEMİŞ RANDEVU: hata ({exc})")
@@ -836,11 +816,8 @@ def build_report(
         last_v, n2 = metric_arama_verimi(conn, org_id, last_w, tz)
         counts["arama_verimi"] = n1 + n2
         parts.append("ARAMA VERİMİ")
-        parts.append(
-            "Temas: 30 saniyeden uzun ve ulaşılabilmiş görüşme; "
-            "deneme sırası lead ömrü boyunca"
-        )
-        parts.append("")
+        parts.append("Temas: 30 sn üstü ve ulaşılabilmiş görüşme")
+        parts.append("Deneme sırası lead ömrü boyunca")
 
         def attempt(label: str, t_key: str, a_key: str) -> str:
             return _rate_row(
@@ -865,10 +842,9 @@ def build_report(
                 unit="çağrı",
             )
         )
-        parts.append("")
         if debug:
-            parts.append(f"  kayit={n1} bu / {n2} onceki hafta")
-            parts.append("")
+            parts.append(f"kayit={n1} bu / {n2} onceki hafta")
+        parts.append("")
     except Exception as exc:
         errors += 1
         parts.append(f"ARAMA VERİMİ: hata ({exc})")
@@ -880,9 +856,6 @@ def build_report(
         last_h, n2, last_meta = metric_hareket(conn, org_id, last_w)
         counts["haftanin_hareketi"] = n1 + n2
         parts.append("HAFTANIN HAREKETİ")
-        parts.append("")
-        hdr = f"  {'':24}{'bu hafta':>10}  {'önceki hafta':>12}"
-        parts.append(hdr)
         rows_h = (
             ("Toplam çağrı", "calls"),
             ("30sn+ görüşme", "talks30"),
@@ -891,39 +864,36 @@ def build_report(
             ("Bozulan", "bozulan"),
         )
         for label, key in rows_h:
-            parts.append(
-                f"  {label:<24}{this_h[key]:>10}  {last_h[key]:>12}"
-            )
-        parts.append("")
-        parts.append(
-            f"  tutulan tarih alanı: {this_meta['tutulan_field']}  "
-            f"[{this_meta['window']}]"
-        )
-        parts.append(
-            f"  bozulan tarih alanı: {this_meta['bozulan_field']}  "
-            f"[{this_meta['window']}]"
-        )
-        parts.append(
-            f"  kıyas penceresi: [{last_meta['window']}]"
-        )
-        if this_h["tutulan"] == last_h["tutulan"] or this_h["bozulan"] == last_h["bozulan"]:
-            parts.append(
-                "  not: tutulan/bozulan toplamları iki haftada aynı çıkabilir; "
-                "hafta filtresi uygulandı (id kümeleri ayrı). "
-                f"status sütunu bayat "
-                f"(fulfilled_event={this_h['status_tutulan']}/"
-                f"{last_h['status_tutulan']}, "
-                f"broken+due_at={this_h['status_bozulan']}/"
-                f"{last_h['status_bozulan']})."
-            )
-        parts.append("")
+            parts.append(_count_cmp(label, this_h[key], last_h[key]))
         if debug:
-            parts.append(f"  kayit={n1} bu / {n2} onceki hafta")
             parts.append(
-                f"  ham tutulan={this_h['tutulan']} / {last_h['tutulan']}, "
+                f"tutulan tarih alanı: {this_meta['tutulan_field']} "
+                f"[{this_meta['window']}]"
+            )
+            parts.append(
+                f"bozulan tarih alanı: {this_meta['bozulan_field']} "
+                f"[{this_meta['window']}]"
+            )
+            parts.append(f"kıyas penceresi: [{last_meta['window']}]")
+            if (
+                this_h["tutulan"] == last_h["tutulan"]
+                or this_h["bozulan"] == last_h["bozulan"]
+            ):
+                parts.append(
+                    "not: tutulan/bozulan iki haftada aynı; "
+                    "hafta filtresi uygulandı (id kümeleri ayrı). "
+                    f"status bayat "
+                    f"(fulfilled_event={this_h['status_tutulan']}/"
+                    f"{last_h['status_tutulan']}, "
+                    f"broken+due_at={this_h['status_bozulan']}/"
+                    f"{last_h['status_bozulan']})."
+                )
+            parts.append(f"kayit={n1} bu / {n2} onceki hafta")
+            parts.append(
+                f"ham tutulan={this_h['tutulan']} / {last_h['tutulan']}, "
                 f"bozulan={this_h['bozulan']} / {last_h['bozulan']}"
             )
-            parts.append("")
+        parts.append("")
     except Exception as exc:
         errors += 1
         parts.append(f"HAFTANIN HAREKETİ: hata ({exc})")
