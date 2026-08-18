@@ -13,9 +13,9 @@ Kalan kota diğer sinyallere orantılı; tek tip 3 yer alamaz.
 
 Stok = tüm sinyallerdeki uygun aday toplamı (tip toplamı).
 
-Temas: pusula.temas — call_duration_sec >= 30 VE
+Temas: pusula.temas — call_duration_sec >= 10 VE
 call_outcomes.category <> 'not_reached'.
-Deneme: her outbound çağrı (scheduled hariç). 10 sn altı temas sayılmaz.
+Deneme: süre > 0 outbound (scheduled hariç). 0/süre yok = bağlanmadı.
 
 Bölümler: Bugün / Dünden (süre + ekip ort.) / net akış / Bu hafta
 (rep_snapshots, ≥7 gün aralık). Gölge mod aynen kalır.
@@ -52,15 +52,16 @@ from dotenv import load_dotenv
 from pusula.config import get_org_id
 from pusula.freshness import print_call_stale_warning
 from pusula.temas import (
-    CALL_MIN_SEC,
     TEMAS_MIN_SEC,
     duration_sec,
+    is_attempt_sql,
+    is_temas_sql,
     outcome_join,
 )
 
 _TZ = ZoneInfo("Europe/Istanbul")
 _MAX_PER_REP = 3
-_AVG_MIN_TALKS = 5  # kendi/ekip ortalama basmak için min 30 sn+ görüşme
+_AVG_MIN_TALKS = 5  # kendi/ekip ortalama basmak için min 10 sn+ görüşme
 _PENCERE_TYPE = "pencere_aciliyor"
 _TYPE_ORDER = (
     "pencere_aciliyor",
@@ -84,6 +85,9 @@ _SNAPSHOT_LABELS = (
 
 # Tek kaynak: pusula.temas
 _DURATION_SEC = duration_sec("e")
+_ATTEMPT_E = is_attempt_sql("e")
+_TEMAS_E = is_temas_sql("e")
+_TEMAS_E3 = is_temas_sql("e3")
 _OUTCOME_JOIN = outcome_join  # callable(alias) -> SQL; geriye dönük .format yok
 
 # Kanıt: yalnızca hesaplanmış sayı cümlesi. Sabit/genel ifade yok.
@@ -113,6 +117,7 @@ _PENCERE_SQL = """
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
               AND e.occurred_at <= now()
               AND e.occurred_at >= coalesce(l.assigned_at, l.created_at)
+              AND """ + _ATTEMPT_E + """
         ) AS outbound_calls,
         (
             SELECT count(*)::int
@@ -122,11 +127,9 @@ _PENCERE_SQL = """
               AND e.thread_id = l.thread_id
               AND e.channel = 'call'
               AND e.direction = 'outbound'
-              AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
               AND e.occurred_at <= now()
               AND e.occurred_at >= coalesce(l.assigned_at, l.created_at)
-              AND """ + duration_sec("e") + """ >= 30
-              AND coalesce(co.category, '') <> 'not_reached'
+              AND """ + _TEMAS_E + """
         ) AS temas_calls,
         (
             SELECT i.id_value FROM identities i
@@ -151,6 +154,7 @@ _PENCERE_SQL = """
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
               AND e.occurred_at <= now()
               AND e.occurred_at >= coalesce(l.assigned_at, l.created_at)
+              AND """ + _ATTEMPT_E + """
       ) < 3
     ORDER BY sort_key DESC NULLS LAST
 """
@@ -318,7 +322,7 @@ _KAYIP_SQL = """
 """ + outcome_join("e3") + """
           WHERE e3.org_id = r.org_id
             AND e3.thread_id = r.thread_id
-            AND e3.occurred_at > r.randevu_at
+            AND e3.occurred_at >= r.randevu_at
             AND e3.occurred_at <= now()
             AND coalesce(e3.meta->>'scheduled', 'false') <> 'true'
             AND (
@@ -326,8 +330,7 @@ _KAYIP_SQL = """
                 OR e3.channel = 'meeting'
                 OR (
                     e3.channel = 'call'
-                    AND """ + duration_sec("e3") + """ >= 30
-                    AND coalesce(co.category, '') <> 'not_reached'
+                    AND """ + _TEMAS_E3 + """
                 )
             )
       )
@@ -397,7 +400,7 @@ _WEEK_SNAPSHOT_SQL = """
     ORDER BY snapshot_date DESC
 """
 
-# Dün / süre: yalnız duration >= 30 (10 sn altı hiç sayılmaz).
+# Dün / süre: yalnız duration >= TEMAS_MIN_SEC (bağlanmadı paydada yok).
 _DUNDEN_SQL = """
     SELECT
         count(*)::int AS talks,
@@ -412,7 +415,7 @@ _DUNDEN_SQL = """
       AND e.channel = 'call'
       AND e.direction = 'outbound'
       AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
-      AND """ + _DURATION_SEC + """ >= 30
+      AND """ + _DURATION_SEC + """ >= """ + str(TEMAS_MIN_SEC) + """
       AND e.occurred_at <= now()
       AND e.occurred_at >= %s
       AND e.occurred_at < %s
@@ -433,7 +436,7 @@ _DUNDEN_TEAM_SQL = """
       AND e.channel = 'call'
       AND e.direction = 'outbound'
       AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
-      AND """ + _DURATION_SEC + """ >= 30
+      AND """ + _DURATION_SEC + """ >= """ + str(TEMAS_MIN_SEC) + """
       AND e.occurred_at <= now()
       AND e.occurred_at >= %s
       AND e.occurred_at < %s
@@ -702,11 +705,9 @@ def _load_net_flow(
           AND e.rep_id = %s
           AND e.channel = 'call'
           AND e.direction = 'outbound'
-          AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
           AND """
-        + _DURATION_SEC
-        + """ >= 30
-          AND coalesce(co.category, '') <> 'not_reached'
+        + _TEMAS_E
+        + """
           AND e.occurred_at <= now()
           AND e.occurred_at >= %s
           AND e.occurred_at < %s
@@ -896,14 +897,14 @@ def _load_recipients(
     return out
 
 
-def _count_talks_30s(
+def _count_talks(
     conn: psycopg.Connection,
     org_id: str,
     day: date,
     *,
     category: str | None = "sales",
 ) -> int:
-    """Belirli günde 30 sn+ outbound çağrı sayısı (scheduled hariç)."""
+    """Belirli günde 10 sn+ outbound çağrı sayısı (scheduled hariç)."""
     y0, y1 = _day_bounds(day)
     if category:
         row = conn.execute(
@@ -918,7 +919,7 @@ def _count_talks_30s(
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
               AND """
             + _DURATION_SEC
-            + """ >= 30
+            + """ >= """ + str(TEMAS_MIN_SEC) + """
               AND e.occurred_at <= now()
               AND e.occurred_at >= %s
               AND e.occurred_at < %s
@@ -936,7 +937,7 @@ def _count_talks_30s(
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
               AND """
             + _DURATION_SEC
-            + """ >= 30
+            + """ >= """ + str(TEMAS_MIN_SEC) + """
               AND e.occurred_at <= now()
               AND e.occurred_at >= %s
               AND e.occurred_at < %s
@@ -958,7 +959,7 @@ def _load_dunden(
     *,
     now: datetime | None = None,
 ) -> DundenStats | None:
-    """Dün 30 sn+ görüşmeler + süre/ekip ort.; yoksa None."""
+    """Dün 10 sn+ görüşmeler + süre/ekip ort.; yoksa None."""
     local = now or datetime.now(_TZ)
     if local.tzinfo is None:
         local = local.replace(tzinfo=_TZ)
@@ -1059,7 +1060,7 @@ def _build_message(
         parts.append("Dünden")
         if dunden.avg_sec is not None and dunden.total_sec is not None:
             line = (
-                f"Dün {dunden.talks} görüşme (30 sn+), "
+                f"Dün {dunden.talks} görüşme (10 sn+), "
                 f"toplam {_fmt_total_minutes(dunden.total_sec)}, "
                 f"ortalama {_fmt_duration(dunden.avg_sec)}"
             )
@@ -1070,7 +1071,7 @@ def _build_message(
                     f"{_fmt_duration(dunden.prev_avg_sec)})"
                 )
         else:
-            parts.append(f"Dün {dunden.talks} görüşme (30 sn+)")
+            parts.append(f"Dün {dunden.talks} görüşme (10 sn+)")
         if dunden.team_avg_sec is not None:
             parts.append(
                 f"Ekip ortalaması: {_fmt_duration(dunden.team_avg_sec)}"
@@ -1498,16 +1499,16 @@ def main() -> int:
             )
             print(f"alıcı={len(recipients)}: {listed}")
 
-            # Dün 30 sn+ (eşik mi / veri eksik mi ayrımı).
+            # Dün 10 sn+ (eşik mi / veri eksik mi ayrımı).
             yesterday = datetime.now(_TZ).date() - timedelta(days=1)
-            talks_sales = _count_talks_30s(
+            talks_sales = _count_talks(
                 conn, org_id, yesterday, category="sales"
             )
-            talks_all = _count_talks_30s(
+            talks_all = _count_talks(
                 conn, org_id, yesterday, category=None
             )
             print(
-                f"dün ({yesterday}) 30sn+ çağrı: "
+                f"dün ({yesterday}) 10sn+ çağrı: "
                 f"sales={talks_sales}, tüm={talks_all} "
                 f"(ekip ort. eşik={_AVG_MIN_TALKS} görüşme/rep)"
             )
@@ -1672,7 +1673,7 @@ def main() -> int:
                     else:
                         print(
                             f"ekip ort. yok — dün ({yesterday}) "
-                            f"sales 30sn+={talks_sales} "
+                            f"sales 10sn+={talks_sales} "
                             f"(eşik ≥{_AVG_MIN_TALKS} konuşma/rep, "
                             "veya mesaj sahibi hariç ekip yetersiz)"
                         )

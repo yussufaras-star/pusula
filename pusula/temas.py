@@ -1,12 +1,13 @@
 """Çağrı süresi ve temas (temas) SQL parçaları — tek kaynak.
 
-Temas: outbound call, scheduled değil, süre >= 30 sn,
+Temas: outbound call, scheduled değil, süre >= 10 sn,
 call_outcomes.category <> 'not_reached'.
 
-Deneme / çağrı sayımı: scheduled değil; süre < 10 sn hesaba katılmaz
-(süre yoksa satır da katılmaz).
+Deneme: scheduled değil, süre > 0.
+Bağlanmadı: scheduled değil, süre 0 veya süre alanı yok.
+Bunlar temas oranının paydasına girmez.
 
-send_nudges.py ve weekly_report.py buradan okur.
+send_nudges.py, weekly_report.py ve take_snapshot.py buradan okur.
 """
 
 from __future__ import annotations
@@ -37,8 +38,9 @@ OUTCOME_JOIN = """
            )
 """
 
-TEMAS_MIN_SEC = 30
-CALL_MIN_SEC = 10  # bunun altı hiçbir metrikte sayılmaz
+TEMAS_MIN_SEC = 10
+TEMAS_MIN_SEC_OLD = 30  # etki karşılaştırması
+CALL_MIN_SEC = 10  # temas süresi; 1-9 sn deneme ama temas değil
 
 
 def duration_sec(alias: str = "e") -> str:
@@ -49,20 +51,39 @@ def outcome_join(alias: str = "e") -> str:
     return OUTCOME_JOIN.format(alias=alias)
 
 
-def is_temas_sql(alias: str = "e") -> str:
-    """WHERE içinde kullanılacak temas koşulu (co join gerekir)."""
+def is_temas_sql(alias: str = "e", min_sec: int | None = None) -> str:
+    """WHERE içinde kullanılacak temas koşulu (co join gerekir).
+
+    category NULL temas değildir (SQL: NULL <> 'not_reached' bilinmiyor).
+    """
+    sec = TEMAS_MIN_SEC if min_sec is None else min_sec
     dur = duration_sec(alias)
     return f"""
         coalesce({alias}.meta->>'scheduled', 'false') <> 'true'
-        AND {dur} >= {TEMAS_MIN_SEC}
-        AND coalesce(co.category, '') <> 'not_reached'
+        AND {dur} >= {sec}
+        AND co.category IS NOT NULL
+        AND co.category <> 'not_reached'
+    """
+
+
+def is_attempt_sql(alias: str = "e") -> str:
+    """Süre > 0 ve scheduled değil (bağlanmadı hariç deneme)."""
+    dur = duration_sec(alias)
+    return f"""
+        coalesce({alias}.meta->>'scheduled', 'false') <> 'true'
+        AND {dur} > 0
+    """
+
+
+def is_baglanmadi_sql(alias: str = "e") -> str:
+    """Süre 0 veya yok; scheduled değil."""
+    dur = duration_sec(alias)
+    return f"""
+        coalesce({alias}.meta->>'scheduled', 'false') <> 'true'
+        AND ({dur} IS NULL OR {dur} = 0)
     """
 
 
 def is_countable_call_sql(alias: str = "e") -> str:
-    """Süre >= 10 ve scheduled değil (temas zorunlu değil)."""
-    dur = duration_sec(alias)
-    return f"""
-        coalesce({alias}.meta->>'scheduled', 'false') <> 'true'
-        AND {dur} >= {CALL_MIN_SEC}
-    """
+    """Deneme ile aynı: süre > 0, scheduled değil."""
+    return is_attempt_sql(alias)

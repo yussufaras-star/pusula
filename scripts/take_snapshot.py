@@ -33,6 +33,7 @@ import psycopg
 from dotenv import load_dotenv
 
 from pusula.config import get_org_id
+from pusula.temas import is_temas_sql, outcome_join
 
 _TZ = ZoneInfo("Europe/Istanbul")
 
@@ -82,30 +83,17 @@ _KAYIP_COUNT_SQL = """
       AND NOT EXISTS (
           SELECT 1
           FROM events e3
-          LEFT JOIN call_outcomes co
-            ON co.org_id = e3.org_id
-           AND (
-                (
-                    nullif(e3.meta->>'outcome_key', '') IS NOT NULL
-                    AND co.outcome_key = e3.meta->>'outcome_key'
-                )
-                OR (
-                    nullif(e3.meta->>'outcome_key', '') IS NULL
-                    AND nullif(e3.meta->>'call_result', '') IS NOT NULL
-                    AND co.raw_value = e3.meta->>'call_result'
-                )
-           )
+""" + outcome_join("e3") + """
           WHERE e3.org_id = r.org_id
             AND e3.thread_id = r.thread_id
-            AND e3.occurred_at > r.randevu_at
+            AND e3.occurred_at >= r.randevu_at
             AND coalesce(e3.meta->>'scheduled', 'false') <> 'true'
             AND (
                 (e3.channel = 'call' AND e3.direction = 'inbound')
                 OR e3.channel = 'meeting'
                 OR (
                     e3.channel = 'call'
-                    AND (e3.meta->>'call_duration_sec')::numeric >= 30
-                    AND coalesce(co.category, '') <> 'not_reached'
+                    AND """ + is_temas_sql("e3") + """
                 )
             )
       )
