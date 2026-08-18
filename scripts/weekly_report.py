@@ -188,6 +188,38 @@ def metric_kayit_disiplini(
         (org_id, week.start, week.end),
     ).fetchall()
     out = [(str(n), int(f), int(t)) for n, f, t in rows]
+    # %0 ama n yüksek: call_result gerçekten boş mu, örnek bas.
+    for name, filled, total in out:
+        if filled == 0 and total >= 10:
+            samples = conn.execute(
+                f"""
+                SELECT e.id, e.occurred_at,
+                       e.meta->>'call_result' AS call_result,
+                       {_DUR} AS dur
+                FROM events e
+                JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+                WHERE e.org_id = %s
+                  AND r.full_name = %s
+                  AND r.category = 'sales' AND r.active = true
+                  AND e.channel = 'call' AND e.direction = 'outbound'
+                  AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+                  AND {_DUR} >= {TEMAS_MIN_SEC}
+                  AND e.occurred_at <= now()
+                  AND e.occurred_at >= %s AND e.occurred_at < %s
+                ORDER BY e.occurred_at
+                LIMIT 5
+                """,
+                (org_id, name, week.start, week.end),
+            ).fetchall()
+            print(
+                f"not: kayit disiplini {name} filled=0/{total} "
+                f"— call_result bos (ornek 5):"
+            )
+            for eid, occurred, cr, dur in samples:
+                print(
+                    f"  id={eid} occurred_at={occurred} "
+                    f"call_result={cr!r} dur={dur}"
+                )
     return out, sum(t for _, _, t in out)
 
 
@@ -349,9 +381,17 @@ def metric_arama_verimi(
 ) -> tuple[dict[str, Any], int]:
     """1/2/3. deneme temas oranı; 15:00+ temas oranı ve çağrı sayısı.
 
-    Deneme numarası thread ömrü boyunca (hafta penceresinden bağımsız);
-    oran yalnız o hafta gerçekleşen denemeler üzerinden.
+    Deneme numarası: thread'in TÜM outbound geçmişi (scheduled hariç,
+    süre filtresi yok — kısa çağrı da deneme sayılır). Hafta filtresi
+    yalnız o hafta gerçekleşen satırları seçer.
+
+    Temas (rapor): süre >= 30 VE call_outcomes.category <> 'not_reached'.
+    category NULL ise temas sayılmaz (SQL üç değerli mantık; coalesce yok).
     """
+    # coalesce(cat,'') kullanma — boş outcome'u temas yapıyordu (~%80).
+    temas = (
+        f"dur >= {TEMAS_MIN_SEC} AND cat IS NOT NULL AND cat <> 'not_reached'"
+    )
     rows = conn.execute(
         f"""
         WITH ranked AS (
@@ -359,7 +399,7 @@ def metric_arama_verimi(
                 e.thread_id,
                 e.occurred_at,
                 {_DUR} AS dur,
-                coalesce(co.category, '') AS cat,
+                co.category AS cat,
                 row_number() OVER (
                     PARTITION BY e.org_id, e.thread_id
                     ORDER BY e.occurred_at ASC
@@ -372,7 +412,7 @@ def metric_arama_verimi(
               AND r.category = 'sales' AND r.active = true
               AND e.channel = 'call' AND e.direction = 'outbound'
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
-              AND {_DUR} >= {CALL_MIN_SEC}
+              AND e.thread_id IS NOT NULL
               AND e.occurred_at <= now()
         ),
         calls AS (
@@ -382,23 +422,19 @@ def metric_arama_verimi(
         SELECT
           count(*) FILTER (WHERE attempt_n = 1)::int AS a1,
           count(*) FILTER (
-            WHERE attempt_n = 1 AND dur >= {TEMAS_MIN_SEC}
-              AND cat <> 'not_reached'
+            WHERE attempt_n = 1 AND {temas}
           )::int AS t1,
           count(*) FILTER (WHERE attempt_n = 2)::int AS a2,
           count(*) FILTER (
-            WHERE attempt_n = 2 AND dur >= {TEMAS_MIN_SEC}
-              AND cat <> 'not_reached'
+            WHERE attempt_n = 2 AND {temas}
           )::int AS t2,
           count(*) FILTER (WHERE attempt_n = 3)::int AS a3,
           count(*) FILTER (
-            WHERE attempt_n = 3 AND dur >= {TEMAS_MIN_SEC}
-              AND cat <> 'not_reached'
+            WHERE attempt_n = 3 AND {temas}
           )::int AS t3,
           count(*) FILTER (WHERE local_time >= time '15:00')::int AS after_n,
           count(*) FILTER (
-            WHERE local_time >= time '15:00'
-              AND dur >= {TEMAS_MIN_SEC} AND cat <> 'not_reached'
+            WHERE local_time >= time '15:00' AND {temas}
           )::int AS after_t
         FROM calls
         """,
@@ -454,24 +490,43 @@ def metric_hareket(
 
     tutulan = conn.execute(
         """
-        SELECT count(*)::int
-        FROM commitments c
-        JOIN events e ON e.id = c.fulfilled_event_id
-        WHERE c.org_id = %s
-          AND c.status = 'fulfilled'
-          AND e.occurred_at <= now()
-          AND e.occurred_at >= %s AND e.occurred_at < %s
+        WITH first_fulfill AS (
+            SELECT c.id, min(e.occurred_at) AS fulfilled_at
+            FROM commitments c
+            JOIN events e
+              ON e.org_id = c.org_id
+             AND e.thread_id = c.thread_id
+             AND e.channel = 'call'
+             AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+             AND c.due_at IS NOT NULL
+             AND e.occurred_at > c.due_at
+             AND e.occurred_at <= now()
+            WHERE c.org_id = %s
+            GROUP BY c.id
+        )
+        SELECT count(*)::int FROM first_fulfill
+        WHERE fulfilled_at >= %s AND fulfilled_at < %s
         """,
         (org_id, week.start, week.end),
     ).fetchone()
     n_tut = int(tutulan[0] or 0) if tutulan else 0
 
+    # due_at haftada + vade geçmiş + sonrası call yok (status güncel olmasa da).
     bozulan = conn.execute(
         """
         SELECT count(*)::int FROM commitments c
         WHERE c.org_id = %s
-          AND c.status = 'broken'
           AND c.due_at >= %s AND c.due_at < %s
+          AND c.due_at < now()
+          AND NOT EXISTS (
+              SELECT 1 FROM events e
+              WHERE e.org_id = c.org_id
+                AND e.thread_id = c.thread_id
+                AND e.channel = 'call'
+                AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+                AND e.occurred_at > c.due_at
+                AND e.occurred_at <= now()
+          )
         """,
         (org_id, week.start, week.end),
     ).fetchone()
@@ -700,7 +755,10 @@ def build_report(
             lt, la = last_v[t_key], last_v[a_key]
             this_s = _fmt_pct(tt, ta) if ta > 0 else "-"
             last_s = _fmt_pct(lt, la) if la > 0 else "-"
-            return f"  {label}: {_fmt_pair(this_s, last_s)} (n={ta}/{la})"
+            return (
+                f"  {label}: {_fmt_pair(this_s, last_s)} "
+                f"({ta} cagri (gecen {la}))"
+            )
 
         parts.append(attempt("1. deneme temas", "t1", "a1"))
         parts.append(attempt("2. deneme temas", "t2", "a2"))
@@ -717,7 +775,7 @@ def build_report(
         )
         parts.append(
             f"  15:00+ temas: {_fmt_pair(this_after, last_after)} "
-            f"(çağrı {this_v['after_n']}/{last_v['after_n']})"
+            f"({this_v['after_n']} cagri (gecen {last_v['after_n']}))"
         )
         parts.append(f"  kayit={n1} bu / {n2} geçen")
         parts.append("")
