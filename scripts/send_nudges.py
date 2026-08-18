@@ -19,14 +19,17 @@ Süre eşiği yalnız dün 10 sn+ görüşme satırında.
 Lead ilerleme: pusula.lead_reach. pencere_aciliyor dokunulmamış'ı öne alır.
 
 Bölümler: Bugün / Dünden (süre + ekip ort.) / net akış / Bu hafta
-(rep_snapshots, ≥7 gün aralık). Gölge mod aynen kalır.
+(rep_snapshots, ≥7 gün aralık).
+
+PUSULA_SHADOW_EMAIL dolu: tüm Cliq mesajları o adrese gider.
+Boş veya tanımsız: gerçek temsilci emaillerine gider (hata değil).
 
 Kullanım:
     python scripts/send_nudges.py
     python scripts/send_nudges.py --apply
 
 Varsayılan dry-run. DATABASE_URL_POOLED gerekir (pgbouncer 6543);
---apply için ayrıca CLIQ_WEBHOOK_URL ve PUSULA_SHADOW_EMAIL.
+--apply için CLIQ_WEBHOOK_URL. PUSULA_SHADOW_EMAIL isteğe bağlı.
 """
 
 from __future__ import annotations
@@ -861,6 +864,22 @@ def _parse_extra_recipients() -> list[str]:
     return [p.strip() for p in raw.split(",") if p.strip()]
 
 
+def _shadow_email() -> str | None:
+    """Boş / tanımsız = canlı gönderim; dolu = tüm mesajlar bu adrese."""
+    raw = os.environ.get("PUSULA_SHADOW_EMAIL")
+    if raw is None:
+        return None
+    value = raw.strip()
+    return value or None
+
+
+def _print_delivery_mode(shadow: str | None) -> None:
+    if shadow:
+        print(f"GOLGE MOD: tum mesajlar {shadow} adresine gidiyor")
+    else:
+        print("CANLI: mesajlar gercek temsilcilere gidecek")
+
+
 def _load_recipients(
     conn: psycopg.Connection, org_id: str
 ) -> dict[str, tuple[str, str | None, str]]:
@@ -1455,7 +1474,7 @@ def _insert_nudge(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Günlük dürtü üretir; gölge modda Cliq'e gönderir."
+        description="Günlük dürtü üretir; Cliq'e gönderir."
     )
     parser.add_argument(
         "--apply",
@@ -1466,6 +1485,8 @@ def main() -> int:
     dry_run = not args.apply
 
     load_dotenv()
+    shadow_email = _shadow_email()
+    _print_delivery_mode(shadow_email)
     database_url = os.environ.get("DATABASE_URL_POOLED")
     if not database_url:
         print("DATABASE_URL_POOLED ortam değişkeni tanımlı değil")
@@ -1473,20 +1494,10 @@ def main() -> int:
         return 1
 
     webhook_url = os.environ.get("CLIQ_WEBHOOK_URL")
-    shadow_email = os.environ.get("PUSULA_SHADOW_EMAIL")
-    if not dry_run:
-        missing = [
-            name
-            for name, val in (
-                ("CLIQ_WEBHOOK_URL", webhook_url),
-                ("PUSULA_SHADOW_EMAIL", shadow_email),
-            )
-            if not val
-        ]
-        if missing:
-            print("eksik ortam değişkeni: " + ", ".join(missing))
-            print("üretilen=0, gönderilen=0, hata=1")
-            return 1
+    if not dry_run and not webhook_url:
+        print("eksik ortam değişkeni: CLIQ_WEBHOOK_URL")
+        print("üretilen=0, gönderilen=0, hata=1")
+        return 1
 
     org_id = get_org_id()
     produced = 0
@@ -1691,13 +1702,29 @@ def main() -> int:
                             "veya mesaj sahibi hariç ekip yetersiz)"
                         )
             else:
-                assert webhook_url and shadow_email
+                assert webhook_url
+                if shadow_email is None:
+                    print(
+                        f"gonderim oncesi: mesaj={len(plans)} "
+                        "(gercek temsilciler)"
+                    )
+                    for (
+                        rep_id, _sel, _su, _sh, _st, _msg
+                    ) in plans:
+                        name, email, category = recipients[rep_id]
+                        dest = email or "(email yok)"
+                        print(f"  {name} [{category}] -> {dest}")
                 for (
                     rep_id, selected, suitable, shown, stock, msg
                 ) in plans:
                     name, email, category = recipients[rep_id]
+                    dest = shadow_email or email
+                    if not dest:
+                        errors += 1
+                        print(f"hata (cliq {name}): email yok")
+                        continue
                     try:
-                        _post_cliq(webhook_url, msg, shadow_email)
+                        _post_cliq(webhook_url, msg, dest)
                     except (
                         urllib.error.URLError,
                         urllib.error.HTTPError,
@@ -1712,8 +1739,7 @@ def main() -> int:
                     for n in selected:
                         try:
                             payload: dict[str, Any] = {
-                                "shadow": True,
-                                "shadow_email": shadow_email,
+                                "shadow": shadow_email is not None,
                                 "intended_rep_id": rep_id,
                                 "intended_rep_name": name,
                                 "intended_rep_email": email,
@@ -1725,6 +1751,8 @@ def main() -> int:
                                 "suitable": suitable,
                                 "shown": shown,
                             }
+                            if shadow_email is not None:
+                                payload["shadow_email"] = shadow_email
                             sent += _insert_nudge(
                                 conn, org_id=org_id, n=n, payload=payload
                             )

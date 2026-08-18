@@ -8,7 +8,7 @@ Metrikler (özetlenen hafta / bir önceki), yalnız sayı:
   e) Arama verimi — 1/2/3. denemede temas %; 15:00+ temas % ve çağrı
   f) Haftanın hareketi — çağrı, 10 sn+ görüşme, yeni/tutulan/bozulan taahhüt
   g) Satış — sıfır / tekrar / atıfsız; medyan döngü (güvenilir sıfır)
-  h) Temsilci özeti — FAALİYET (4 hafta) / SONUÇ (90 gün); sıfır 90 gün sırası
+  h) Temsilci özeti — FAALİYET (4 hafta) / HUNI+SONUÇ (--pencere gün)
 
 Temas (çağrı): scheduled değil, category <> 'not_reached' (süre yok).
 Süre eşiği yalnız kayıt disiplini ve 10 sn+ görüşme satırında.
@@ -20,11 +20,13 @@ events.occurred_at; leads.created_at kullanılmaz.
 Kullanım:
     python scripts/weekly_report.py
     python scripts/weekly_report.py --hafta bu
-    python scripts/weekly_report.py --debug
+    python scripts/weekly_report.py --pencere 30
     python scripts/weekly_report.py --apply
 
-Varsayılan dry-run. --apply: CLIQ_WEBHOOK_URL + PUSULA_SHADOW_EMAIL.
-Alıcı listesi: PUSULA_REPORT_RECIPIENTS (virgüllü email/userid).
+Varsayılan dry-run. --apply: CLIQ_WEBHOOK_URL.
+PUSULA_SHADOW_EMAIL dolu: rapor o adrese gider.
+Boş veya tanımsız: PUSULA_REPORT_RECIPIENTS (virgüllü email/userid).
+Alıcı listesi boş ve gölge kapalıysa gönderilmez.
 """
 
 from __future__ import annotations
@@ -90,6 +92,22 @@ class WeekBounds:
 def _parse_recipients() -> list[str]:
     raw = os.environ.get("PUSULA_REPORT_RECIPIENTS") or ""
     return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def _shadow_email() -> str | None:
+    """Boş / tanımsız = canlı gönderim; dolu = rapor bu adrese."""
+    raw = os.environ.get("PUSULA_SHADOW_EMAIL")
+    if raw is None:
+        return None
+    value = raw.strip()
+    return value or None
+
+
+def _print_delivery_mode(shadow: str | None) -> None:
+    if shadow:
+        print(f"GOLGE MOD: tum mesajlar {shadow} adresine gidiyor")
+    else:
+        print("CANLI: mesajlar gercek temsilcilere gidecek")
 
 
 def _org_tz(conn: psycopg.Connection, org_id: str) -> ZoneInfo:
@@ -194,6 +212,21 @@ def _fmt_count_port(
     return f"{n} ({_fmt_per100(n, portfolio)})"
 
 
+def _fmt_huni_pct(num: int, den: int, *, decimals: int) -> str:
+    """Payda <20 → veri yetersiz; aksi halde %X (num/den)."""
+    if den < _MIN_SAMPLE:
+        return "veri yetersiz"
+    pct = 100.0 * num / den
+    return f"%{pct:.{decimals}f} ({num}/{den})"
+
+
+def _fmt_huni_prev(num: int, den: int, *, decimals: int, days: int) -> str:
+    if den < _MIN_SAMPLE:
+        return f"önceki {days} gün veri yetersiz"
+    pct = 100.0 * num / den
+    return f"önceki {days} gün %{pct:.{decimals}f}"
+
+
 def _four_week_window(week: WeekBounds) -> tuple[datetime, datetime]:
     """Özetlenen hafta + önceki 3 takvim haftası."""
     return week.start - timedelta(weeks=3), week.end
@@ -202,6 +235,14 @@ def _four_week_window(week: WeekBounds) -> tuple[datetime, datetime]:
 def _days_window(week: WeekBounds, days: int) -> tuple[datetime, datetime]:
     """week.end geriye `days` gün (sağ uç hariç)."""
     return week.end - timedelta(days=days), week.end
+
+
+def _prev_days_window(
+    week: WeekBounds, days: int
+) -> tuple[datetime, datetime]:
+    """Sonuç penceresinin hemen öncesi, aynı uzunluk."""
+    this_start, _this_end = _days_window(week, days)
+    return this_start - timedelta(days=days), this_start
 
 
 def _latest_lead_owner_join(table_alias: str = "c") -> str:
@@ -223,6 +264,7 @@ class RepOzet:
     name: str
     portfolio: int
     sifir_90: int
+    sifir_prev: int
     calls_week: int
     calls: int
     talks10: int
@@ -230,12 +272,18 @@ class RepOzet:
     talk_med: float | None
     cycle_med: float | None
     cycle_n: int
+    cycle_med_prev: float | None
+    cycle_n_prev: int
     disc_filled: int
     disc_total: int
     acik: int
     bozulan: int
     donulmemis: int
     low_activity: bool
+    reached: int
+    booked: int
+    reached_prev: int
+    booked_prev: int
 
 
 def _rate_row(
@@ -968,10 +1016,13 @@ def metric_temsilci_ozeti(
     conn: psycopg.Connection,
     org_id: str,
     week: WeekBounds,
+    *,
+    window_days: int = 90,
 ) -> tuple[list[RepOzet], dict[str, Any]]:
-    """Satış temsilcisi satırları; sıra 90 günlük sıfır satış."""
+    """Satış temsilcisi satırları; sıra pencere içi sıfır satış."""
     four_start, four_end = _four_week_window(week)
-    cycle_start, cycle_end = _days_window(week, 90)
+    cycle_start, cycle_end = _days_window(week, window_days)
+    prev_start, prev_end = _prev_days_window(week, window_days)
     lo_join = _latest_lead_owner_join("c")
     cte = classified_deals_cte()
     won = won_stage_sql("cl")
@@ -1014,6 +1065,25 @@ def metric_temsilci_ozeti(
         (org_id, cycle_start, cycle_end),
     ).fetchall()
     sifir_90 = by_name(sifir_rows)
+
+    sifir_prev_rows = conn.execute(
+        f"""
+        WITH {cte}
+        SELECT r.full_name, count(*)::int
+        FROM classified cl
+        JOIN reps r
+          ON r.org_id = cl.org_id AND r.rep_id = cl.lead_owner_rep_id
+        WHERE {won}
+          AND cl.kind = '{SIFIR}'
+          AND cl.closed_at IS NOT NULL
+          AND cl.closed_at <= now()
+          AND cl.closed_at >= %s AND cl.closed_at < %s
+          AND {sales}
+        GROUP BY r.full_name
+        """,
+        (org_id, prev_start, prev_end),
+    ).fetchall()
+    sifir_prev = by_name(sifir_prev_rows)
 
     alltime_row = conn.execute(
         f"""
@@ -1064,6 +1134,36 @@ def metric_temsilci_ozeti(
         str(n): float(m) for n, m, _c in cycle_rows if m is not None
     }
     cycle_n = {str(n): int(c) for n, _m, c in cycle_rows}
+
+    cycle_prev_rows = conn.execute(
+        f"""
+        WITH {cte}
+        SELECT r.full_name,
+          percentile_cont(0.5) WITHIN GROUP (
+            ORDER BY extract(epoch FROM (cl.closed_at - cl.cycle_start_at))
+                     / 86400.0
+          )::float,
+          count(*)::int
+        FROM classified cl
+        JOIN reps r
+          ON r.org_id = cl.org_id AND r.rep_id = cl.lead_owner_rep_id
+        WHERE {won}
+          AND cl.kind = '{SIFIR}'
+          AND cl.cycle_start_reliable IS TRUE
+          AND cl.cycle_start_at IS NOT NULL
+          AND cl.closed_at > cl.cycle_start_at
+          AND cl.closed_at IS NOT NULL
+          AND cl.closed_at <= now()
+          AND cl.closed_at >= %s AND cl.closed_at < %s
+          AND {sales}
+        GROUP BY r.full_name
+        """,
+        (org_id, prev_start, prev_end),
+    ).fetchall()
+    cycle_med_prev = {
+        str(n): float(m) for n, m, _c in cycle_prev_rows if m is not None
+    }
+    cycle_n_prev = {str(n): int(c) for n, _m, c in cycle_prev_rows}
 
     team_cycle = conn.execute(
         f"""
@@ -1200,6 +1300,73 @@ def metric_temsilci_ozeti(
     ).fetchall()
     donulmemis = by_name(don_rows)
 
+    funnel_rows = conn.execute(
+        f"""
+        SELECT r.full_name,
+          count(DISTINCT l.lead_id) FILTER (
+            WHERE e.occurred_at >= %s AND e.occurred_at < %s
+          )::int AS reached,
+          count(DISTINCT l.lead_id) FILTER (
+            WHERE e.occurred_at >= %s AND e.occurred_at < %s
+              AND EXISTS (
+                  SELECT 1 FROM events ev
+                  WHERE ev.org_id = l.org_id
+                    AND ev.thread_id = l.thread_id
+                    AND ev.occurred_at >= %s AND ev.occurred_at < %s
+                    AND ev.occurred_at <= now()
+                    AND (
+                        ev.meta->>'outcome_key' = 'meeting_booked'
+                        OR ev.meta->>'call_result' = 'Randevu Alındı'
+                    )
+              )
+          )::int AS booked,
+          count(DISTINCT l.lead_id) FILTER (
+            WHERE e.occurred_at >= %s AND e.occurred_at < %s
+          )::int AS reached_prev,
+          count(DISTINCT l.lead_id) FILTER (
+            WHERE e.occurred_at >= %s AND e.occurred_at < %s
+              AND EXISTS (
+                  SELECT 1 FROM events ev
+                  WHERE ev.org_id = l.org_id
+                    AND ev.thread_id = l.thread_id
+                    AND ev.occurred_at >= %s AND ev.occurred_at < %s
+                    AND ev.occurred_at <= now()
+                    AND (
+                        ev.meta->>'outcome_key' = 'meeting_booked'
+                        OR ev.meta->>'call_result' = 'Randevu Alındı'
+                    )
+              )
+          )::int AS booked_prev
+        FROM events e
+        JOIN leads l
+          ON l.org_id = e.org_id AND l.thread_id = e.thread_id
+        JOIN reps r
+          ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
+        WHERE e.org_id = %s
+          AND {sales}
+          AND e.channel = 'call' AND e.direction = 'outbound'
+          AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+          AND {_DUR} >= {TEMAS_MIN_SEC}
+          AND e.occurred_at <= now()
+          AND e.occurred_at >= %s AND e.occurred_at < %s
+        GROUP BY r.full_name
+        """,
+        (
+            cycle_start, cycle_end,
+            cycle_start, cycle_end,
+            cycle_start, cycle_end,
+            prev_start, prev_end,
+            prev_start, prev_end,
+            prev_start, prev_end,
+            org_id,
+            prev_start, cycle_end,
+        ),
+    ).fetchall()
+    reached = {str(n): int(a) for n, a, _b, _ap, _bp in funnel_rows}
+    booked = {str(n): int(b) for n, _a, b, _ap, _bp in funnel_rows}
+    reached_prev = {str(n): int(a) for n, _a, _b, a, _bp in funnel_rows}
+    booked_prev = {str(n): int(b) for n, _a, _b, _ap, b in funnel_rows}
+
     out: list[RepOzet] = []
     for name in names:
         filled, total = disc.get(name, (0, 0))
@@ -1212,6 +1379,7 @@ def metric_temsilci_ozeti(
                 name=name,
                 portfolio=portfolio.get(name, 0),
                 sifir_90=sifir_90.get(name, 0),
+                sifir_prev=sifir_prev.get(name, 0),
                 calls_week=n_week,
                 calls=n_4w,
                 talks10=talks10.get(name, 0),
@@ -1219,12 +1387,18 @@ def metric_temsilci_ozeti(
                 talk_med=talk_med.get(name),
                 cycle_med=cycle_med.get(name),
                 cycle_n=cycle_n.get(name, 0),
+                cycle_med_prev=cycle_med_prev.get(name),
+                cycle_n_prev=cycle_n_prev.get(name, 0),
                 disc_filled=filled,
                 disc_total=total,
                 acik=acik.get(name, 0),
                 bozulan=bozulan.get(name, 0),
                 donulmemis=donulmemis.get(name, 0),
                 low_activity=low,
+                reached=reached.get(name, 0),
+                booked=booked.get(name, 0),
+                reached_prev=reached_prev.get(name, 0),
+                booked_prev=booked_prev.get(name, 0),
             )
         )
     out.sort(key=lambda r: (-r.sifir_90, r.name))
@@ -1235,6 +1409,7 @@ def metric_temsilci_ozeti(
         "alltime_won": alltime_won,
         "team_cycle_med": team_cycle_med,
         "team_cycle_n": team_cycle_n,
+        "window_days": window_days,
     }
     return out, meta
 
@@ -1243,6 +1418,7 @@ def _format_temsilci_ozeti(
     rows: list[RepOzet], meta: dict[str, Any]
 ) -> list[str]:
     """Cliq mobil: sütun hizası yok, temsilci başına yığın."""
+    days = int(meta.get("window_days", 90) or 90)
     parts = ["TEMSİLCİ ÖZETİ"]
     team_n = int(meta.get("team_cycle_n", 0) or 0)
     team_med = meta.get("team_cycle_med")
@@ -1254,6 +1430,7 @@ def _format_temsilci_ozeti(
         f"Satış döngüsü medyanı {cycle_s}; sonuç metrikleri geçmiş "
         "faaliyetin meyvesidir."
     )
+    parts.append("Huni: aktif lead -> ulaşılan -> randevu -> satış")
     if not rows:
         parts.append("(veri yok)")
         return parts
@@ -1293,17 +1470,47 @@ def _format_temsilci_ozeti(
         parts.append(
             f"dönülmemiş randevu (anlık) — {_fmt_count_port(row.donulmemis, p)}"
         )
-        parts.append("SONUÇ (son 90 gün)")
-        parts.append(f"sıfır satış — {_fmt_count_port(row.sifir_90, p)}")
+        parts.append(f"HUNI ({days} gün)")
+        parts.append(
+            "erişim — "
+            f"{_fmt_huni_pct(row.reached, p, decimals=0)}, "
+            f"{_fmt_huni_prev(row.reached_prev, p, decimals=0, days=days)}"
+        )
+        parts.append(
+            "randevu — "
+            f"{_fmt_huni_pct(row.booked, row.reached, decimals=0)}, "
+            f"{_fmt_huni_prev(row.booked_prev, row.reached_prev, decimals=0, days=days)}"
+        )
+        parts.append(
+            "kapanış — "
+            f"{_fmt_huni_pct(row.sifir_90, row.booked, decimals=0)}, "
+            f"{_fmt_huni_prev(row.sifir_prev, row.booked_prev, decimals=0, days=days)}"
+        )
+        parts.append(
+            "genel — "
+            f"{_fmt_huni_pct(row.sifir_90, row.reached, decimals=1)}, "
+            f"{_fmt_huni_prev(row.sifir_prev, row.reached_prev, decimals=1, days=days)}"
+        )
+        parts.append(f"SONUÇ (son {days} gün)")
+        parts.append(
+            f"sıfır satış — {_fmt_count_port(row.sifir_90, p)}, "
+            f"önceki {days} gün {_fmt_count_port(row.sifir_prev, p)}"
+        )
         if row.cycle_n < _MIN_SAMPLE or row.cycle_med is None:
-            parts.append(
-                f"döngü — veri yetersiz ({row.cycle_n} satış)"
-            )
+            dongu_this = f"veri yetersiz ({row.cycle_n} satış)"
         else:
-            parts.append(
-                f"döngü — {_fmt_cycle_days(row.cycle_med)} "
+            dongu_this = (
+                f"{_fmt_cycle_days(row.cycle_med)} "
                 f"({row.cycle_n} satış)"
             )
+        if row.cycle_n_prev < _MIN_SAMPLE or row.cycle_med_prev is None:
+            dongu_prev = f"veri yetersiz ({row.cycle_n_prev} satış)"
+        else:
+            dongu_prev = (
+                f"{_fmt_cycle_days(row.cycle_med_prev)} "
+                f"({row.cycle_n_prev} satış)"
+            )
+        parts.append(f"döngü — {dongu_this}, önceki {days} gün {dongu_prev}")
     return parts
 
 
@@ -1346,6 +1553,7 @@ def build_report(
     weeks_ago: int = 0,
     auto_last_data: bool = True,
     debug: bool = False,
+    window_days: int = 90,
 ) -> tuple[str, dict[str, int], int]:
     """Rapor metni, metrik→kayit_sayisi, hata."""
     errors = 0
@@ -1690,7 +1898,9 @@ def build_report(
 
     # h) Temsilci özeti
     try:
-        ozet, ozet_meta = metric_temsilci_ozeti(conn, org_id, this_w)
+        ozet, ozet_meta = metric_temsilci_ozeti(
+            conn, org_id, this_w, window_days=window_days
+        )
         counts["temsilci_ozeti"] = len(ozet)
         parts.extend(_format_temsilci_ozeti(ozet, ozet_meta))
         if debug:
@@ -1704,7 +1914,9 @@ def build_report(
             for row in ozet:
                 parts.append(
                     f"{row.name}: aktif={row.portfolio} "
-                    f"sifir90={row.sifir_90} "
+                    f"sifir={row.sifir_90}/{row.sifir_prev} "
+                    f"reached={row.reached}/{row.reached_prev} "
+                    f"booked={row.booked}/{row.booked_prev} "
                     f"cagri={row.calls_week}/{row.calls} "
                     f"10sn={row.talks10} dongu_n={row.cycle_n} "
                     f"disiplin={row.disc_total} "
@@ -1726,7 +1938,7 @@ def main() -> int:
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Cliq'e gölge DM gönder",
+        help="Cliq'e gönder",
     )
     parser.add_argument(
         "--hafta",
@@ -1748,8 +1960,20 @@ def main() -> int:
         action="store_true",
         help="Kayıt sayıları, ham örnekler ve teknik notlar",
     )
+    parser.add_argument(
+        "--pencere",
+        type=int,
+        default=90,
+        metavar="N",
+        help="Sonuç/huni penceresi gün cinsinden (varsayılan 90)",
+    )
     args = parser.parse_args()
+    if args.pencere < 1:
+        print("--pencere >= 1 olmali")
+        return 1
     load_dotenv()
+    shadow_email = _shadow_email()
+    _print_delivery_mode(shadow_email)
 
     database_url = (
         os.environ.get("DATABASE_URL_POOLED") or os.environ.get("DATABASE_URL")
@@ -1762,29 +1986,19 @@ def main() -> int:
     if not recipients:
         print(
             "UYARI: PUSULA_REPORT_RECIPIENTS bos — "
-            "--apply kimseye gondermez (orn. email1,email2)"
+            "gölge kapalıyken --apply göndermez (orn. email1,email2)"
         )
-    elif args.debug:
-        print(f"PUSULA_REPORT_RECIPIENTS: {len(recipients)} ({', '.join(recipients)})")
+    elif shadow_email is None or args.debug:
+        print(
+            f"PUSULA_REPORT_RECIPIENTS: {len(recipients)} "
+            f"({', '.join(recipients)})"
+        )
 
     dry_run = not args.apply
     webhook_url = os.environ.get("CLIQ_WEBHOOK_URL")
-    shadow_email = os.environ.get("PUSULA_SHADOW_EMAIL")
-    if not dry_run:
-        missing = [
-            n
-            for n, v in (
-                ("CLIQ_WEBHOOK_URL", webhook_url),
-                ("PUSULA_SHADOW_EMAIL", shadow_email),
-            )
-            if not v
-        ]
-        if missing:
-            print("eksik ortam değişkeni: " + ", ".join(missing))
-            return 1
-        if not recipients:
-            print("PUSULA_REPORT_RECIPIENTS boş — gönderim iptal")
-            return 1
+    if not dry_run and not webhook_url:
+        print("eksik ortam değişkeni: CLIQ_WEBHOOK_URL")
+        return 1
 
     if args.weeks_ago is not None:
         if args.weeks_ago < 0:
@@ -1807,7 +2021,7 @@ def main() -> int:
                 print(f"sales={len(reps)}: " + ", ".join(n for _, n in reps))
                 print(
                     f"hafta={args.hafta if args.weeks_ago is None else 'weeks-ago'} "
-                    f"weeks_ago={weeks_ago}"
+                    f"weeks_ago={weeks_ago} pencere={args.pencere}"
                 )
             text, counts, errors = build_report(
                 conn,
@@ -1815,6 +2029,7 @@ def main() -> int:
                 weeks_ago=weeks_ago,
                 auto_last_data=auto_last,
                 debug=args.debug,
+                window_days=args.pencere,
             )
     except psycopg.Error as exc:
         print(f"hata: {exc}")
@@ -1832,17 +2047,37 @@ def main() -> int:
             print("dry-run: gönderilmedi. Yazmak için --apply kullan.")
         return 0 if errors == 0 else 1
 
-    assert webhook_url and shadow_email
-    # Gölge mod: gerçek alıcı yerine shadow; raporda intended listesi.
-    header = (
-        f"[gölge] intended=" + ", ".join(recipients) + "\n\n"
-    )
-    try:
-        _post_cliq(webhook_url, header + text, shadow_email)
-        print(f"gönderilen=1 (shadow={shadow_email})")
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
-        print(f"hata (cliq): {exc}")
-        return 1
+    assert webhook_url
+    if shadow_email:
+        dests = [shadow_email]
+        body = (
+            "[gölge] intended=" + ", ".join(recipients) + "\n\n" + text
+        )
+    else:
+        if not recipients:
+            print(
+                "PUSULA_REPORT_RECIPIENTS boş — gönderim yok "
+                "(gölge kapalı, canlı alıcı yok)"
+            )
+            return 1
+        dests = recipients
+        body = text
+        print(f"gonderim oncesi: mesaj={len(dests)}")
+        for dest in dests:
+            print(f"  -> {dest}")
+
+    sent = 0
+    for dest in dests:
+        try:
+            _post_cliq(webhook_url, body, dest)
+            sent += 1
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+            print(f"hata (cliq {dest}): {exc}")
+            return 1
+    if shadow_email:
+        print(f"gönderilen={sent} (shadow={shadow_email})")
+    else:
+        print(f"gönderilen={sent}")
     return 0 if errors == 0 else 1
 
 
