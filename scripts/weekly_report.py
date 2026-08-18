@@ -8,6 +8,7 @@ Metrikler (özetlenen hafta / bir önceki), yalnız sayı:
   e) Arama verimi — 1/2/3. denemede temas %; 15:00+ temas % ve çağrı
   f) Haftanın hareketi — çağrı, 10 sn+ görüşme, yeni/tutulan/bozulan taahhüt
   g) Satış — sıfır / tekrar / atıfsız; medyan döngü (güvenilir sıfır)
+  h) Temsilci özeti — satır=temsilci; mutlak + portföy /100; sıfır satış sırası
 
 Temas (çağrı): scheduled değil, category <> 'not_reached' (süre yok).
 Süre eşiği yalnız kayıt disiplini ve 10 sn+ görüşme satırında.
@@ -176,6 +177,55 @@ def _fmt_talk_sec(seconds: float) -> str:
     total = max(0, int(round(float(seconds))))
     minutes, secs = divmod(total, 60)
     return f"{minutes} dk {secs:02d} sn"
+
+
+def _fmt_per100(n: int, portfolio: int) -> str:
+    """Portföy başına oran (/100 lead). Payda <20 → veri yetersiz."""
+    if portfolio < _MIN_SAMPLE:
+        return "veri yetersiz"
+    return f"{100.0 * n / portfolio:.2f}/100"
+
+
+def _fmt_count_port(n: int, portfolio: int) -> str:
+    return f"{n} ({_fmt_per100(n, portfolio)})"
+
+
+def _four_week_window(week: WeekBounds) -> tuple[datetime, datetime]:
+    """Özetlenen hafta + önceki 3 takvim haftası."""
+    return week.start - timedelta(weeks=3), week.end
+
+
+def _latest_lead_owner_join(table_alias: str = "c") -> str:
+    """Thread'teki en son lead'in owner_rep_id'si (lo)."""
+    return f"""
+    JOIN LATERAL (
+        SELECT owner_rep_id
+        FROM leads
+        WHERE org_id = {table_alias}.org_id
+          AND thread_id = {table_alias}.thread_id
+        ORDER BY assigned_at DESC NULLS LAST
+        LIMIT 1
+    ) lo ON true
+    """
+
+
+@dataclass(frozen=True)
+class RepOzet:
+    name: str
+    portfolio: int
+    sifir_week: int
+    sifir_4w: int
+    calls: int
+    talks10: int
+    talk_avg: float | None
+    talk_med: float | None
+    cycle_med: float | None
+    cycle_n: int
+    disc_filled: int
+    disc_total: int
+    acik: int
+    bozulan: int
+    donulmemis: int
 
 
 def _rate_row(
@@ -889,6 +939,272 @@ def metric_satis(
     return data, n, debug
 
 
+def metric_temsilci_ozeti(
+    conn: psycopg.Connection,
+    org_id: str,
+    week: WeekBounds,
+) -> list[RepOzet]:
+    """Satış temsilcisi satırları; sıra dışarıda (sıfır satış)."""
+    four_start, four_end = _four_week_window(week)
+    lo_join = _latest_lead_owner_join("c")
+    cte = classified_deals_cte()
+    won = won_stage_sql("cl")
+    sales = "r.category = 'sales' AND r.active = true"
+
+    names = [name for _, name in _sales_reps(conn, org_id)]
+    if not names:
+        return []
+
+    def by_name(rows: list[tuple[Any, ...]]) -> dict[str, int]:
+        return {str(r[0]): int(r[1]) for r in rows}
+
+    port_rows = conn.execute(
+        f"""
+        SELECT r.full_name, count(*)::int
+        FROM leads l
+        JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
+        WHERE l.org_id = %s AND {sales}
+        GROUP BY r.full_name
+        """,
+        (org_id,),
+    ).fetchall()
+    portfolio = by_name(port_rows)
+
+    sifir_rows = conn.execute(
+        f"""
+        WITH {cte}
+        SELECT r.full_name,
+          count(*) FILTER (
+            WHERE cl.closed_at >= %s AND cl.closed_at < %s
+          )::int AS sifir_week,
+          count(*)::int AS sifir_4w
+        FROM classified cl
+        JOIN reps r
+          ON r.org_id = cl.org_id AND r.rep_id = cl.lead_owner_rep_id
+        WHERE {won}
+          AND cl.kind = '{SIFIR}'
+          AND cl.closed_at IS NOT NULL
+          AND cl.closed_at <= now()
+          AND cl.closed_at >= %s AND cl.closed_at < %s
+          AND {sales}
+        GROUP BY r.full_name
+        """,
+        (org_id, week.start, week.end, four_start, four_end),
+    ).fetchall()
+    sifir_week = {str(n): int(w) for n, w, _ in sifir_rows}
+    sifir_4w = {str(n): int(t) for n, _, t in sifir_rows}
+
+    cycle_rows = conn.execute(
+        f"""
+        WITH {cte}
+        SELECT r.full_name,
+          percentile_cont(0.5) WITHIN GROUP (
+            ORDER BY extract(epoch FROM (cl.closed_at - cl.cycle_start_at))
+                     / 86400.0
+          )::float,
+          count(*)::int
+        FROM classified cl
+        JOIN reps r
+          ON r.org_id = cl.org_id AND r.rep_id = cl.lead_owner_rep_id
+        WHERE {won}
+          AND cl.kind = '{SIFIR}'
+          AND cl.cycle_start_reliable IS TRUE
+          AND cl.cycle_start_at IS NOT NULL
+          AND cl.closed_at > cl.cycle_start_at
+          AND cl.closed_at IS NOT NULL
+          AND cl.closed_at <= now()
+          AND cl.closed_at >= %s AND cl.closed_at < %s
+          AND {sales}
+        GROUP BY r.full_name
+        """,
+        (org_id, four_start, four_end),
+    ).fetchall()
+    cycle_med = {
+        str(n): float(m) for n, m, _c in cycle_rows if m is not None
+    }
+    cycle_n = {str(n): int(c) for n, _m, c in cycle_rows}
+
+    call_rows = conn.execute(
+        f"""
+        SELECT r.full_name,
+          count(*)::int AS calls,
+          count(*) FILTER (
+            WHERE {_DUR} >= {TEMAS_MIN_SEC}
+          )::int AS talks10,
+          avg({_DUR}) FILTER (
+            WHERE {_DUR} >= {TEMAS_MIN_SEC}
+          )::float AS avg_sec,
+          (percentile_cont(0.5) WITHIN GROUP (ORDER BY {_DUR})
+            FILTER (WHERE {_DUR} >= {TEMAS_MIN_SEC}))::float AS med_sec
+        FROM events e
+        JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+        WHERE e.org_id = %s
+          AND {sales}
+          AND e.channel = 'call' AND e.direction = 'outbound'
+          AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+          AND e.occurred_at <= now()
+          AND e.occurred_at >= %s AND e.occurred_at < %s
+        GROUP BY r.full_name
+        """,
+        (org_id, week.start, week.end),
+    ).fetchall()
+    calls = {str(n): int(c) for n, c, _t, _a, _m in call_rows}
+    talks10 = {str(n): int(t) for n, _c, t, _a, _m in call_rows}
+    talk_avg = {
+        str(n): float(a) for n, _c, _t, a, _m in call_rows if a is not None
+    }
+    talk_med = {
+        str(n): float(m) for n, _c, _t, _a, m in call_rows if m is not None
+    }
+
+    disc_rows, _n_disc = metric_kayit_disiplini(conn, org_id, week)
+    disc = {n: (f, t) for n, f, t in disc_rows}
+
+    acik_rows = conn.execute(
+        f"""
+        SELECT r.full_name, count(*)::int
+        FROM commitments c
+        {lo_join}
+        JOIN reps r
+          ON r.org_id = c.org_id AND r.rep_id = lo.owner_rep_id
+        WHERE c.org_id = %s
+          AND c.status = 'open'
+          AND lo.owner_rep_id IS NOT NULL
+          AND {sales}
+        GROUP BY r.full_name
+        """,
+        (org_id,),
+    ).fetchall()
+    acik = by_name(acik_rows)
+
+    bozulan_rows = conn.execute(
+        f"""
+        SELECT r.full_name, count(*)::int
+        FROM commitments c
+        {lo_join}
+        JOIN reps r
+          ON r.org_id = c.org_id AND r.rep_id = lo.owner_rep_id
+        WHERE c.org_id = %s
+          AND c.due_at >= %s AND c.due_at < %s
+          AND c.due_at < now()
+          AND lo.owner_rep_id IS NOT NULL
+          AND {sales}
+          AND NOT EXISTS (
+              SELECT 1 FROM events e
+              WHERE e.org_id = c.org_id
+                AND e.thread_id = c.thread_id
+                AND e.channel = 'call'
+                AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+                AND e.occurred_at > c.due_at
+                AND e.occurred_at <= now()
+          )
+        GROUP BY r.full_name
+        """,
+        (org_id, week.start, week.end),
+    ).fetchall()
+    bozulan = by_name(bozulan_rows)
+
+    base = _randevu_open_sql()
+    don_rows = conn.execute(
+        base
+        + f"""
+        SELECT r.full_name, count(*)::int
+        FROM open_r
+        JOIN reps r
+          ON r.org_id = open_r.org_id AND r.rep_id = open_r.rep_id
+        WHERE {sales}
+        GROUP BY r.full_name
+        """,
+        (org_id,),
+    ).fetchall()
+    donulmemis = by_name(don_rows)
+
+    out: list[RepOzet] = []
+    for name in names:
+        filled, total = disc.get(name, (0, 0))
+        out.append(
+            RepOzet(
+                name=name,
+                portfolio=portfolio.get(name, 0),
+                sifir_week=sifir_week.get(name, 0),
+                sifir_4w=sifir_4w.get(name, 0),
+                calls=calls.get(name, 0),
+                talks10=talks10.get(name, 0),
+                talk_avg=talk_avg.get(name),
+                talk_med=talk_med.get(name),
+                cycle_med=cycle_med.get(name),
+                cycle_n=cycle_n.get(name, 0),
+                disc_filled=filled,
+                disc_total=total,
+                acik=acik.get(name, 0),
+                bozulan=bozulan.get(name, 0),
+                donulmemis=donulmemis.get(name, 0),
+            )
+        )
+    out.sort(key=lambda r: (-r.sifir_week, -r.sifir_4w, r.name))
+    return out
+
+
+def _format_temsilci_ozeti(rows: list[RepOzet]) -> list[str]:
+    """Cliq mobil: sütun hizası yok, temsilci başına yığın."""
+    parts = [
+        "TEMSİLCİ ÖZETİ",
+        "sıfır satış sırası. mutlak (portföyde /100 lead)",
+        "sıfır: bu hafta / 4 hafta. çağrı-süre-disiplin-bozulan: bu hafta",
+        "açık taahhüt ve dönülmemiş randevu: anlık. payda 20 altı — veri yetersiz",
+    ]
+    if not rows:
+        parts.append("(veri yok)")
+        return parts
+    for row in rows:
+        p = row.portfolio
+        parts.append("")
+        parts.append(f"{row.name} — {p} lead")
+        parts.append(
+            "sıfır satış (bu / 4 hafta) — "
+            f"{_fmt_count_port(row.sifir_week, p)} / "
+            f"{_fmt_count_port(row.sifir_4w, p)}"
+        )
+        parts.append(f"çağrı — {_fmt_count_port(row.calls, p)}")
+        parts.append(f"10 sn+ — {_fmt_count_port(row.talks10, p)}")
+        if (
+            row.talks10 < _MIN_SAMPLE
+            or row.talk_avg is None
+            or row.talk_med is None
+        ):
+            parts.append(f"süre — veri yetersiz ({row.talks10} görüşme)")
+        else:
+            parts.append(
+                "süre — ort. "
+                f"{_fmt_talk_sec(row.talk_avg)}, "
+                f"medyan {_fmt_talk_sec(row.talk_med)}"
+            )
+        if row.cycle_n < _MIN_SAMPLE or row.cycle_med is None:
+            parts.append(f"döngü — veri yetersiz ({row.cycle_n} kayıt)")
+        else:
+            parts.append(
+                f"döngü — {_fmt_cycle_days(row.cycle_med)} "
+                f"({row.cycle_n} kayıt)"
+            )
+        if row.disc_total < _MIN_SAMPLE:
+            parts.append(
+                f"disiplin — veri yetersiz ({row.disc_total} görüşme)"
+            )
+        else:
+            parts.append(
+                f"disiplin — {_fmt_pct_short(row.disc_filled, row.disc_total)}"
+            )
+        parts.append(
+            "açık / bozulan taahhüt — "
+            f"{_fmt_count_port(row.acik, p)} / "
+            f"{_fmt_count_port(row.bozulan, p)}"
+        )
+        parts.append(
+            f"dönülmemiş randevu — {_fmt_count_port(row.donulmemis, p)}"
+        )
+    return parts
+
+
 def _latest_week_ago_with_calls(
     conn: psycopg.Connection, org_id: str, tz: ZoneInfo
 ) -> int:
@@ -1257,6 +1573,27 @@ def build_report(
     except Exception as exc:
         errors += 1
         parts.append(f"SATIŞ: hata ({exc})")
+        parts.append("")
+
+    # h) Temsilci özeti
+    try:
+        ozet = metric_temsilci_ozeti(conn, org_id, this_w)
+        counts["temsilci_ozeti"] = len(ozet)
+        parts.extend(_format_temsilci_ozeti(ozet))
+        if debug:
+            for row in ozet:
+                parts.append(
+                    f"{row.name}: portfoy={row.portfolio} "
+                    f"sifir={row.sifir_week}/{row.sifir_4w} "
+                    f"cagri={row.calls} 10sn={row.talks10} "
+                    f"dongu_n={row.cycle_n} disiplin={row.disc_total} "
+                    f"acik={row.acik} bozulan={row.bozulan} "
+                    f"randevu={row.donulmemis}"
+                )
+        parts.append("")
+    except Exception as exc:
+        errors += 1
+        parts.append(f"TEMSİLCİ ÖZETİ: hata ({exc})")
         parts.append("")
 
     return "\n".join(parts).rstrip() + "\n", counts, errors
