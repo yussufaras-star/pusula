@@ -8,7 +8,7 @@ Metrikler (özetlenen hafta / bir önceki), yalnız sayı:
   e) Arama verimi — 1/2/3. denemede temas %; 15:00+ temas % ve çağrı
   f) Haftanın hareketi — çağrı, 10 sn+ görüşme, yeni/tutulan/bozulan taahhüt
   g) Satış — sıfır / tekrar / atıfsız; medyan döngü (güvenilir sıfır)
-  h) Temsilci özeti — satır=temsilci; mutlak + portföy /100; sıfır satış sırası
+  h) Temsilci özeti — satır=temsilci; mutlak + aktif lead /100; sıfır satış sırası
 
 Temas (çağrı): scheduled değil, category <> 'not_reached' (süre yok).
 Süre eşiği yalnız kayıt disiplini ve 10 sn+ görüşme satırında.
@@ -186,13 +186,22 @@ def _fmt_per100(n: int, portfolio: int) -> str:
     return f"{100.0 * n / portfolio:.2f}/100"
 
 
-def _fmt_count_port(n: int, portfolio: int) -> str:
+def _fmt_count_port(
+    n: int, portfolio: int, *, show_rate: bool = True
+) -> str:
+    if not show_rate:
+        return f"{n} (—)"
     return f"{n} ({_fmt_per100(n, portfolio)})"
 
 
 def _four_week_window(week: WeekBounds) -> tuple[datetime, datetime]:
     """Özetlenen hafta + önceki 3 takvim haftası."""
     return week.start - timedelta(weeks=3), week.end
+
+
+def _days_window(week: WeekBounds, days: int) -> tuple[datetime, datetime]:
+    """week.end geriye `days` gün (sağ uç hariç)."""
+    return week.end - timedelta(days=days), week.end
 
 
 def _latest_lead_owner_join(table_alias: str = "c") -> str:
@@ -216,6 +225,7 @@ class RepOzet:
     sifir_week: int
     sifir_4w: int
     calls: int
+    calls_4w: int
     talks10: int
     talk_avg: float | None
     talk_med: float | None
@@ -226,6 +236,7 @@ class RepOzet:
     acik: int
     bozulan: int
     donulmemis: int
+    low_activity: bool
 
 
 def _rate_row(
@@ -360,8 +371,9 @@ def metric_lead_durumu(
 ) -> tuple[list[tuple[str, int, int, int, int]], dict[str, int]]:
     """Temsilci bazında dokunulmamış / denendi / ulaşıldı + toplam.
 
-    Evren: satış temsilcisine ait, statusu dolu lead.
-    meta: cat_total, sales_leads, table_leads, empty_status.
+    Evren (aktif lead): satış temsilcisine atanmış tüm lead.
+    Kovalar yalnız statusu dolu kayıt. tot = aktif lead.
+    meta: cat_total (kova), aktif, empty_status, table_leads.
     """
     rows = conn.execute(
         f"""
@@ -369,7 +381,7 @@ def metric_lead_durumu(
           count(*) FILTER (WHERE {_REACH} = '{DOKUNULMAMIS}')::int AS dok,
           count(*) FILTER (WHERE {_REACH} = '{DENENDI}')::int AS den,
           count(*) FILTER (WHERE {_REACH} = '{ULASILDI}')::int AS ula,
-          count(*) FILTER (WHERE {_REACH} IS NOT NULL)::int AS tot
+          count(*)::int AS tot
         FROM leads l
         JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
         WHERE l.org_id = %s
@@ -414,7 +426,7 @@ def metric_lead_durumu(
         "den": int(sums[1] or 0),
         "ula": int(sums[2] or 0),
         "cat_total": int(sums[3] or 0),
-        "sales_leads": int(sums[4] or 0),
+        "aktif": int(sums[4] or 0),
         "empty_status": int(sums[5] or 0),
         "table_leads": int(table_n[0] or 0),
     }
@@ -943,9 +955,10 @@ def metric_temsilci_ozeti(
     conn: psycopg.Connection,
     org_id: str,
     week: WeekBounds,
-) -> list[RepOzet]:
+) -> tuple[list[RepOzet], dict[str, Any]]:
     """Satış temsilcisi satırları; sıra dışarıda (sıfır satış)."""
     four_start, four_end = _four_week_window(week)
+    cycle_start, cycle_end = _days_window(week, 90)
     lo_join = _latest_lead_owner_join("c")
     cte = classified_deals_cte()
     won = won_stage_sql("cl")
@@ -953,7 +966,7 @@ def metric_temsilci_ozeti(
 
     names = [name for _, name in _sales_reps(conn, org_id)]
     if not names:
-        return []
+        return [], {}
 
     def by_name(rows: list[tuple[Any, ...]]) -> dict[str, int]:
         return {str(r[0]): int(r[1]) for r in rows}
@@ -994,6 +1007,46 @@ def metric_temsilci_ozeti(
     sifir_week = {str(n): int(w) for n, w, _ in sifir_rows}
     sifir_4w = {str(n): int(t) for n, _, t in sifir_rows}
 
+    atif_row = conn.execute(
+        f"""
+        WITH {cte}
+        SELECT
+          count(*) FILTER (
+            WHERE cl.closed_at >= %s AND cl.closed_at < %s
+          )::int AS atif_week,
+          count(*)::int AS atif_4w
+        FROM classified cl
+        WHERE {won}
+          AND cl.kind = '{ATIFSIZ}'
+          AND cl.closed_at IS NOT NULL
+          AND cl.closed_at <= now()
+          AND cl.closed_at >= %s AND cl.closed_at < %s
+        """,
+        (org_id, week.start, week.end, four_start, four_end),
+    ).fetchone()
+    atifsiz_week = int(atif_row[0] or 0) if atif_row else 0
+    atifsiz_4w = int(atif_row[1] or 0) if atif_row else 0
+
+    alltime_row = conn.execute(
+        f"""
+        WITH {cte}
+        SELECT
+          count(*) FILTER (WHERE cl.kind = '{SIFIR}')::int,
+          count(*) FILTER (WHERE cl.kind = '{TEKRAR}')::int,
+          count(*) FILTER (WHERE cl.kind = '{ATIFSIZ}')::int,
+          count(*)::int
+        FROM classified cl
+        WHERE {won}
+          AND cl.closed_at IS NOT NULL
+          AND cl.closed_at <= now()
+        """,
+        (org_id,),
+    ).fetchone()
+    alltime_sifir = int(alltime_row[0] or 0) if alltime_row else 0
+    alltime_tekrar = int(alltime_row[1] or 0) if alltime_row else 0
+    alltime_atifsiz = int(alltime_row[2] or 0) if alltime_row else 0
+    alltime_won = int(alltime_row[3] or 0) if alltime_row else 0
+
     cycle_rows = conn.execute(
         f"""
         WITH {cte}
@@ -1017,7 +1070,7 @@ def metric_temsilci_ozeti(
           AND {sales}
         GROUP BY r.full_name
         """,
-        (org_id, four_start, four_end),
+        (org_id, cycle_start, cycle_end),
     ).fetchall()
     cycle_med = {
         str(n): float(m) for n, m, _c in cycle_rows if m is not None
@@ -1027,15 +1080,25 @@ def metric_temsilci_ozeti(
     call_rows = conn.execute(
         f"""
         SELECT r.full_name,
-          count(*)::int AS calls,
           count(*) FILTER (
-            WHERE {_DUR} >= {TEMAS_MIN_SEC}
+            WHERE e.occurred_at >= %s AND e.occurred_at < %s
+          )::int AS calls,
+          count(*) FILTER (
+            WHERE e.occurred_at >= %s AND e.occurred_at < %s
+          )::int AS calls_4w,
+          count(*) FILTER (
+            WHERE e.occurred_at >= %s AND e.occurred_at < %s
+              AND {_DUR} >= {TEMAS_MIN_SEC}
           )::int AS talks10,
           avg({_DUR}) FILTER (
-            WHERE {_DUR} >= {TEMAS_MIN_SEC}
+            WHERE e.occurred_at >= %s AND e.occurred_at < %s
+              AND {_DUR} >= {TEMAS_MIN_SEC}
           )::float AS avg_sec,
           (percentile_cont(0.5) WITHIN GROUP (ORDER BY {_DUR})
-            FILTER (WHERE {_DUR} >= {TEMAS_MIN_SEC}))::float AS med_sec
+            FILTER (
+              WHERE e.occurred_at >= %s AND e.occurred_at < %s
+                AND {_DUR} >= {TEMAS_MIN_SEC}
+            ))::float AS med_sec
         FROM events e
         JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
         WHERE e.org_id = %s
@@ -1046,15 +1109,28 @@ def metric_temsilci_ozeti(
           AND e.occurred_at >= %s AND e.occurred_at < %s
         GROUP BY r.full_name
         """,
-        (org_id, week.start, week.end),
+        (
+            week.start, week.end,
+            four_start, four_end,
+            week.start, week.end,
+            week.start, week.end,
+            week.start, week.end,
+            org_id,
+            four_start, four_end,
+        ),
     ).fetchall()
-    calls = {str(n): int(c) for n, c, _t, _a, _m in call_rows}
-    talks10 = {str(n): int(t) for n, _c, t, _a, _m in call_rows}
+    calls = {str(n): int(c) for n, c, _c4, _t, _a, _m in call_rows}
+    calls_4w = {str(n): int(c4) for n, _c, c4, _t, _a, _m in call_rows}
+    talks10 = {str(n): int(t) for n, _c, _c4, t, _a, _m in call_rows}
     talk_avg = {
-        str(n): float(a) for n, _c, _t, a, _m in call_rows if a is not None
+        str(n): float(a)
+        for n, _c, _c4, _t, a, _m in call_rows
+        if a is not None
     }
     talk_med = {
-        str(n): float(m) for n, _c, _t, _a, m in call_rows if m is not None
+        str(n): float(m)
+        for n, _c, _c4, _t, _a, m in call_rows
+        if m is not None
     }
 
     disc_rows, _n_disc = metric_kayit_disiplini(conn, org_id, week)
@@ -1122,13 +1198,18 @@ def metric_temsilci_ozeti(
     out: list[RepOzet] = []
     for name in names:
         filled, total = disc.get(name, (0, 0))
+        n_calls = calls.get(name, 0)
+        n_4w = calls_4w.get(name, 0)
+        avg_4w = (n_4w / 4.0) if n_4w > 0 else 0.0
+        low = avg_4w > 0 and n_calls < 0.20 * avg_4w
         out.append(
             RepOzet(
                 name=name,
                 portfolio=portfolio.get(name, 0),
                 sifir_week=sifir_week.get(name, 0),
                 sifir_4w=sifir_4w.get(name, 0),
-                calls=calls.get(name, 0),
+                calls=n_calls,
+                calls_4w=n_4w,
                 talks10=talks10.get(name, 0),
                 talk_avg=talk_avg.get(name),
                 talk_med=talk_med.get(name),
@@ -1139,68 +1220,93 @@ def metric_temsilci_ozeti(
                 acik=acik.get(name, 0),
                 bozulan=bozulan.get(name, 0),
                 donulmemis=donulmemis.get(name, 0),
+                low_activity=low,
             )
         )
     out.sort(key=lambda r: (-r.sifir_week, -r.sifir_4w, r.name))
-    return out
+    meta: dict[str, Any] = {
+        "atifsiz_week": atifsiz_week,
+        "atifsiz_4w": atifsiz_4w,
+        "alltime_sifir": alltime_sifir,
+        "alltime_tekrar": alltime_tekrar,
+        "alltime_atifsiz": alltime_atifsiz,
+        "alltime_won": alltime_won,
+    }
+    return out, meta
 
 
-def _format_temsilci_ozeti(rows: list[RepOzet]) -> list[str]:
+def _format_temsilci_ozeti(
+    rows: list[RepOzet], meta: dict[str, Any]
+) -> list[str]:
     """Cliq mobil: sütun hizası yok, temsilci başına yığın."""
-    parts = [
-        "TEMSİLCİ ÖZETİ",
-        "sıfır satış sırası. mutlak (portföyde /100 lead)",
-        "sıfır: bu hafta / 4 hafta. çağrı-süre-disiplin-bozulan: bu hafta",
-        "açık taahhüt ve dönülmemiş randevu: anlık. payda 20 altı — veri yetersiz",
-    ]
+    parts = ["TEMSİLCİ ÖZETİ"]
     if not rows:
         parts.append("(veri yok)")
         return parts
+    atif_w = int(meta.get("atifsiz_week", 0))
+    atif_4 = int(meta.get("atifsiz_4w", 0))
     for row in rows:
         p = row.portfolio
+        show_rate = not row.low_activity
+        prefix = "(düşük aktivite) " if row.low_activity else ""
         parts.append("")
-        parts.append(f"{row.name} — {p} lead")
+        parts.append(f"{prefix}{row.name} — {p} aktif lead")
         parts.append(
             "sıfır satış (bu / 4 hafta) — "
-            f"{_fmt_count_port(row.sifir_week, p)} / "
-            f"{_fmt_count_port(row.sifir_4w, p)}"
+            f"{_fmt_count_port(row.sifir_week, p, show_rate=show_rate)} / "
+            f"{_fmt_count_port(row.sifir_4w, p, show_rate=show_rate)}, "
+            f"atıfsız {atif_w} / {atif_4}"
         )
-        parts.append(f"çağrı — {_fmt_count_port(row.calls, p)}")
-        parts.append(f"10 sn+ — {_fmt_count_port(row.talks10, p)}")
+        parts.append(
+            f"çağrı (bu hafta) — "
+            f"{_fmt_count_port(row.calls, p, show_rate=show_rate)}"
+        )
+        parts.append(
+            f"10 sn+ (bu hafta) — "
+            f"{_fmt_count_port(row.talks10, p, show_rate=show_rate)}"
+        )
         if (
             row.talks10 < _MIN_SAMPLE
             or row.talk_avg is None
             or row.talk_med is None
         ):
-            parts.append(f"süre — veri yetersiz ({row.talks10} görüşme)")
+            parts.append(
+                f"süre (bu hafta) — veri yetersiz ({row.talks10} görüşme)"
+            )
         else:
             parts.append(
-                "süre — ort. "
+                "süre (bu hafta) — ort. "
                 f"{_fmt_talk_sec(row.talk_avg)}, "
                 f"medyan {_fmt_talk_sec(row.talk_med)}"
             )
         if row.cycle_n < _MIN_SAMPLE or row.cycle_med is None:
-            parts.append(f"döngü — veri yetersiz ({row.cycle_n} kayıt)")
-        else:
             parts.append(
-                f"döngü — {_fmt_cycle_days(row.cycle_med)} "
-                f"({row.cycle_n} kayıt)"
-            )
-        if row.disc_total < _MIN_SAMPLE:
-            parts.append(
-                f"disiplin — veri yetersiz ({row.disc_total} görüşme)"
+                f"döngü (90 gün) — veri yetersiz ({row.cycle_n} satış)"
             )
         else:
             parts.append(
-                f"disiplin — {_fmt_pct_short(row.disc_filled, row.disc_total)}"
+                f"döngü (90 gün) — {_fmt_cycle_days(row.cycle_med)} "
+                f"({row.cycle_n} satış)"
+            )
+        if row.low_activity:
+            parts.append("disiplin (bu hafta) — —")
+        elif row.disc_total < _MIN_SAMPLE:
+            parts.append(
+                f"disiplin (bu hafta) — veri yetersiz ({row.disc_total} görüşme)"
+            )
+        else:
+            parts.append(
+                "disiplin (bu hafta) — "
+                f"{_fmt_pct_short(row.disc_filled, row.disc_total)}"
             )
         parts.append(
-            "açık / bozulan taahhüt — "
-            f"{_fmt_count_port(row.acik, p)} / "
-            f"{_fmt_count_port(row.bozulan, p)}"
+            "açık / bozulan taahhüt (anlık / bu hafta) — "
+            f"{_fmt_count_port(row.acik, p, show_rate=show_rate)} / "
+            f"{_fmt_count_port(row.bozulan, p, show_rate=show_rate)}"
         )
         parts.append(
-            f"dönülmemiş randevu — {_fmt_count_port(row.donulmemis, p)}"
+            "dönülmemiş randevu (anlık) — "
+            f"{_fmt_count_port(row.donulmemis, p, show_rate=show_rate)}"
         )
     return parts
 
@@ -1340,25 +1446,32 @@ def build_report(
         rows, meta = metric_lead_durumu(conn, org_id)
         counts["lead_durumu"] = meta["cat_total"]
         parts.append("LEAD DURUMU")
-        parts.append("dokunulmamış / denendi / ulaşıldı (Zoho status)")
+        parts.append(
+            "dokunulmamış / denendi / ulaşıldı (Zoho status). "
+            "aktif lead = satış sahibi"
+        )
         if not rows:
             parts.append("(veri yok)")
         else:
             for name, dok, den, ula, tot in rows:
                 if tot <= 0:
                     continue
-                parts.append(f"{name} — {dok} / {den} / {ula} ({tot})")
+                parts.append(
+                    f"{name} — {dok} / {den} / {ula} ({tot} aktif lead)"
+                )
         parts.append(
             f"Toplam — {meta['dok']} / {meta['den']} / {meta['ula']} "
-            f"({meta['cat_total']})"
+            f"({meta['aktif']} aktif lead)"
         )
         parts.append(
             f"Lead tablosu — {meta['table_leads']} "
-            f"(satış {meta['sales_leads']}, "
+            f"(aktif {meta['aktif']}, "
             f"status boş {meta['empty_status']})"
         )
         if meta["dok"] + meta["den"] + meta["ula"] != meta["cat_total"]:
-            parts.append("veri yetersiz: kova toplamı statusu dolu satış lead ile örtüşmüyor")
+            parts.append(
+                "veri yetersiz: kova toplamı statusu dolu satış lead ile örtüşmüyor"
+            )
         if debug:
             parts.append(
                 f"kayit={meta['cat_total']} "
@@ -1577,18 +1690,27 @@ def build_report(
 
     # h) Temsilci özeti
     try:
-        ozet = metric_temsilci_ozeti(conn, org_id, this_w)
+        ozet, ozet_meta = metric_temsilci_ozeti(conn, org_id, this_w)
         counts["temsilci_ozeti"] = len(ozet)
-        parts.extend(_format_temsilci_ozeti(ozet))
+        parts.extend(_format_temsilci_ozeti(ozet, ozet_meta))
         if debug:
+            parts.append(
+                "tüm zaman kazanılan — "
+                f"{ozet_meta['alltime_won']} "
+                f"(sıfır {ozet_meta['alltime_sifir']} / "
+                f"tekrar {ozet_meta['alltime_tekrar']} / "
+                f"atıfsız {ozet_meta['alltime_atifsiz']})"
+            )
             for row in ozet:
                 parts.append(
-                    f"{row.name}: portfoy={row.portfolio} "
+                    f"{row.name}: aktif={row.portfolio} "
                     f"sifir={row.sifir_week}/{row.sifir_4w} "
-                    f"cagri={row.calls} 10sn={row.talks10} "
-                    f"dongu_n={row.cycle_n} disiplin={row.disc_total} "
+                    f"cagri={row.calls}/{row.calls_4w} "
+                    f"10sn={row.talks10} dongu_n={row.cycle_n} "
+                    f"disiplin={row.disc_total} "
                     f"acik={row.acik} bozulan={row.bozulan} "
-                    f"randevu={row.donulmemis}"
+                    f"randevu={row.donulmemis} "
+                    f"dusuk={row.low_activity}"
                 )
         parts.append("")
     except Exception as exc:
