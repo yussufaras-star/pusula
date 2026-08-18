@@ -16,6 +16,7 @@ events.occurred_at; leads.created_at kullanılmaz.
 Kullanım:
     python scripts/weekly_report.py
     python scripts/weekly_report.py --hafta bu
+    python scripts/weekly_report.py --debug
     python scripts/weekly_report.py --apply
 
 Varsayılan dry-run. --apply: CLIQ_WEBHOOK_URL + PUSULA_SHADOW_EMAIL.
@@ -54,8 +55,12 @@ from pusula.temas import (
 _DUR = duration_sec("e")
 _JOIN = outcome_join("e")
 _COUNTABLE = is_countable_call_sql("e")
-# Oran paydası bunun altındaysa "(dusuk orneklem)" eklenir.
+# Oran paydası bunun altındaysa "—" / "veri yetersiz".
 _MIN_SAMPLE = 20
+_MONTHS_LONG = (
+    "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+    "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık",
+)
 
 
 @dataclass(frozen=True)
@@ -114,17 +119,67 @@ def _hafta_to_weeks_ago(hafta: str) -> int:
     raise ValueError(f"bilinmeyen --hafta: {hafta!r}")
 
 
-def _fmt_pct(num: int, den: int) -> str:
-    if den <= 0:
-        return "-"
-    s = f"%{100.0 * num / den:.0f}"
+def _week_label_long(week: WeekBounds) -> str:
+    """örn. 10-16 Ağustos"""
+    start = week.start.date()
+    last = week.end.date() - timedelta(days=1)
+    if start.month == last.month:
+        return f"{start.day}-{last.day} {_MONTHS_LONG[start.month - 1]}"
+    return (
+        f"{start.day} {_MONTHS_LONG[start.month - 1]}-"
+        f"{last.day} {_MONTHS_LONG[last.month - 1]}"
+    )
+
+
+def _window_str(week: WeekBounds) -> str:
+    last = week.end.date() - timedelta(days=1)
+    return f"{week.start.date()} .. {last}"
+
+
+def _arrow(this: float, last: float) -> str:
+    if this > last:
+        return "↑"
+    if this < last:
+        return "↓"
+    return ""
+
+
+def _pct_value(num: int, den: int) -> float | None:
     if den < _MIN_SAMPLE:
-        s += " (dusuk orneklem)"
-    return s
+        return None
+    return 100.0 * num / den
 
 
-def _fmt_pair(this: str, last: str) -> str:
-    return f"{this} (geçen {last})"
+def _fmt_pct_short(num: int, den: int) -> str:
+    pct = _pct_value(num, den)
+    if pct is None:
+        return "—"
+    return f"%{pct:.0f}"
+
+
+def _rate_row(
+    name: str,
+    this_num: int,
+    this_den: int,
+    last_num: int,
+    last_den: int,
+    *,
+    unit: str = "görüşme",
+) -> str:
+    """'%17   ↓ onceki hafta %23    455 görüşme' veya veri yetersiz."""
+    name_col = f"  {name:<18}"
+    if this_den < _MIN_SAMPLE:
+        return f"{name_col}—    veri yetersiz          {this_den} {unit}"
+    this_s = _fmt_pct_short(this_num, this_den)
+    last_s = _fmt_pct_short(last_num, last_den)
+    this_pct = _pct_value(this_num, this_den)
+    last_pct = _pct_value(last_num, last_den)
+    if this_pct is not None and last_pct is not None:
+        arr = _arrow(this_pct, last_pct)
+        mid = f"{arr} onceki hafta {last_s}".strip() if arr else f"onceki hafta {last_s}"
+    else:
+        mid = f"onceki hafta {last_s}"
+    return f"{name_col}{this_s:<5} {mid:<28} {this_den} {unit}"
 
 
 def _post_cliq(webhook_url: str, text: str, userids: str) -> None:
@@ -160,6 +215,8 @@ def metric_kayit_disiplini(
     conn: psycopg.Connection,
     org_id: str,
     week: WeekBounds,
+    *,
+    debug: bool = False,
 ) -> tuple[list[tuple[str, int, int]], int]:
     """(name, filled, total) düşük % → yüksek; rowcount=total sum."""
     rows = conn.execute(
@@ -188,38 +245,38 @@ def metric_kayit_disiplini(
         (org_id, week.start, week.end),
     ).fetchall()
     out = [(str(n), int(f), int(t)) for n, f, t in rows]
-    # %0 ama n yüksek: call_result gerçekten boş mu, örnek bas.
-    for name, filled, total in out:
-        if filled == 0 and total >= 10:
-            samples = conn.execute(
-                f"""
-                SELECT e.id, e.occurred_at,
-                       e.meta->>'call_result' AS call_result,
-                       {_DUR} AS dur
-                FROM events e
-                JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
-                WHERE e.org_id = %s
-                  AND r.full_name = %s
-                  AND r.category = 'sales' AND r.active = true
-                  AND e.channel = 'call' AND e.direction = 'outbound'
-                  AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
-                  AND {_DUR} >= {TEMAS_MIN_SEC}
-                  AND e.occurred_at <= now()
-                  AND e.occurred_at >= %s AND e.occurred_at < %s
-                ORDER BY e.occurred_at
-                LIMIT 5
-                """,
-                (org_id, name, week.start, week.end),
-            ).fetchall()
-            print(
-                f"not: kayit disiplini {name} filled=0/{total} "
-                f"— call_result bos (ornek 5):"
-            )
-            for eid, occurred, cr, dur in samples:
+    if debug:
+        for name, filled, total in out:
+            if filled == 0 and total >= 10:
+                samples = conn.execute(
+                    f"""
+                    SELECT e.id, e.occurred_at,
+                           e.meta->>'call_result' AS call_result,
+                           {_DUR} AS dur
+                    FROM events e
+                    JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+                    WHERE e.org_id = %s
+                      AND r.full_name = %s
+                      AND r.category = 'sales' AND r.active = true
+                      AND e.channel = 'call' AND e.direction = 'outbound'
+                      AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+                      AND {_DUR} >= {TEMAS_MIN_SEC}
+                      AND e.occurred_at <= now()
+                      AND e.occurred_at >= %s AND e.occurred_at < %s
+                    ORDER BY e.occurred_at
+                    LIMIT 5
+                    """,
+                    (org_id, name, week.start, week.end),
+                ).fetchall()
                 print(
-                    f"  id={eid} occurred_at={occurred} "
-                    f"call_result={cr!r} dur={dur}"
+                    f"debug: kayit disiplini {name} filled=0/{total} "
+                    f"— call_result bos (ornek 5):"
                 )
+                for eid, occurred, cr, dur in samples:
+                    print(
+                        f"  id={eid} occurred_at={occurred} "
+                        f"call_result={cr!r} dur={dur}"
+                    )
     return out, sum(t for _, _, t in out)
 
 
@@ -455,7 +512,14 @@ def metric_hareket(
     conn: psycopg.Connection,
     org_id: str,
     week: WeekBounds,
-) -> tuple[dict[str, int], int]:
+) -> tuple[dict[str, int], int, dict[str, str]]:
+    """Haftalık hareket + tutulan/bozulan meta (tarih alanı).
+
+    tutulan: o hafta fulfilled sayılan — first_fulfill.occurred_at
+      (due_at sonrası ilk scheduled-olmayan call; status bayat olabilir).
+    bozulan: o hafta broken sayılan — due_at pencerede, vade geçmiş,
+      sonrası call yok (status hâlâ open olsa da).
+    """
     calls = conn.execute(
         f"""
         SELECT
@@ -511,7 +575,6 @@ def metric_hareket(
     ).fetchone()
     n_tut = int(tutulan[0] or 0) if tutulan else 0
 
-    # due_at haftada + vade geçmiş + sonrası call yok (status güncel olmasa da).
     bozulan = conn.execute(
         """
         SELECT count(*)::int FROM commitments c
@@ -532,46 +595,43 @@ def metric_hareket(
     ).fetchone()
     n_boz = int(bozulan[0] or 0) if bozulan else 0
 
+    # status sütunu bayat mı? (debug/karşılaştırma)
+    status_tut = conn.execute(
+        """
+        SELECT count(*)::int
+        FROM commitments c
+        JOIN events e ON e.id = c.fulfilled_event_id
+        WHERE c.org_id = %s
+          AND c.status = 'fulfilled'
+          AND e.occurred_at >= %s AND e.occurred_at < %s
+        """,
+        (org_id, week.start, week.end),
+    ).fetchone()
+    status_boz = conn.execute(
+        """
+        SELECT count(*)::int FROM commitments c
+        WHERE c.org_id = %s
+          AND c.status = 'broken'
+          AND c.due_at >= %s AND c.due_at < %s
+        """,
+        (org_id, week.start, week.end),
+    ).fetchone()
+
     data = {
         "calls": n_calls,
         "talks30": n_30,
         "yeni": n_yeni,
         "tutulan": n_tut,
         "bozulan": n_boz,
+        "status_tutulan": int(status_tut[0] or 0) if status_tut else 0,
+        "status_bozulan": int(status_boz[0] or 0) if status_boz else 0,
     }
-    return data, n_calls + n_yeni + n_tut + n_boz
-
-
-def _disc_line(
-    this_rows: list[tuple[str, int, int]],
-    last_rows: list[tuple[str, int, int]],
-) -> list[str]:
-    last_map = {n: (f, t) for n, f, t in last_rows}
-    lines: list[str] = []
-    # Sıra: bu hafta düşük→yüksek; bu hafta yoksa geçen hafta sırası
-    names = [n for n, _, _ in this_rows]
-    if not names:
-        names = [n for n, _, _ in last_rows]
-    this_map = {n: (f, t) for n, f, t in this_rows}
-    # reorder by this week pct if present
-    def key(n: str) -> tuple[float, str]:
-        f, t = this_map.get(n, (0, 0))
-        if t <= 0:
-            return (999.0, n)
-        return (f / t, n)
-
-    for n in sorted(set(names) | set(last_map), key=key):
-        tf, tt = this_map.get(n, (0, 0))
-        lf, lt = last_map.get(n, (0, 0))
-        this_s = _fmt_pct(tf, tt) if tt > 0 else "-"
-        last_s = _fmt_pct(lf, lt) if lt > 0 else "-"
-        if tt <= 0 and lt <= 0:
-            continue
-        extra = ""
-        if tt > 0:
-            extra = f" n={tt}"
-        lines.append(f"  {n}: {_fmt_pair(this_s, last_s)}{extra}")
-    return lines
+    meta = {
+        "tutulan_field": "first_fulfill.occurred_at",
+        "bozulan_field": "due_at (vade geçmiş, sonrası call yok)",
+        "window": _window_str(week),
+    }
+    return data, n_calls + n_yeni + n_tut + n_boz, meta
 
 
 def _latest_week_ago_with_calls(
@@ -613,6 +673,7 @@ def build_report(
     *,
     weeks_ago: int = 0,
     auto_last_data: bool = True,
+    debug: bool = False,
 ) -> tuple[str, dict[str, int], int]:
     """Rapor metni, metrik→kayit_sayisi, hata."""
     errors = 0
@@ -620,7 +681,6 @@ def build_report(
     tz = _org_tz(conn, org_id)
     used_ago = weeks_ago
     if auto_last_data:
-        # Seçilen + bir önceki haftada çağrı yoksa son veri haftasına kay.
         probe = _week_bounds(tz, weeks_ago=weeks_ago)
         n_probe = conn.execute(
             f"""
@@ -653,56 +713,86 @@ def build_report(
             latest = _latest_week_ago_with_calls(conn, org_id, tz)
             if latest > weeks_ago:
                 used_ago = latest
-                print(
-                    f"not: seçilen haftalarda çağrı yok → "
-                    f"son veri haftası weeks_ago={used_ago}"
-                )
+                if debug:
+                    print(
+                        f"debug: seçilen haftalarda çağrı yok → "
+                        f"son veri haftası weeks_ago={used_ago}"
+                    )
     this_w = _week_bounds(tz, weeks_ago=used_ago)
     last_w = _week_bounds(tz, weeks_ago=used_ago + 1)
+    this_label = _week_label_long(this_w)
+    last_label = _week_label_long(last_w)
 
     parts: list[str] = [
-        f"[gölge] Haftalık rapor — {this_w.label}",
-        f"Özetlenen hafta: {this_w.label} "
-        f"({this_w.start.date()} .. {(this_w.end - timedelta(days=1)).date()}, "
-        f"TZ={tz.key})",
-        f"Kıyas: {last_w.label} "
-        f"({last_w.start.date()} .. {(last_w.end - timedelta(days=1)).date()})",
+        "Pusula — haftalık rapor",
+        f"{this_label}  ·  kıyas: {last_label} (önceki hafta)",
+        "",
+        f"Özetlenen hafta: {this_label} ({_window_str(this_w)})",
+        f"Kıyas haftası: {last_label} ({_window_str(last_w)})",
         "",
     ]
 
     # a) Kayıt disiplini
     try:
-        this_d, n_this = metric_kayit_disiplini(conn, org_id, this_w)
-        last_d, n_last = metric_kayit_disiplini(conn, org_id, last_w)
+        this_d, n_this = metric_kayit_disiplini(
+            conn, org_id, this_w, debug=debug
+        )
+        last_d, n_last = metric_kayit_disiplini(
+            conn, org_id, last_w, debug=False
+        )
         counts["kayit_disiplini"] = n_this + n_last
-        parts.append("Kayıt disiplini (30sn+ call_result dolu %)")
-        lines = _disc_line(this_d, last_d)
-        if not lines:
+        parts.append("KAYIT DİSİPLİNİ")
+        parts.append("30 saniyeden uzun görüşmelerde sonuç girilme oranı")
+        parts.append("")
+        last_map = {n: (f, t) for n, f, t in last_d}
+        this_map = {n: (f, t) for n, f, t in this_d}
+
+        def disc_key(n: str) -> tuple[float, str]:
+            f, t = this_map.get(n, (0, 0))
+            if t < _MIN_SAMPLE:
+                return (999.0, n)
+            return (f / t, n)
+
+        names = sorted(set(this_map) | set(last_map), key=disc_key)
+        if not names:
             parts.append("  (veri yok)")
         else:
-            parts.extend(lines)
-        parts.append(f"  kayit={n_this} bu / {n_last} geçen")
+            for name in names:
+                tf, tt = this_map.get(name, (0, 0))
+                lf, lt = last_map.get(name, (0, 0))
+                if tt <= 0 and lt <= 0:
+                    continue
+                parts.append(_rate_row(name, tf, tt, lf, lt, unit="görüşme"))
         parts.append("")
+        if debug:
+            parts.append(f"  kayit={n_this} bu / {n_last} onceki hafta")
+            parts.append("")
     except Exception as exc:
         errors += 1
-        parts.append(f"Kayıt disiplini: hata ({exc})")
+        parts.append(f"KAYIT DİSİPLİNİ: hata ({exc})")
         parts.append("")
 
     # b) Hiç aranmamış
     try:
         rows, n = metric_hic_aranmamis(conn, org_id)
         counts["hic_aranmamis"] = n
-        parts.append("Hiç aranmamış lead (active/stale/aging, sayılabilir outbound yok)")
+        parts.append("HİÇ ARANMAMIŞ LEAD")
+        parts.append(
+            "Aktif/stale/aging lead; sayılabilir outbound (≥10 sn) yok"
+        )
+        parts.append("")
         if not rows:
             parts.append("  (veri yok)")
         else:
             for name, c in rows:
-                parts.append(f"  {name}: {c}")
-        parts.append(f"  kayit={n}")
+                parts.append(f"  {name:<18}{c}")
         parts.append("")
+        if debug:
+            parts.append(f"  kayit={n}")
+            parts.append("")
     except Exception as exc:
         errors += 1
-        parts.append(f"Hiç aranmamış: hata ({exc})")
+        parts.append(f"HİÇ ARANMAMIŞ LEAD: hata ({exc})")
         parts.append("")
 
     # c) Dönülmemiş randevu
@@ -710,37 +800,34 @@ def build_report(
         this_r, n1 = metric_donulmemis(conn, org_id, this_w)
         last_r, n2 = metric_donulmemis(conn, org_id, last_w)
         counts["donulmemis_randevu"] = n1 + n2
-        parts.append("Dönülmemiş randevu")
-
-        last_has = conn.execute(
-            """
-            SELECT count(*)::int FROM events e
-            WHERE e.org_id = %s
-              AND e.occurred_at <= now()
-              AND e.occurred_at >= %s AND e.occurred_at < %s
-              AND (
-                e.meta->>'outcome_key' = 'meeting_booked'
-                OR e.meta->>'call_result' = 'Randevu Alındı'
-              )
-            """,
-            (org_id, last_w.start, last_w.end),
-        ).fetchone()
-        last_randevu_n = int(last_has[0] or 0) if last_has else 0
-
-        def pair_added_closed(k: str) -> str:
-            t = this_r[k]
-            if last_randevu_n <= 0 and last_r[k] == 0:
-                return _fmt_pair(str(t), "-")
-            return _fmt_pair(str(t), str(last_r[k]))
-
-        parts.append(f"  toplam açık: {_fmt_pair(str(this_r['total']), str(last_r['total']))}")
-        parts.append(f"  bu hafta eklenen: {pair_added_closed('added')}")
-        parts.append(f"  bu hafta kapanan: {pair_added_closed('closed')}")
-        parts.append(f"  kayit={n1} bu / {n2} geçen")
+        parts.append("DÖNÜLMEMİŞ RANDEVU")
+        parts.append("Randevu alınmış, sonrasında hiç görüşülmemiş")
         parts.append("")
+        parts.append(f"  {'Açık toplam':<18}{this_r['total']}")
+        parts.append(
+            f"  {'Bu hafta eklendi':<18}{this_r['added']:<5} "
+            f"(önceki hafta {last_r['added']})"
+        )
+        parts.append(
+            f"  {'Bu hafta kapandı':<18}{this_r['closed']:<5} "
+            f"(önceki hafta {last_r['closed']})"
+        )
+        net = this_r["added"] - this_r["closed"]
+        net_s = f"+{net}" if net > 0 else str(net)
+        if net > 0:
+            note = "yığın büyüyor"
+        elif net < 0:
+            note = "yığın küçülüyor"
+        else:
+            note = "yığın aynı"
+        parts.append(f"  {'Net değişim':<18}{net_s:<5} {note}")
+        parts.append("")
+        if debug:
+            parts.append(f"  kayit={n1} bu / {n2} onceki hafta")
+            parts.append("")
     except Exception as exc:
         errors += 1
-        parts.append(f"Dönülmemiş randevu: hata ({exc})")
+        parts.append(f"DÖNÜLMEMİŞ RANDEVU: hata ({exc})")
         parts.append("")
 
     # d) Arama verimi
@@ -748,67 +835,98 @@ def build_report(
         this_v, n1 = metric_arama_verimi(conn, org_id, this_w, tz)
         last_v, n2 = metric_arama_verimi(conn, org_id, last_w, tz)
         counts["arama_verimi"] = n1 + n2
-        parts.append("Arama verimi")
+        parts.append("ARAMA VERİMİ")
+        parts.append(
+            "Temas: 30 saniyeden uzun ve ulaşılabilmiş görüşme; "
+            "deneme sırası lead ömrü boyunca"
+        )
+        parts.append("")
 
         def attempt(label: str, t_key: str, a_key: str) -> str:
-            tt, ta = this_v[t_key], this_v[a_key]
-            lt, la = last_v[t_key], last_v[a_key]
-            this_s = _fmt_pct(tt, ta) if ta > 0 else "-"
-            last_s = _fmt_pct(lt, la) if la > 0 else "-"
-            return (
-                f"  {label}: {_fmt_pair(this_s, last_s)} "
-                f"({ta} cagri (gecen {la}))"
+            return _rate_row(
+                label,
+                this_v[t_key],
+                this_v[a_key],
+                last_v[t_key],
+                last_v[a_key],
+                unit="çağrı",
             )
 
         parts.append(attempt("1. deneme temas", "t1", "a1"))
         parts.append(attempt("2. deneme temas", "t2", "a2"))
         parts.append(attempt("3. deneme temas", "t3", "a3"))
-        this_after = (
-            _fmt_pct(this_v["after_t"], this_v["after_n"])
-            if this_v["after_n"] > 0
-            else "-"
-        )
-        last_after = (
-            _fmt_pct(last_v["after_t"], last_v["after_n"])
-            if last_v["after_n"] > 0
-            else "-"
-        )
         parts.append(
-            f"  15:00+ temas: {_fmt_pair(this_after, last_after)} "
-            f"({this_v['after_n']} cagri (gecen {last_v['after_n']}))"
+            _rate_row(
+                "15:00+ temas",
+                this_v["after_t"],
+                this_v["after_n"],
+                last_v["after_t"],
+                last_v["after_n"],
+                unit="çağrı",
+            )
         )
-        parts.append(f"  kayit={n1} bu / {n2} geçen")
         parts.append("")
+        if debug:
+            parts.append(f"  kayit={n1} bu / {n2} onceki hafta")
+            parts.append("")
     except Exception as exc:
         errors += 1
-        parts.append(f"Arama verimi: hata ({exc})")
+        parts.append(f"ARAMA VERİMİ: hata ({exc})")
         parts.append("")
 
     # e) Hareket
     try:
-        this_h, n1 = metric_hareket(conn, org_id, this_w)
-        last_h, n2 = metric_hareket(conn, org_id, last_w)
+        this_h, n1, this_meta = metric_hareket(conn, org_id, this_w)
+        last_h, n2, last_meta = metric_hareket(conn, org_id, last_w)
         counts["haftanin_hareketi"] = n1 + n2
-        parts.append("Haftanın hareketi")
-
-        def hline(label: str, key: str) -> str:
-            t = this_h[key]
-            l = last_h[key]
-            # geçen hafta tamamen boş hareket → -
-            if n2 <= 0 and l == 0:
-                return f"  {label}: {_fmt_pair(str(t), '-')}"
-            return f"  {label}: {_fmt_pair(str(t), str(l))}"
-
-        parts.append(hline("toplam çağrı (≥10sn)", "calls"))
-        parts.append(hline("30sn+ görüşme", "talks30"))
-        parts.append(hline("yeni taahhüt", "yeni"))
-        parts.append(hline("tutulan", "tutulan"))
-        parts.append(hline("bozulan", "bozulan"))
-        parts.append(f"  kayit={n1} bu / {n2} geçen")
+        parts.append("HAFTANIN HAREKETİ")
         parts.append("")
+        hdr = f"  {'':24}{'bu hafta':>10}  {'önceki hafta':>12}"
+        parts.append(hdr)
+        rows_h = (
+            ("Toplam çağrı", "calls"),
+            ("30sn+ görüşme", "talks30"),
+            ("Yeni taahhüt", "yeni"),
+            ("Tutulan", "tutulan"),
+            ("Bozulan", "bozulan"),
+        )
+        for label, key in rows_h:
+            parts.append(
+                f"  {label:<24}{this_h[key]:>10}  {last_h[key]:>12}"
+            )
+        parts.append("")
+        parts.append(
+            f"  tutulan tarih alanı: {this_meta['tutulan_field']}  "
+            f"[{this_meta['window']}]"
+        )
+        parts.append(
+            f"  bozulan tarih alanı: {this_meta['bozulan_field']}  "
+            f"[{this_meta['window']}]"
+        )
+        parts.append(
+            f"  kıyas penceresi: [{last_meta['window']}]"
+        )
+        if this_h["tutulan"] == last_h["tutulan"] or this_h["bozulan"] == last_h["bozulan"]:
+            parts.append(
+                "  not: tutulan/bozulan toplamları iki haftada aynı çıkabilir; "
+                "hafta filtresi uygulandı (id kümeleri ayrı). "
+                f"status sütunu bayat "
+                f"(fulfilled_event={this_h['status_tutulan']}/"
+                f"{last_h['status_tutulan']}, "
+                f"broken+due_at={this_h['status_bozulan']}/"
+                f"{last_h['status_bozulan']})."
+            )
+        parts.append("")
+        if debug:
+            parts.append(f"  kayit={n1} bu / {n2} onceki hafta")
+            parts.append(
+                f"  ham tutulan={this_h['tutulan']} / {last_h['tutulan']}, "
+                f"bozulan={this_h['bozulan']} / {last_h['bozulan']}"
+            )
+            parts.append("")
     except Exception as exc:
         errors += 1
-        parts.append(f"Haftanın hareketi: hata ({exc})")
+        parts.append(f"HAFTANIN HAREKETİ: hata ({exc})")
         parts.append("")
 
     return "\n".join(parts).rstrip() + "\n", counts, errors
@@ -836,6 +954,11 @@ def main() -> int:
         default=None,
         help="Gelişmiş: pazartesi kaydırması (verilirse --hafta yerine geçer)",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Kayıt sayıları, ham örnekler ve teknik notlar",
+    )
     args = parser.parse_args()
     load_dotenv()
 
@@ -852,7 +975,7 @@ def main() -> int:
             "UYARI: PUSULA_REPORT_RECIPIENTS bos — "
             "--apply kimseye gondermez (orn. email1,email2)"
         )
-    else:
+    elif args.debug:
         print(f"PUSULA_REPORT_RECIPIENTS: {len(recipients)} ({', '.join(recipients)})")
 
     dry_run = not args.apply
@@ -890,29 +1013,34 @@ def main() -> int:
     try:
         with psycopg.connect(database_url, prepare_threshold=None) as conn:
             print_call_stale_warning(conn, org_id)
-            reps = _sales_reps(conn, org_id)
-            print(f"sales={len(reps)}: " + ", ".join(n for _, n in reps))
-            print(f"hafta={args.hafta if args.weeks_ago is None else 'weeks-ago'} "
-                  f"weeks_ago={weeks_ago}")
+            if args.debug:
+                reps = _sales_reps(conn, org_id)
+                print(f"sales={len(reps)}: " + ", ".join(n for _, n in reps))
+                print(
+                    f"hafta={args.hafta if args.weeks_ago is None else 'weeks-ago'} "
+                    f"weeks_ago={weeks_ago}"
+                )
             text, counts, errors = build_report(
                 conn,
                 org_id,
                 weeks_ago=weeks_ago,
                 auto_last_data=auto_last,
+                debug=args.debug,
             )
     except psycopg.Error as exc:
         print(f"hata: {exc}")
         return 1
 
-    print("--- rapor ---")
     print(text)
-    print("--- kayit sayilari ---")
-    for k, v in counts.items():
-        print(f"  {k}: {v}")
-    print(f"hata={errors}")
+    if args.debug:
+        print("--- kayit sayilari ---")
+        for k, v in counts.items():
+            print(f"  {k}: {v}")
+        print(f"hata={errors}")
 
     if dry_run:
-        print("dry-run: gönderilmedi. Yazmak için --apply kullan.")
+        if args.debug:
+            print("dry-run: gönderilmedi. Yazmak için --apply kullan.")
         return 0 if errors == 0 else 1
 
     assert webhook_url and shadow_email
