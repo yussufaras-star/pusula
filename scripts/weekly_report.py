@@ -7,6 +7,7 @@ Metrikler (özetlenen hafta / bir önceki), yalnız sayı:
   d) Dönülmemiş randevu — Randevu Alındı, sonrası ulaşılmış çağrı yok
   e) Arama verimi — 1/2/3. denemede temas %; 15:00+ temas % ve çağrı
   f) Haftanın hareketi — çağrı, 10 sn+ görüşme, yeni/tutulan/bozulan taahhüt
+  g) Satış — sıfır / tekrar / atıfsız; medyan döngü (güvenilir sıfır)
 
 Temas (çağrı): scheduled değil, category <> 'not_reached' (süre yok).
 Süre eşiği yalnız kayıt disiplini ve 10 sn+ görüşme satırında.
@@ -51,6 +52,13 @@ from pusula.lead_reach import (
     DOKUNULMAMIS,
     ULASILDI,
     reach_bucket_sql,
+)
+from pusula.sifir_satis import (
+    ATIFSIZ,
+    SIFIR,
+    TEKRAR,
+    classified_deals_cte,
+    won_stage_sql,
 )
 from pusula.temas import (
     TEMAS_MIN_SEC,
@@ -155,6 +163,12 @@ def _fmt_pct_short(num: int, den: int) -> str:
     if pct is None:
         return "veri yetersiz"
     return f"%{pct:.0f}"
+
+
+def _fmt_cycle_days(days: float) -> str:
+    """14 gün."""
+    n = max(0, int(round(float(days))))
+    return f"{n} gün"
 
 
 def _fmt_talk_sec(seconds: float) -> str:
@@ -758,6 +772,123 @@ def metric_hareket(
     return data, n_calls + n_yeni + n_tut + n_boz, meta
 
 
+def metric_satis(
+    conn: psycopg.Connection,
+    org_id: str,
+    week: WeekBounds,
+) -> tuple[dict[str, Any], int, dict[str, Any]]:
+    """Kazanılan: sıfır / tekrar / atıfsız; temsilci sıfır; medyan döngü."""
+    cte = classified_deals_cte()
+    won = won_stage_sql("cl")
+    week_filter = f"""
+        {won}
+        AND cl.closed_at IS NOT NULL
+        AND cl.closed_at <= now()
+        AND cl.closed_at >= %s AND cl.closed_at < %s
+    """
+    row = conn.execute(
+        f"""
+        WITH {cte}
+        SELECT
+          count(*) FILTER (WHERE cl.kind = '{SIFIR}')::int,
+          count(*) FILTER (WHERE cl.kind = '{TEKRAR}')::int,
+          count(*) FILTER (WHERE cl.kind = '{ATIFSIZ}')::int
+        FROM classified cl
+        WHERE {week_filter}
+        """,
+        (org_id, week.start, week.end),
+    ).fetchone()
+    n_sifir = int(row[0] or 0) if row else 0
+    n_tekrar = int(row[1] or 0) if row else 0
+    n_atif = int(row[2] or 0) if row else 0
+
+    per_rep = conn.execute(
+        f"""
+        WITH {cte}
+        SELECT r.full_name, count(*)::int
+        FROM classified cl
+        JOIN reps r
+          ON r.org_id = cl.org_id AND r.rep_id = cl.lead_owner_rep_id
+        WHERE {week_filter}
+          AND cl.kind = '{SIFIR}'
+          AND r.category = 'sales' AND r.active = true
+        GROUP BY r.full_name
+        ORDER BY count(*) DESC, r.full_name
+        """,
+        (org_id, week.start, week.end),
+    ).fetchall()
+    reps = [(str(n), int(c)) for n, c in per_rep]
+
+    cycle = conn.execute(
+        f"""
+        WITH {cte}
+        SELECT
+          percentile_cont(0.5) WITHIN GROUP (
+            ORDER BY extract(epoch FROM (cl.closed_at - cl.cycle_start_at))
+                     / 86400.0
+          )::float,
+          count(*)::int
+        FROM classified cl
+        WHERE {week_filter}
+          AND cl.kind = '{SIFIR}'
+          AND cl.cycle_start_reliable IS TRUE
+          AND cl.cycle_start_at IS NOT NULL
+          AND cl.closed_at > cl.cycle_start_at
+        """,
+        (org_id, week.start, week.end),
+    ).fetchone()
+    med_days = float(cycle[0]) if cycle and cycle[0] is not None else None
+    n_cycle = int(cycle[1] or 0) if cycle else 0
+
+    mismatch = conn.execute(
+        f"""
+        WITH {cte}
+        SELECT
+          count(*) FILTER (
+            WHERE cl.deal_owner_rep_id IS NOT NULL
+              AND cl.lead_owner_rep_id IS NOT NULL
+          )::int AS both_owners,
+          count(*) FILTER (
+            WHERE cl.deal_owner_rep_id IS NOT NULL
+              AND cl.lead_owner_rep_id IS NOT NULL
+              AND cl.deal_owner_rep_id IS DISTINCT FROM cl.lead_owner_rep_id
+          )::int AS mismatch
+        FROM classified cl
+        """,
+        (org_id,),
+    ).fetchone()
+    avg_row = conn.execute(
+        """
+        SELECT avg(n)::float
+        FROM (
+            SELECT contact_id, count(*)::int AS n
+            FROM deals
+            WHERE org_id = %s AND contact_id IS NOT NULL
+            GROUP BY contact_id
+        ) t
+        """,
+        (org_id,),
+    ).fetchone()
+
+    data: dict[str, Any] = {
+        "sifir": n_sifir,
+        "tekrar": n_tekrar,
+        "atifsiz": n_atif,
+        "reps": reps,
+        "cycle_med": med_days,
+        "cycle_n": n_cycle,
+    }
+    debug = {
+        "owner_both": int(mismatch[0] or 0) if mismatch else 0,
+        "owner_mismatch": int(mismatch[1] or 0) if mismatch else 0,
+        "avg_deals_per_contact": (
+            float(avg_row[0]) if avg_row and avg_row[0] is not None else 0.0
+        ),
+    }
+    n = n_sifir + n_tekrar + n_atif
+    return data, n, debug
+
+
 def _latest_week_ago_with_calls(
     conn: psycopg.Connection, org_id: str, tz: ZoneInfo
 ) -> int:
@@ -1079,6 +1210,53 @@ def build_report(
     except Exception as exc:
         errors += 1
         parts.append(f"HAFTANIN HAREKETİ: hata ({exc})")
+        parts.append("")
+
+    # g) Satış
+    try:
+        this_s, n1, this_dbg = metric_satis(conn, org_id, this_w)
+        last_s, n2, _last_dbg = metric_satis(conn, org_id, last_w)
+        counts["satis"] = n1 + n2
+        parts.append("SATIŞ")
+        parts.append("Bu hafta kazanılan — sıfır / tekrar / atıfsız")
+        parts.append(
+            f"{this_s['sifir']} / {this_s['tekrar']} / {this_s['atifsiz']} "
+            f"(önceki hafta {last_s['sifir']} / {last_s['tekrar']} / "
+            f"{last_s['atifsiz']})"
+        )
+        parts.append("Sıfır satış (lead sahibi)")
+        reps = this_s["reps"]
+        if not reps:
+            parts.append("(veri yok)")
+        else:
+            for name, c in reps:
+                parts.append(f"{name} — {c}")
+        n_cyc = int(this_s["cycle_n"])
+        med = this_s["cycle_med"]
+        if n_cyc < _MIN_SAMPLE or med is None:
+            parts.append(
+                f"Medyan satış döngüsü — veri yetersiz ({n_cyc} kayıt)"
+            )
+        else:
+            parts.append(
+                f"Medyan satış döngüsü — {_fmt_cycle_days(float(med))} "
+                f"({n_cyc} kayıt)"
+            )
+        parts.append("hedef: sıfır satış sayısı artmalı")
+        if debug:
+            parts.append(
+                f"deal sahibi ≠ lead sahibi — "
+                f"{this_dbg['owner_mismatch']}/{this_dbg['owner_both']}"
+            )
+            parts.append(
+                f"contact başına ortalama deal — "
+                f"{this_dbg['avg_deals_per_contact']:.2f}"
+            )
+            parts.append(f"kayit={n1} bu / {n2} onceki hafta")
+        parts.append("")
+    except Exception as exc:
+        errors += 1
+        parts.append(f"SATIŞ: hata ({exc})")
         parts.append("")
 
     return "\n".join(parts).rstrip() + "\n", counts, errors
