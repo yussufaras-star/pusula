@@ -3,11 +3,11 @@
 Metrikler (özetlenen hafta / bir önceki), yalnız sayı:
   a) Kayıt disiplini — 10 sn+ outbound'ta call_result dolu %
   b) Lead durumu — dokunulmamış / denendi / ulaşıldı (Zoho status)
-  c) Görüşme süresi — ULASILDI lead'lerde 10 sn+ outbound ort/medyan
+  c) Görüşme süresi — ULASILDI lead'lerde 10 sn+ outbound ortalama/tipik
   d) Dönülmemiş randevu — Randevu Alındı, sonrası ulaşılmış çağrı yok
   e) Arama verimi — 1/2/3. denemede temas %; 15:00+ temas % ve çağrı
   f) Haftanın hareketi — çağrı, 10 sn+ görüşme, yeni/tutulan/bozulan taahhüt
-  g) Satış — ilk kez satın alan / tekrar satın alan / atıfsız; medyan döngü
+  g) Satış — ilk kez satın alan / tekrar satın alan / atıfsız; tipik döngü
   h) Temsilci özeti — FAALİYET (4 hafta) / HUNI+SONUÇ (--pencere gün)
      HUNI ulaşılan: Zoho status (lead_reach). Süre HUNI'de yok.
 
@@ -81,6 +81,11 @@ _TEMAS = is_temas_sql("e")
 _REACH = reach_bucket_sql("l.status")
 # Oran paydası bunun altındaysa "—" / "veri yetersiz".
 _MIN_SAMPLE = 20
+TERIM_TIPIK = (
+    "Tipik — sıralandığında tam ortadaki değer. Ortalamadan farkı, "
+    "birkaç çok uzun kaydın sayıyı yukarı çekmemesi. Ortalama ile "
+    "tipik arasındaki fark büyükse dağılım çarpıktır."
+)
 _MONTHS_LONG = (
     "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
     "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık",
@@ -200,6 +205,14 @@ def _fmt_talk_sec(seconds: float) -> str:
     total = max(0, int(round(float(seconds))))
     minutes, secs = divmod(total, 60)
     return f"{minutes} dk {secs:02d} sn"
+
+
+def _fmt_avg_tipik(avg_sec: float, med_sec: float) -> str:
+    """ortalama 5 dk 18 sn, tipik 2 dk 11 sn."""
+    return (
+        f"ortalama {_fmt_talk_sec(avg_sec)}, "
+        f"tipik {_fmt_talk_sec(med_sec)}"
+    )
 
 
 def _fmt_per100(n: int, portfolio: int) -> str:
@@ -498,7 +511,7 @@ def metric_gorusme_suresi(
 ) -> tuple[list[tuple[str, float, float, int]], dict[str, float | int]]:
     """ULASILDI lead'lerde 10 sn+ outbound süreleri (görüşme başına).
 
-    Temsilci: lead'in owner_rep_id. Ortalama/medyan çağrı satırından.
+    Temsilci: lead'in owner_rep_id. Ortalama/tipik çağrı satırından.
     """
     rows = conn.execute(
         f"""
@@ -899,7 +912,7 @@ def metric_satis(
     org_id: str,
     week: WeekBounds,
 ) -> tuple[dict[str, Any], int, dict[str, Any]]:
-    """Kazanılan: ilk kez / tekrar satın alan / atıfsız; medyan döngü."""
+    """Kazanılan: ilk kez / tekrar satın alan / atıfsız; tipik döngü."""
     cte = classified_deals_cte()
     won = won_stage_sql("cl")
     week_filter = f"""
@@ -1455,7 +1468,7 @@ def _format_temsilci_ozeti(
     else:
         cycle_s = _fmt_cycle_days(float(team_med))
     parts.append(
-        f"Satış döngüsü medyanı {cycle_s}; sonuç metrikleri geçmiş "
+        f"Satış döngüsü tipik {cycle_s}; sonuç metrikleri geçmiş "
         "faaliyetin meyvesidir."
     )
     parts.append("Huni: aktif lead -> ulaşılan -> randevu -> satış")
@@ -1478,9 +1491,7 @@ def _format_temsilci_ozeti(
             parts.append(f"süre — veri yetersiz ({row.talks10} görüşme)")
         else:
             parts.append(
-                "süre — ort. "
-                f"{_fmt_talk_sec(row.talk_avg)}, "
-                f"medyan {_fmt_talk_sec(row.talk_med)}"
+                f"süre — {_fmt_avg_tipik(row.talk_avg, row.talk_med)}"
             )
         if row.disc_total < _MIN_SAMPLE:
             parts.append(
@@ -1551,7 +1562,7 @@ def _format_temsilci_ozeti(
                 f"{_fmt_cycle_days(row.cycle_med_prev)} "
                 f"({row.cycle_n_prev} satış)"
             )
-        parts.append(f"döngü — {dongu_this}, önceki {days} gün {dongu_prev}")
+        parts.append(f"tipik döngü — {dongu_this}, önceki {days} gün {dongu_prev}")
     return parts
 
 
@@ -1742,16 +1753,15 @@ def build_report(
                     parts.append(f"{name} — veri yetersiz ({n_talk} görüşme)")
                     continue
                 parts.append(
-                    f"{name} — ort. {_fmt_talk_sec(avg_s)}, "
-                    f"medyan {_fmt_talk_sec(med_s)} ({n_talk} görüşme)"
+                    f"{name} — {_fmt_avg_tipik(avg_s, med_s)} "
+                    f"({n_talk} görüşme)"
                 )
         team_n = int(gs["team_n"])
         if team_n < _MIN_SAMPLE:
             parts.append(f"Ekip ortalaması — veri yetersiz ({team_n} görüşme)")
         else:
             parts.append(
-                f"Ekip ortalaması — {_fmt_talk_sec(float(gs['team_avg']))}, "
-                f"medyan {_fmt_talk_sec(float(gs['team_med']))}"
+                f"Ekip — {_fmt_avg_tipik(float(gs['team_avg']), float(gs['team_med']))}"
             )
         parts.append(
             f"Ulaşıldı, 10 sn+ çağrı yok — {int(gs['no_talk'])}"
@@ -1914,11 +1924,11 @@ def build_report(
         med = this_s["cycle_med"]
         if n_cyc < _MIN_SAMPLE or med is None:
             parts.append(
-                f"Medyan satış döngüsü — veri yetersiz ({n_cyc} kayıt)"
+                f"Tipik satış döngüsü — veri yetersiz ({n_cyc} kayıt)"
             )
         else:
             parts.append(
-                f"Medyan satış döngüsü — {_fmt_cycle_days(float(med))} "
+                f"Tipik satış döngüsü — {_fmt_cycle_days(float(med))} "
                 f"({n_cyc} kayıt)"
             )
         parts.append(f"hedef: {LABEL_ILK_SATIN_ALAN} sayısı artmalı")
@@ -1989,6 +1999,7 @@ def build_report(
 
     parts.append("TERİMLER")
     parts.append(TERIM_ILK_SATIN_ALAN)
+    parts.append(TERIM_TIPIK)
     parts.append("")
 
     return "\n".join(parts).rstrip() + "\n", counts, errors
