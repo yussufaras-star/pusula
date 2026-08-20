@@ -9,6 +9,7 @@ Metrikler (özetlenen hafta / bir önceki), yalnız sayı:
   f) Haftanın hareketi — çağrı, 10 sn+ görüşme, yeni/tutulan/bozulan taahhüt
   g) Satış — sıfır / tekrar / atıfsız; medyan döngü (güvenilir sıfır)
   h) Temsilci özeti — FAALİYET (4 hafta) / HUNI+SONUÇ (--pencere gün)
+     HUNI ulaşılan: Zoho status (lead_reach). Süre HUNI'de yok.
 
 Temas (çağrı): scheduled değil, category <> 'not_reached' (süre yok).
 Süre eşiği yalnız kayıt disiplini ve 10 sn+ görüşme satırında.
@@ -220,9 +221,17 @@ def _fmt_huni_pct(num: int, den: int, *, decimals: int) -> str:
     return f"%{pct:.{decimals}f} ({num}/{den})"
 
 
-def _fmt_huni_prev(num: int, den: int, *, decimals: int, days: int) -> str:
-    if den < _MIN_SAMPLE:
-        return f"önceki {days} gün veri yetersiz"
+def _fmt_huni_prev(
+    num: int,
+    den: int,
+    *,
+    decimals: int,
+    days: int,
+    has_data: bool,
+) -> str:
+    """Pencerede veri yok, pay 0 veya payda <20 → sayı basma."""
+    if not has_data or num <= 0 or den < _MIN_SAMPLE:
+        return f"önceki {days} gün veri yok"
     pct = 100.0 * num / den
     return f"önceki {days} gün %{pct:.{decimals}f}"
 
@@ -281,8 +290,8 @@ class RepOzet:
     donulmemis: int
     low_activity: bool
     reached: int
+    reached_dur: int
     booked: int
-    reached_prev: int
     booked_prev: int
 
 
@@ -1037,7 +1046,9 @@ def metric_temsilci_ozeti(
 
     port_rows = conn.execute(
         f"""
-        SELECT r.full_name, count(*)::int
+        SELECT r.full_name,
+          count(*)::int AS portfolio,
+          count(*) FILTER (WHERE {_REACH} = '{ULASILDI}')::int AS reached
         FROM leads l
         JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
         WHERE l.org_id = %s AND {sales}
@@ -1045,7 +1056,8 @@ def metric_temsilci_ozeti(
         """,
         (org_id,),
     ).fetchall()
-    portfolio = by_name(port_rows)
+    portfolio = {str(r[0]): int(r[1]) for r in port_rows}
+    reached = {str(r[0]): int(r[2]) for r in port_rows}
 
     sifir_rows = conn.execute(
         f"""
@@ -1300,43 +1312,45 @@ def metric_temsilci_ozeti(
     ).fetchall()
     donulmemis = by_name(don_rows)
 
-    funnel_rows = conn.execute(
+    booking_exists = """
+              EXISTS (
+                  SELECT 1 FROM events ev
+                  WHERE ev.org_id = l.org_id
+                    AND ev.thread_id = l.thread_id
+                    AND ev.occurred_at >= %s AND ev.occurred_at < %s
+                    AND ev.occurred_at <= now()
+                    AND (
+                        ev.meta->>'outcome_key' = 'meeting_booked'
+                        OR ev.meta->>'call_result' = 'Randevu Alındı'
+                    )
+              )
+    """
+    booked_rows = conn.execute(
         f"""
         SELECT r.full_name,
-          count(DISTINCT l.lead_id) FILTER (
-            WHERE e.occurred_at >= %s AND e.occurred_at < %s
-          )::int AS reached,
-          count(DISTINCT l.lead_id) FILTER (
-            WHERE e.occurred_at >= %s AND e.occurred_at < %s
-              AND EXISTS (
-                  SELECT 1 FROM events ev
-                  WHERE ev.org_id = l.org_id
-                    AND ev.thread_id = l.thread_id
-                    AND ev.occurred_at >= %s AND ev.occurred_at < %s
-                    AND ev.occurred_at <= now()
-                    AND (
-                        ev.meta->>'outcome_key' = 'meeting_booked'
-                        OR ev.meta->>'call_result' = 'Randevu Alındı'
-                    )
-              )
-          )::int AS booked,
-          count(DISTINCT l.lead_id) FILTER (
-            WHERE e.occurred_at >= %s AND e.occurred_at < %s
-          )::int AS reached_prev,
-          count(DISTINCT l.lead_id) FILTER (
-            WHERE e.occurred_at >= %s AND e.occurred_at < %s
-              AND EXISTS (
-                  SELECT 1 FROM events ev
-                  WHERE ev.org_id = l.org_id
-                    AND ev.thread_id = l.thread_id
-                    AND ev.occurred_at >= %s AND ev.occurred_at < %s
-                    AND ev.occurred_at <= now()
-                    AND (
-                        ev.meta->>'outcome_key' = 'meeting_booked'
-                        OR ev.meta->>'call_result' = 'Randevu Alındı'
-                    )
-              )
-          )::int AS booked_prev
+          count(*) FILTER (WHERE {booking_exists})::int AS booked,
+          count(*) FILTER (WHERE {booking_exists})::int AS booked_prev
+        FROM leads l
+        JOIN reps r
+          ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
+        WHERE l.org_id = %s
+          AND {sales}
+          AND {_REACH} = '{ULASILDI}'
+        GROUP BY r.full_name
+        """,
+        (
+            cycle_start, cycle_end,
+            prev_start, prev_end,
+            org_id,
+        ),
+    ).fetchall()
+    booked = {str(n): int(b) for n, b, _bp in booked_rows}
+    booked_prev = {str(n): int(bp) for n, _b, bp in booked_rows}
+
+    # Eski süre tanımı; HUNI metriği değil, yan yana karşılaştırma.
+    dur_rows = conn.execute(
+        f"""
+        SELECT r.full_name, count(DISTINCT l.lead_id)::int
         FROM events e
         JOIN leads l
           ON l.org_id = e.org_id AND l.thread_id = e.thread_id
@@ -1351,21 +1365,26 @@ def metric_temsilci_ozeti(
           AND e.occurred_at >= %s AND e.occurred_at < %s
         GROUP BY r.full_name
         """,
-        (
-            cycle_start, cycle_end,
-            cycle_start, cycle_end,
-            cycle_start, cycle_end,
-            prev_start, prev_end,
-            prev_start, prev_end,
-            prev_start, prev_end,
-            org_id,
-            prev_start, cycle_end,
-        ),
+        (org_id, cycle_start, cycle_end),
     ).fetchall()
-    reached = {str(n): int(a) for n, a, _b, _ap, _bp in funnel_rows}
-    booked = {str(n): int(b) for n, _a, b, _ap, _bp in funnel_rows}
-    reached_prev = {str(n): int(a) for n, _a, _b, a, _bp in funnel_rows}
-    booked_prev = {str(n): int(b) for n, _a, _b, _ap, b in funnel_rows}
+    reached_dur = by_name(dur_rows)
+
+    prev_call_row = conn.execute(
+        f"""
+        SELECT count(*)::int
+        FROM events e
+        JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+        WHERE e.org_id = %s
+          AND {sales}
+          AND e.channel = 'call' AND e.direction = 'outbound'
+          AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+          AND e.occurred_at <= now()
+          AND e.occurred_at >= %s AND e.occurred_at < %s
+        """,
+        (org_id, prev_start, prev_end),
+    ).fetchone()
+    prev_calls = int(prev_call_row[0] or 0) if prev_call_row else 0
+    prev_has_data = prev_calls > 0
 
     out: list[RepOzet] = []
     for name in names:
@@ -1396,8 +1415,8 @@ def metric_temsilci_ozeti(
                 donulmemis=donulmemis.get(name, 0),
                 low_activity=low,
                 reached=reached.get(name, 0),
+                reached_dur=reached_dur.get(name, 0),
                 booked=booked.get(name, 0),
-                reached_prev=reached_prev.get(name, 0),
                 booked_prev=booked_prev.get(name, 0),
             )
         )
@@ -1410,6 +1429,10 @@ def metric_temsilci_ozeti(
         "team_cycle_med": team_cycle_med,
         "team_cycle_n": team_cycle_n,
         "window_days": window_days,
+        "prev_start": prev_start,
+        "prev_end": prev_end,
+        "prev_calls": prev_calls,
+        "prev_has_data": prev_has_data,
     }
     return out, meta
 
@@ -1419,6 +1442,7 @@ def _format_temsilci_ozeti(
 ) -> list[str]:
     """Cliq mobil: sütun hizası yok, temsilci başına yığın."""
     days = int(meta.get("window_days", 90) or 90)
+    prev_has_data = bool(meta.get("prev_has_data"))
     parts = ["TEMSİLCİ ÖZETİ"]
     team_n = int(meta.get("team_cycle_n", 0) or 0)
     team_med = meta.get("team_cycle_med")
@@ -1472,29 +1496,37 @@ def _format_temsilci_ozeti(
         )
         parts.append(f"HUNI ({days} gün)")
         parts.append(
+            f"ulaşılan — statü {row.reached}, süre (eski) {row.reached_dur}"
+        )
+        parts.append(
             "erişim — "
             f"{_fmt_huni_pct(row.reached, p, decimals=0)}, "
-            f"{_fmt_huni_prev(row.reached_prev, p, decimals=0, days=days)}"
+            f"{_fmt_huni_prev(0, p, decimals=0, days=days, has_data=False)}"
         )
         parts.append(
             "randevu — "
             f"{_fmt_huni_pct(row.booked, row.reached, decimals=0)}, "
-            f"{_fmt_huni_prev(row.booked_prev, row.reached_prev, decimals=0, days=days)}"
+            f"{_fmt_huni_prev(row.booked_prev, row.reached, decimals=0, days=days, has_data=prev_has_data)}"
         )
         parts.append(
             "kapanış — "
             f"{_fmt_huni_pct(row.sifir_90, row.booked, decimals=0)}, "
-            f"{_fmt_huni_prev(row.sifir_prev, row.booked_prev, decimals=0, days=days)}"
+            f"{_fmt_huni_prev(row.sifir_prev, row.booked_prev, decimals=0, days=days, has_data=prev_has_data)}"
         )
         parts.append(
             "genel — "
             f"{_fmt_huni_pct(row.sifir_90, row.reached, decimals=1)}, "
-            f"{_fmt_huni_prev(row.sifir_prev, row.reached_prev, decimals=1, days=days)}"
+            f"{_fmt_huni_prev(row.sifir_prev, row.reached, decimals=1, days=days, has_data=prev_has_data)}"
         )
         parts.append(f"SONUÇ (son {days} gün)")
+        if prev_has_data and row.sifir_prev > 0:
+            sifir_prev_s = (
+                f"önceki {days} gün {_fmt_count_port(row.sifir_prev, p)}"
+            )
+        else:
+            sifir_prev_s = f"önceki {days} gün veri yok"
         parts.append(
-            f"sıfır satış — {_fmt_count_port(row.sifir_90, p)}, "
-            f"önceki {days} gün {_fmt_count_port(row.sifir_prev, p)}"
+            f"sıfır satış — {_fmt_count_port(row.sifir_90, p)}, {sifir_prev_s}"
         )
         if row.cycle_n < _MIN_SAMPLE or row.cycle_med is None:
             dongu_this = f"veri yetersiz ({row.cycle_n} satış)"
@@ -1503,8 +1535,12 @@ def _format_temsilci_ozeti(
                 f"{_fmt_cycle_days(row.cycle_med)} "
                 f"({row.cycle_n} satış)"
             )
-        if row.cycle_n_prev < _MIN_SAMPLE or row.cycle_med_prev is None:
-            dongu_prev = f"veri yetersiz ({row.cycle_n_prev} satış)"
+        if (
+            not prev_has_data
+            or row.cycle_n_prev < _MIN_SAMPLE
+            or row.cycle_med_prev is None
+        ):
+            dongu_prev = "veri yok"
         else:
             dongu_prev = (
                 f"{_fmt_cycle_days(row.cycle_med_prev)} "
@@ -1904,6 +1940,16 @@ def build_report(
         counts["temsilci_ozeti"] = len(ozet)
         parts.extend(_format_temsilci_ozeti(ozet, ozet_meta))
         if debug:
+            prev_start = ozet_meta.get("prev_start")
+            prev_end = ozet_meta.get("prev_end")
+            if isinstance(prev_start, datetime) and isinstance(prev_end, datetime):
+                prev_bounds = WeekBounds(
+                    start=prev_start, end=prev_end, label=""
+                )
+                parts.append(
+                    f"önceki pencere {_window_str(prev_bounds)} "
+                    f"çağrı={ozet_meta.get('prev_calls', 0)}"
+                )
             parts.append(
                 "tüm zaman kazanılan — "
                 f"{ozet_meta['alltime_won']} "
@@ -1915,7 +1961,8 @@ def build_report(
                 parts.append(
                     f"{row.name}: aktif={row.portfolio} "
                     f"sifir={row.sifir_90}/{row.sifir_prev} "
-                    f"reached={row.reached}/{row.reached_prev} "
+                    f"reached_status={row.reached} "
+                    f"reached_dur={row.reached_dur} "
                     f"booked={row.booked}/{row.booked_prev} "
                     f"cagri={row.calls_week}/{row.calls} "
                     f"10sn={row.talks10} dongu_n={row.cycle_n} "
