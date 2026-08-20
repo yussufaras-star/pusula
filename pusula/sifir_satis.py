@@ -1,14 +1,17 @@
-"""Sıfır satış: contact başına ilk deal.
+"""İlk kez satın alan: contact başına ilk deal.
 
-SIFIR SATIS — bir contact'ın en eski (created_at) deal'i.
-Contact'ı olmayan, doğrudan lead'e bağlı deal'lar da sıfır satış.
-TEKRAR SATIS — aynı contact'ın sonraki deal'ları.
+Hesap değişmez: contact'ın en eski (created_at) deal'i.
+Contact'ı olmayan, doğrudan lead'e bağlı deal'lar da ilk kez satın alma.
+TEKRAR SATIN ALAN — aynı contact'ın sonraki deal'ları.
 ATIFSIZ — lead çözülemeyen; temsilci atfı yok.
 
 Temsilci atfı: thread / lead üzerinden leads.owner_rep_id.
 deals.owner_rep_id performans için kullanılmaz.
 
 Contact yaşı eşiği yok; sıra yalnızca created_at (eşitlikte deal_id).
+
+İç kind değerleri (sifir/tekrar/atifsiz) hesap için sabit kalır.
+Rapor metni LABEL_* ve TERIM_* sabitlerinden gelir.
 """
 
 from __future__ import annotations
@@ -17,9 +20,19 @@ from typing import Literal
 
 SaleKind = Literal["sifir", "tekrar", "atifsiz"]
 
-SIFIR: SaleKind = "sifir"
-TEKRAR: SaleKind = "tekrar"
+# İç kind; SQL CASE çıktısı değişmez.
+ILK_SATIN_ALAN: SaleKind = "sifir"
+TEKRAR_SATIN_ALAN: SaleKind = "tekrar"
 ATIFSIZ: SaleKind = "atifsiz"
+
+LABEL_ILK_SATIN_ALAN = "ilk kez satın alan"
+LABEL_TEKRAR_SATIN_ALAN = "tekrar satın alan"
+BASLIK_ILK_SATIN_ALAN = "İlk kez satın alan"
+
+TERIM_ILK_SATIN_ALAN = (
+    f"{BASLIK_ILK_SATIN_ALAN} — o kişiye yapılan ilk satış. "
+    "Aynı kişiye sonradan yapılan satışlar tekrar satın alma sayılır."
+)
 
 # Zoho Deals Stage display (kazanılan).
 WON_STAGE = "Kapandı Kazanıldı"
@@ -36,11 +49,11 @@ def won_stage_sql(alias: str = "cl") -> str:
 def classified_deals_cte() -> str:
     """first_deal + classified. classified.org_id = %s (bir placeholder).
 
-    classified.kind: sifir | tekrar | atifsiz
+    classified.kind: sifir | tekrar | atifsiz (iç değer, hesap aynı)
     classified.lead_owner_rep_id: leads.owner_rep_id (deal owner değil).
     """
-    sifir = _sql_str(SIFIR)
-    tekrar = _sql_str(TEKRAR)
+    ilk = _sql_str(ILK_SATIN_ALAN)
+    tekrar = _sql_str(TEKRAR_SATIN_ALAN)
     atifsiz = _sql_str(ATIFSIZ)
     return f"""
     first_deal AS (
@@ -70,8 +83,8 @@ def classified_deals_cte() -> str:
             CASE
                 WHEN coalesce(d.lead_id, c.lead_id, tl.lead_id) IS NULL
                     THEN {atifsiz}
-                WHEN d.contact_id IS NULL THEN {sifir}
-                WHEN coalesce(fd.contact_rn, 1) = 1 THEN {sifir}
+                WHEN d.contact_id IS NULL THEN {ilk}
+                WHEN coalesce(fd.contact_rn, 1) = 1 THEN {ilk}
                 ELSE {tekrar}
             END AS kind
         FROM deals d

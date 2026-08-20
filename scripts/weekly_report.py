@@ -7,7 +7,7 @@ Metrikler (özetlenen hafta / bir önceki), yalnız sayı:
   d) Dönülmemiş randevu — Randevu Alındı, sonrası ulaşılmış çağrı yok
   e) Arama verimi — 1/2/3. denemede temas %; 15:00+ temas % ve çağrı
   f) Haftanın hareketi — çağrı, 10 sn+ görüşme, yeni/tutulan/bozulan taahhüt
-  g) Satış — sıfır / tekrar / atıfsız; medyan döngü (güvenilir sıfır)
+  g) Satış — ilk kez satın alan / tekrar satın alan / atıfsız; medyan döngü
   h) Temsilci özeti — FAALİYET (4 hafta) / HUNI+SONUÇ (--pencere gün)
      HUNI ulaşılan: Zoho status (lead_reach). Süre HUNI'de yok.
 
@@ -59,8 +59,12 @@ from pusula.lead_reach import (
 )
 from pusula.sifir_satis import (
     ATIFSIZ,
-    SIFIR,
-    TEKRAR,
+    BASLIK_ILK_SATIN_ALAN,
+    ILK_SATIN_ALAN,
+    LABEL_ILK_SATIN_ALAN,
+    LABEL_TEKRAR_SATIN_ALAN,
+    TEKRAR_SATIN_ALAN,
+    TERIM_ILK_SATIN_ALAN,
     classified_deals_cte,
     won_stage_sql,
 )
@@ -272,8 +276,8 @@ def _latest_lead_owner_join(table_alias: str = "c") -> str:
 class RepOzet:
     name: str
     portfolio: int
-    sifir_90: int
-    sifir_prev: int
+    ilk_satin_alan: int
+    ilk_satin_alan_prev: int
     calls_week: int
     calls: int
     talks10: int
@@ -895,7 +899,7 @@ def metric_satis(
     org_id: str,
     week: WeekBounds,
 ) -> tuple[dict[str, Any], int, dict[str, Any]]:
-    """Kazanılan: sıfır / tekrar / atıfsız; temsilci sıfır; medyan döngü."""
+    """Kazanılan: ilk kez / tekrar satın alan / atıfsız; medyan döngü."""
     cte = classified_deals_cte()
     won = won_stage_sql("cl")
     week_filter = f"""
@@ -908,16 +912,16 @@ def metric_satis(
         f"""
         WITH {cte}
         SELECT
-          count(*) FILTER (WHERE cl.kind = '{SIFIR}')::int,
-          count(*) FILTER (WHERE cl.kind = '{TEKRAR}')::int,
+          count(*) FILTER (WHERE cl.kind = '{ILK_SATIN_ALAN}')::int,
+          count(*) FILTER (WHERE cl.kind = '{TEKRAR_SATIN_ALAN}')::int,
           count(*) FILTER (WHERE cl.kind = '{ATIFSIZ}')::int
         FROM classified cl
         WHERE {week_filter}
         """,
         (org_id, week.start, week.end),
     ).fetchone()
-    n_sifir = int(row[0] or 0) if row else 0
-    n_tekrar = int(row[1] or 0) if row else 0
+    n_ilk_satin_alan = int(row[0] or 0) if row else 0
+    n_tekrar_satin_alan = int(row[1] or 0) if row else 0
     n_atif = int(row[2] or 0) if row else 0
 
     four_start, four_end = _four_week_window(week)
@@ -941,7 +945,7 @@ def metric_satis(
         JOIN reps r
           ON r.org_id = cl.org_id AND r.rep_id = cl.lead_owner_rep_id
         WHERE {week_filter}
-          AND cl.kind = '{SIFIR}'
+          AND cl.kind = '{ILK_SATIN_ALAN}'
           AND r.category = 'sales' AND r.active = true
         GROUP BY r.full_name
         ORDER BY count(*) DESC, r.full_name
@@ -961,7 +965,7 @@ def metric_satis(
           count(*)::int
         FROM classified cl
         WHERE {week_filter}
-          AND cl.kind = '{SIFIR}'
+          AND cl.kind = '{ILK_SATIN_ALAN}'
           AND cl.cycle_start_reliable IS TRUE
           AND cl.cycle_start_at IS NOT NULL
           AND cl.closed_at > cl.cycle_start_at
@@ -1002,8 +1006,8 @@ def metric_satis(
     ).fetchone()
 
     data: dict[str, Any] = {
-        "sifir": n_sifir,
-        "tekrar": n_tekrar,
+        "ilk_satin_alan": n_ilk_satin_alan,
+        "tekrar_satin_alan": n_tekrar_satin_alan,
         "atifsiz": n_atif,
         "atifsiz_4w": n_atif_4w,
         "reps": reps,
@@ -1017,7 +1021,7 @@ def metric_satis(
             float(avg_row[0]) if avg_row and avg_row[0] is not None else 0.0
         ),
     }
-    n = n_sifir + n_tekrar + n_atif
+    n = n_ilk_satin_alan + n_tekrar_satin_alan + n_atif
     return data, n, debug
 
 
@@ -1028,7 +1032,7 @@ def metric_temsilci_ozeti(
     *,
     window_days: int = 90,
 ) -> tuple[list[RepOzet], dict[str, Any]]:
-    """Satış temsilcisi satırları; sıra pencere içi sıfır satış."""
+    """Satış temsilcisi satırları; sıra pencere içi ilk kez satın alan."""
     four_start, four_end = _four_week_window(week)
     cycle_start, cycle_end = _days_window(week, window_days)
     prev_start, prev_end = _prev_days_window(week, window_days)
@@ -1059,7 +1063,7 @@ def metric_temsilci_ozeti(
     portfolio = {str(r[0]): int(r[1]) for r in port_rows}
     reached = {str(r[0]): int(r[2]) for r in port_rows}
 
-    sifir_rows = conn.execute(
+    ilk_rows = conn.execute(
         f"""
         WITH {cte}
         SELECT r.full_name, count(*)::int
@@ -1067,7 +1071,7 @@ def metric_temsilci_ozeti(
         JOIN reps r
           ON r.org_id = cl.org_id AND r.rep_id = cl.lead_owner_rep_id
         WHERE {won}
-          AND cl.kind = '{SIFIR}'
+          AND cl.kind = '{ILK_SATIN_ALAN}'
           AND cl.closed_at IS NOT NULL
           AND cl.closed_at <= now()
           AND cl.closed_at >= %s AND cl.closed_at < %s
@@ -1076,9 +1080,9 @@ def metric_temsilci_ozeti(
         """,
         (org_id, cycle_start, cycle_end),
     ).fetchall()
-    sifir_90 = by_name(sifir_rows)
+    ilk_satin_alan = by_name(ilk_rows)
 
-    sifir_prev_rows = conn.execute(
+    ilk_prev_rows = conn.execute(
         f"""
         WITH {cte}
         SELECT r.full_name, count(*)::int
@@ -1086,7 +1090,7 @@ def metric_temsilci_ozeti(
         JOIN reps r
           ON r.org_id = cl.org_id AND r.rep_id = cl.lead_owner_rep_id
         WHERE {won}
-          AND cl.kind = '{SIFIR}'
+          AND cl.kind = '{ILK_SATIN_ALAN}'
           AND cl.closed_at IS NOT NULL
           AND cl.closed_at <= now()
           AND cl.closed_at >= %s AND cl.closed_at < %s
@@ -1095,14 +1099,14 @@ def metric_temsilci_ozeti(
         """,
         (org_id, prev_start, prev_end),
     ).fetchall()
-    sifir_prev = by_name(sifir_prev_rows)
+    ilk_satin_alan_prev = by_name(ilk_prev_rows)
 
     alltime_row = conn.execute(
         f"""
         WITH {cte}
         SELECT
-          count(*) FILTER (WHERE cl.kind = '{SIFIR}')::int,
-          count(*) FILTER (WHERE cl.kind = '{TEKRAR}')::int,
+          count(*) FILTER (WHERE cl.kind = '{ILK_SATIN_ALAN}')::int,
+          count(*) FILTER (WHERE cl.kind = '{TEKRAR_SATIN_ALAN}')::int,
           count(*) FILTER (WHERE cl.kind = '{ATIFSIZ}')::int,
           count(*)::int
         FROM classified cl
@@ -1112,7 +1116,7 @@ def metric_temsilci_ozeti(
         """,
         (org_id,),
     ).fetchone()
-    alltime_sifir = int(alltime_row[0] or 0) if alltime_row else 0
+    alltime_ilk_satin_alan = int(alltime_row[0] or 0) if alltime_row else 0
     alltime_tekrar = int(alltime_row[1] or 0) if alltime_row else 0
     alltime_atifsiz = int(alltime_row[2] or 0) if alltime_row else 0
     alltime_won = int(alltime_row[3] or 0) if alltime_row else 0
@@ -1130,7 +1134,7 @@ def metric_temsilci_ozeti(
         JOIN reps r
           ON r.org_id = cl.org_id AND r.rep_id = cl.lead_owner_rep_id
         WHERE {won}
-          AND cl.kind = '{SIFIR}'
+          AND cl.kind = '{ILK_SATIN_ALAN}'
           AND cl.cycle_start_reliable IS TRUE
           AND cl.cycle_start_at IS NOT NULL
           AND cl.closed_at > cl.cycle_start_at
@@ -1160,7 +1164,7 @@ def metric_temsilci_ozeti(
         JOIN reps r
           ON r.org_id = cl.org_id AND r.rep_id = cl.lead_owner_rep_id
         WHERE {won}
-          AND cl.kind = '{SIFIR}'
+          AND cl.kind = '{ILK_SATIN_ALAN}'
           AND cl.cycle_start_reliable IS TRUE
           AND cl.cycle_start_at IS NOT NULL
           AND cl.closed_at > cl.cycle_start_at
@@ -1190,7 +1194,7 @@ def metric_temsilci_ozeti(
         JOIN reps r
           ON r.org_id = cl.org_id AND r.rep_id = cl.lead_owner_rep_id
         WHERE {won}
-          AND cl.kind = '{SIFIR}'
+          AND cl.kind = '{ILK_SATIN_ALAN}'
           AND cl.cycle_start_reliable IS TRUE
           AND cl.cycle_start_at IS NOT NULL
           AND cl.closed_at > cl.cycle_start_at
@@ -1397,8 +1401,8 @@ def metric_temsilci_ozeti(
             RepOzet(
                 name=name,
                 portfolio=portfolio.get(name, 0),
-                sifir_90=sifir_90.get(name, 0),
-                sifir_prev=sifir_prev.get(name, 0),
+                ilk_satin_alan=ilk_satin_alan.get(name, 0),
+                ilk_satin_alan_prev=ilk_satin_alan_prev.get(name, 0),
                 calls_week=n_week,
                 calls=n_4w,
                 talks10=talks10.get(name, 0),
@@ -1420,9 +1424,9 @@ def metric_temsilci_ozeti(
                 booked_prev=booked_prev.get(name, 0),
             )
         )
-    out.sort(key=lambda r: (-r.sifir_90, r.name))
+    out.sort(key=lambda r: (-r.ilk_satin_alan, r.name))
     meta: dict[str, Any] = {
-        "alltime_sifir": alltime_sifir,
+        "alltime_ilk_satin_alan": alltime_ilk_satin_alan,
         "alltime_tekrar": alltime_tekrar,
         "alltime_atifsiz": alltime_atifsiz,
         "alltime_won": alltime_won,
@@ -1510,23 +1514,24 @@ def _format_temsilci_ozeti(
         )
         parts.append(
             "kapanış — "
-            f"{_fmt_huni_pct(row.sifir_90, row.booked, decimals=0)}, "
-            f"{_fmt_huni_prev(row.sifir_prev, row.booked_prev, decimals=0, days=days, has_data=prev_has_data)}"
+            f"{_fmt_huni_pct(row.ilk_satin_alan, row.booked, decimals=0)}, "
+            f"{_fmt_huni_prev(row.ilk_satin_alan_prev, row.booked_prev, decimals=0, days=days, has_data=prev_has_data)}"
         )
         parts.append(
             "genel — "
-            f"{_fmt_huni_pct(row.sifir_90, row.reached, decimals=1)}, "
-            f"{_fmt_huni_prev(row.sifir_prev, row.reached, decimals=1, days=days, has_data=prev_has_data)}"
+            f"{_fmt_huni_pct(row.ilk_satin_alan, row.reached, decimals=1)}, "
+            f"{_fmt_huni_prev(row.ilk_satin_alan_prev, row.reached, decimals=1, days=days, has_data=prev_has_data)}"
         )
         parts.append(f"SONUÇ (son {days} gün)")
-        if prev_has_data and row.sifir_prev > 0:
-            sifir_prev_s = (
-                f"önceki {days} gün {_fmt_count_port(row.sifir_prev, p)}"
+        if prev_has_data and row.ilk_satin_alan_prev > 0:
+            ilk_prev_s = (
+                f"önceki {days} gün {_fmt_count_port(row.ilk_satin_alan_prev, p)}"
             )
         else:
-            sifir_prev_s = f"önceki {days} gün veri yok"
+            ilk_prev_s = f"önceki {days} gün veri yok"
         parts.append(
-            f"sıfır satış — {_fmt_count_port(row.sifir_90, p)}, {sifir_prev_s}"
+            f"{LABEL_ILK_SATIN_ALAN} — "
+            f"{_fmt_count_port(row.ilk_satin_alan, p)}, {ilk_prev_s}"
         )
         if row.cycle_n < _MIN_SAMPLE or row.cycle_med is None:
             dongu_this = f"veri yetersiz ({row.cycle_n} satış)"
@@ -1887,13 +1892,18 @@ def build_report(
         last_s, n2, _last_dbg = metric_satis(conn, org_id, last_w)
         counts["satis"] = n1 + n2
         parts.append("SATIŞ")
-        parts.append("Bu hafta kazanılan — sıfır / tekrar / atıfsız")
         parts.append(
-            f"{this_s['sifir']} / {this_s['tekrar']} / {this_s['atifsiz']} "
-            f"(önceki hafta {last_s['sifir']} / {last_s['tekrar']} / "
+            "Bu hafta kazanılan — "
+            f"{LABEL_ILK_SATIN_ALAN} / {LABEL_TEKRAR_SATIN_ALAN} / atıfsız"
+        )
+        parts.append(
+            f"{this_s['ilk_satin_alan']} / {this_s['tekrar_satin_alan']} / "
+            f"{this_s['atifsiz']} "
+            f"(önceki hafta {last_s['ilk_satin_alan']} / "
+            f"{last_s['tekrar_satin_alan']} / "
             f"{last_s['atifsiz']})"
         )
-        parts.append("Sıfır satış (lead sahibi)")
+        parts.append(f"{BASLIK_ILK_SATIN_ALAN} (lead sahibi)")
         reps = this_s["reps"]
         if not reps:
             parts.append("(veri yok)")
@@ -1911,7 +1921,7 @@ def build_report(
                 f"Medyan satış döngüsü — {_fmt_cycle_days(float(med))} "
                 f"({n_cyc} kayıt)"
             )
-        parts.append("hedef: sıfır satış sayısı artmalı")
+        parts.append(f"hedef: {LABEL_ILK_SATIN_ALAN} sayısı artmalı")
         parts.append(
             "atıfsız deal (bu hafta / 4 hafta) — "
             f"{this_s['atifsiz']} / {this_s['atifsiz_4w']}"
@@ -1953,14 +1963,14 @@ def build_report(
             parts.append(
                 "tüm zaman kazanılan — "
                 f"{ozet_meta['alltime_won']} "
-                f"(sıfır {ozet_meta['alltime_sifir']} / "
-                f"tekrar {ozet_meta['alltime_tekrar']} / "
+                f"({LABEL_ILK_SATIN_ALAN} {ozet_meta['alltime_ilk_satin_alan']} / "
+                f"{LABEL_TEKRAR_SATIN_ALAN} {ozet_meta['alltime_tekrar']} / "
                 f"atıfsız {ozet_meta['alltime_atifsiz']})"
             )
             for row in ozet:
                 parts.append(
                     f"{row.name}: aktif={row.portfolio} "
-                    f"sifir={row.sifir_90}/{row.sifir_prev} "
+                    f"ilk_satin_alan={row.ilk_satin_alan}/{row.ilk_satin_alan_prev} "
                     f"reached_status={row.reached} "
                     f"reached_dur={row.reached_dur} "
                     f"booked={row.booked}/{row.booked_prev} "
@@ -1976,6 +1986,10 @@ def build_report(
         errors += 1
         parts.append(f"TEMSİLCİ ÖZETİ: hata ({exc})")
         parts.append("")
+
+    parts.append("TERİMLER")
+    parts.append(TERIM_ILK_SATIN_ALAN)
+    parts.append("")
 
     return "\n".join(parts).rstrip() + "\n", counts, errors
 
