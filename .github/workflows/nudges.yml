@@ -16,9 +16,11 @@ permissions:
 
 env:
   PYTHONUNBUFFERED: "1"
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
   DATABASE_URL_POOLED: ${{ secrets.DATABASE_URL_POOLED }}
   CLIQ_WEBHOOK_URL: ${{ secrets.CLIQ_WEBHOOK_URL }}
   PUSULA_SHADOW_EMAIL: ${{ secrets.PUSULA_SHADOW_EMAIL }}
+  PUSULA_EXTRA_RECIPIENTS: ${{ secrets.PUSULA_EXTRA_RECIPIENTS }}
 
 jobs:
   nudges:
