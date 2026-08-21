@@ -172,6 +172,11 @@ CREATE TABLE IF NOT EXISTS leads (
             'active', 'stale', 'aging', 'archived', 'nurture', 'closed'
         )),
     pusula_state_at   timestamptz,
+    status_changed_at timestamptz,
+    status_changed_source text
+        CHECK (status_changed_source IS NULL OR status_changed_source IN (
+            'gercek', 'tahmini'
+        )),
     created_at        timestamptz DEFAULT now(),
     PRIMARY KEY (org_id, lead_id),
     FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id)
@@ -181,6 +186,9 @@ CREATE INDEX IF NOT EXISTS idx_leads_thread ON leads (org_id, thread_id);
 CREATE INDEX IF NOT EXISTS idx_leads_assigned_at ON leads (org_id, assigned_at);
 CREATE INDEX IF NOT EXISTS idx_leads_pusula_state
     ON leads (org_id, pusula_state, owner_rep_id);
+CREATE INDEX IF NOT EXISTS idx_leads_karar_bekleyen
+    ON leads (org_id, owner_rep_id, status_changed_at)
+    WHERE status = 'Düşünmek İstiyor';
 
 -- contacts: Zoho Contacts (Deal → Contact → Lead zinciri için).
 -- lead_id Zoho'da doğrudan yok; thread üzerindeki zoho_lead kimliğinden çözülür.
@@ -309,6 +317,16 @@ ALTER TABLE leads ADD CONSTRAINT leads_pusula_state_check
     ));
 CREATE INDEX IF NOT EXISTS idx_leads_pusula_state
     ON leads (org_id, pusula_state, owner_rep_id);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS status_changed_at timestamptz;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS status_changed_source text;
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_status_changed_source_check;
+ALTER TABLE leads ADD CONSTRAINT leads_status_changed_source_check
+    CHECK (status_changed_source IS NULL OR status_changed_source IN (
+        'gercek', 'tahmini'
+    ));
+CREATE INDEX IF NOT EXISTS idx_leads_karar_bekleyen
+    ON leads (org_id, owner_rep_id, status_changed_at)
+    WHERE status = 'Düşünmek İstiyor';
 
 -- contacts / deals: mevcut DB'lere idempotent ekleme.
 CREATE TABLE IF NOT EXISTS contacts (
@@ -449,6 +467,6 @@ CREATE TABLE IF NOT EXISTS rep_snapshots (
 );
 
 -- nudges.nudge_type bilinen değerler (serbest text; yeni tip eklenince güncelle):
--- pencere_aciliyor | kayip_randevu | gecikmis_taahhut | planlanmis_arama
+-- pencere_aciliyor | kayip_randevu | gecikmis_taahhut | planlanmis_arama | karar_bekleyen
 
 
