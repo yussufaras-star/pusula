@@ -154,6 +154,77 @@ CREATE TABLE IF NOT EXISTS blocked_domains (
 
 CREATE INDEX IF NOT EXISTS idx_identities_thread ON identities (thread_id);
 
+-- leads: Zoho Leads özeti (48s / 3 arama penceresi için).
+-- assigned_at = Created_Time; Zoho metadata'da ayrı Owner atama alanı yok.
+-- status = Zoho Lead_Status (salt okunur; Pusula yazmaz).
+-- pusula_state = yerel durum otomasyonu (Zoho'ya yazılmaz).
+CREATE TABLE IF NOT EXISTS leads (
+    org_id            text NOT NULL DEFAULT 'rexven',
+    lead_id           text NOT NULL,
+    thread_id         text,
+    status            text,
+    owner_rep_id      text,
+    assigned_at       timestamptz,
+    source            text,
+    full_name         text,  -- Zoho Full_Name; identities'e yazılmaz
+    pusula_state      text
+        CHECK (pusula_state IS NULL OR pusula_state IN (
+            'active', 'stale', 'aging', 'archived', 'nurture', 'closed'
+        )),
+    pusula_state_at   timestamptz,
+    created_at        timestamptz DEFAULT now(),
+    PRIMARY KEY (org_id, lead_id),
+    FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_leads_thread ON leads (org_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_leads_assigned_at ON leads (org_id, assigned_at);
+CREATE INDEX IF NOT EXISTS idx_leads_pusula_state
+    ON leads (org_id, pusula_state, owner_rep_id);
+
+-- contacts: Zoho Contacts (Deal → Contact → Lead zinciri için).
+-- lead_id Zoho'da doğrudan yok; thread üzerindeki zoho_lead kimliğinden çözülür.
+CREATE TABLE IF NOT EXISTS contacts (
+    org_id         text NOT NULL DEFAULT 'rexven',
+    contact_id     text NOT NULL,
+    lead_id        text,
+    thread_id      text,
+    created_at     timestamptz,
+    owner_rep_id   text,
+    full_name      text,  -- Zoho Full_Name; identities'e yazılmaz
+    PRIMARY KEY (org_id, contact_id),
+    FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_thread ON contacts (org_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_contacts_lead ON contacts (org_id, lead_id);
+
+-- deals: Zoho Deals (satış). cycle_start_at = bağlı lead'in Zoho Created_Time
+-- (leads.assigned_at). Nisan 2026 toplu taşıma lead'lerinde
+-- cycle_start_reliable = false.
+CREATE TABLE IF NOT EXISTS deals (
+    org_id                 text NOT NULL DEFAULT 'rexven',
+    deal_id                text NOT NULL,
+    contact_id             text,
+    lead_id                text,
+    thread_id              text,
+    stage                  text,
+    amount                 numeric,
+    created_at             timestamptz,
+    closed_at              timestamptz,
+    owner_rep_id           text,
+    source                 text,
+    cycle_start_at         timestamptz,
+    cycle_start_reliable   boolean,
+    PRIMARY KEY (org_id, deal_id),
+    FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_deals_owner_created
+    ON deals (org_id, owner_rep_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_deals_thread ON deals (org_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_deals_contact ON deals (org_id, contact_id);
+
 -- reps: satış temsilcileri (Zoho kullanıcıları).
 -- category TÜRETİLMİŞ bir alandır; her sync'te şöyle hesaplanır:
 --   coalesce(category_override, role_category_map[zoho_role], 'other')
@@ -227,10 +298,61 @@ ALTER TABLE blocked_identifiers ADD COLUMN IF NOT EXISTS org_id text NOT NULL DE
 ALTER TABLE blocked_domains     ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
 ALTER TABLE reps                ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
 ALTER TABLE role_category_map   ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
+ALTER TABLE leads               ADD COLUMN IF NOT EXISTS org_id text NOT NULL DEFAULT 'rexven';
+ALTER TABLE leads               ADD COLUMN IF NOT EXISTS full_name text;
+ALTER TABLE leads               ADD COLUMN IF NOT EXISTS pusula_state text;
+ALTER TABLE leads               ADD COLUMN IF NOT EXISTS pusula_state_at timestamptz;
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_pusula_state_check;
+ALTER TABLE leads ADD CONSTRAINT leads_pusula_state_check
+    CHECK (pusula_state IS NULL OR pusula_state IN (
+        'active', 'stale', 'aging', 'archived', 'nurture', 'closed'
+    ));
+CREATE INDEX IF NOT EXISTS idx_leads_pusula_state
+    ON leads (org_id, pusula_state, owner_rep_id);
+
+-- contacts / deals: mevcut DB'lere idempotent ekleme.
+CREATE TABLE IF NOT EXISTS contacts (
+    org_id         text NOT NULL DEFAULT 'rexven',
+    contact_id     text NOT NULL,
+    lead_id        text,
+    thread_id      text,
+    created_at     timestamptz,
+    owner_rep_id   text,
+    full_name      text,
+    PRIMARY KEY (org_id, contact_id),
+    FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id)
+);
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS full_name text;
+CREATE INDEX IF NOT EXISTS idx_contacts_thread ON contacts (org_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_contacts_lead ON contacts (org_id, lead_id);
+
+CREATE TABLE IF NOT EXISTS deals (
+    org_id                 text NOT NULL DEFAULT 'rexven',
+    deal_id                text NOT NULL,
+    contact_id             text,
+    lead_id                text,
+    thread_id              text,
+    stage                  text,
+    amount                 numeric,
+    created_at             timestamptz,
+    closed_at              timestamptz,
+    owner_rep_id           text,
+    source                 text,
+    cycle_start_at         timestamptz,
+    cycle_start_reliable   boolean,
+    PRIMARY KEY (org_id, deal_id),
+    FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id)
+);
+CREATE INDEX IF NOT EXISTS idx_deals_owner_created
+    ON deals (org_id, owner_rep_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_deals_thread ON deals (org_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_deals_contact ON deals (org_id, contact_id);
 
 -- threads PK'sı değişeceği için ona bağımlı FK önce bırakılır.
 ALTER TABLE identities DROP CONSTRAINT IF EXISTS identities_thread_id_fkey;
 ALTER TABLE identities DROP CONSTRAINT IF EXISTS identities_org_id_thread_id_fkey;
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_org_id_thread_id_fkey;
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_thread_id_fkey;
 
 -- threads: PK (org_id, thread_id) + segment FK'sı.
 ALTER TABLE threads DROP CONSTRAINT IF EXISTS threads_org_id_segment_fkey;
@@ -245,6 +367,11 @@ ALTER TABLE identities DROP CONSTRAINT IF EXISTS identities_org_id_id_type_id_va
 ALTER TABLE identities ADD CONSTRAINT identities_org_id_id_type_id_value_key
     UNIQUE (org_id, id_type, id_value);
 ALTER TABLE identities ADD CONSTRAINT identities_org_id_thread_id_fkey
+    FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id);
+
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_pkey;
+ALTER TABLE leads ADD CONSTRAINT leads_pkey PRIMARY KEY (org_id, lead_id);
+ALTER TABLE leads ADD CONSTRAINT leads_org_id_thread_id_fkey
     FOREIGN KEY (org_id, thread_id) REFERENCES threads (org_id, thread_id);
 
 -- events: ingest tekilliği org bazlı.
@@ -307,3 +434,21 @@ CREATE TABLE IF NOT EXISTS call_statuses (
     status_key  text NOT NULL,  -- connected | no_answer | failed | unknown
     PRIMARY KEY (org_id, raw_value)
 );
+
+-- rep_snapshots: temsilci günlük metrikleri (haftalık karşılaştırma).
+-- scripts/take_snapshot.py yazar; (snapshot_date, rep_id) upsert.
+CREATE TABLE IF NOT EXISTS rep_snapshots (
+    snapshot_date   date NOT NULL,
+    rep_id          text NOT NULL,
+    bekleyen_lead   integer NOT NULL DEFAULT 0,
+    kayip_randevu   integer NOT NULL DEFAULT 0,
+    acik_taahhut    integer NOT NULL DEFAULT 0,
+    tutulan_hafta   integer NOT NULL DEFAULT 0,
+    bozulan_hafta   integer NOT NULL DEFAULT 0,
+    PRIMARY KEY (snapshot_date, rep_id)
+);
+
+-- nudges.nudge_type bilinen değerler (serbest text; yeni tip eklenince güncelle):
+-- pencere_aciliyor | kayip_randevu | gecikmis_taahhut | planlanmis_arama
+
+

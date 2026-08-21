@@ -1,12 +1,13 @@
 """Kayıtlı ingester'ları çalıştırır ve özet tablosu basar.
 
 Kullanım:
-    python scripts/run_ingest.py --source verimor_calls
+    python scripts/run_ingest.py
+    python scripts/run_ingest.py --source zoho_crm_calls
     python scripts/run_ingest.py --source all --since 2026-07-01T00:00:00
     python scripts/run_ingest.py --source zoho_crm_calls --dry-run --limit 50
 
---source all kayıtlı tüm ingester'ları sırayla çalıştırır. --since
-ISO 8601 tarih alır; saat dilimi verilmemişse Europe/Istanbul sayılır.
+Varsayılan --source all (kayıtlı tüm ingester'lar; şu an zoho_crm_calls).
+--since ISO 8601; saat dilimi yoksa Europe/Istanbul.
 --limit verilirse o kadar kayıt çekildikten sonra fetch durur.
 --debug-query oluşturulmuş COQL'i basar (kişisel veri yok).
 --dry-run DB'ye yazmaz, sayıları ve örnek Event'leri gösterir.
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from collections.abc import Iterator
 from datetime import datetime
@@ -119,6 +121,8 @@ def _apply_fetch_options(
                 logger.info("%s kayıt işlendi", count)
             yield raw
             if limit is not None and count >= limit:
+                # base.run watermark'ı ilerletmesin.
+                setattr(ingester, "fetch_truncated", True)
                 break
 
     ingester.fetch = fetch_with_progress  # type: ignore[method-assign]
@@ -126,8 +130,18 @@ def _apply_fetch_options(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Kayıtlı ingester'ları çalıştırır.")
-    parser.add_argument("--source", required=True, help="ingester adı veya 'all'")
-    parser.add_argument("--since", help="ISO 8601 başlangıç zamanı (watermark yerine)")
+    parser.add_argument(
+        "--source",
+        default="all",
+        help="ingester adı veya 'all' (varsayılan: all)",
+    )
+    parser.add_argument(
+        "--since",
+        help=(
+            "ISO 8601 baslangic (sync_state watermark yerine). "
+            "Ornek: 2026-08-01 — boslugu idempotent geri doldurur"
+        ),
+    )
     parser.add_argument(
         "--limit",
         type=int,
@@ -171,6 +185,8 @@ def main() -> int:
             print(exc.args[0])
             return 1
 
+    print(f"ingester: {[c.source_name for c in ingester_classes]}")
+
     results: list[IngestResult] = []
     identity_notes: list[str] = []
     unknown_picklists: list[tuple[str, str, dict[str, int]]] = []
@@ -179,13 +195,37 @@ def main() -> int:
         ingester = ingester_cls()
         _apply_fetch_options(ingester, args.limit, args.debug_query)
         try:
-            results.append(ingester.run(since=since, dry_run=args.dry_run))
+            result = ingester.run(since=since, dry_run=args.dry_run)
+            results.append(result)
+            written = result.inserted
+            if getattr(ingester, "fetch_truncated", False):
+                print(
+                    f"{result.source_name}: KISMI CEKIM — watermark guncellenmedi "
+                    f"(fetched={result.fetched}, yazilan={written}, "
+                    f"duplicated={result.duplicated}, skipped={result.skipped}, "
+                    f"failed={result.failed})"
+                )
+            elif written == 0:
+                print(
+                    f"{result.source_name}: 0 kayit yazildi "
+                    f"(fetched={result.fetched}, duplicated={result.duplicated}, "
+                    f"skipped={result.skipped}, failed={result.failed})"
+                )
+            else:
+                print(
+                    f"{result.source_name}: yazilan={written} "
+                    f"(fetched={result.fetched}, duplicated={result.duplicated}, "
+                    f"skipped={result.skipped}, failed={result.failed})"
+                )
             stats = getattr(ingester, "lead_identity_stats", None)
             if isinstance(stats, dict):
                 identity_notes.append(
-                    f"kimlik zenginleştirme: {stats.get('leads_seen', stats.get('processed', 0))} lead, "
+                    f"kimlik zenginlestirme: islenen={stats.get('processed', 0)} "
+                    f"(gorulen={stats.get('leads_seen', stats.get('processed', 0))}), "
                     f"+{stats.get('phones_added', 0)} telefon, "
-                    f"+{stats.get('emails_added', 0)} e-posta"
+                    f"+{stats.get('emails_added', 0)} e-posta, "
+                    f"leads yazilan={stats.get('leads_written', 0)}, "
+                    f"hata={stats.get('errors', 0)}"
                 )
             unknown_outcomes = getattr(ingester, "unknown_outcomes", None)
             if isinstance(unknown_outcomes, dict) and unknown_outcomes:
@@ -216,6 +256,23 @@ def main() -> int:
                 print(f"  ({source_name} / {kind})")
                 for value, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
                     print(f"    {value!r}: {count}")
+
+    # Tazelik: ingest adımları bittikten sonra.
+    try:
+        from pusula.config import get_org_id
+        from pusula.freshness import print_freshness
+
+        database_url = (
+            os.environ.get("DATABASE_URL_POOLED")
+            or os.environ.get("DATABASE_URL")
+        )
+        if database_url:
+            import psycopg
+
+            with psycopg.connect(database_url, prepare_threshold=None) as conn:
+                print_freshness(conn, get_org_id())
+    except Exception as exc:
+        print(f"tazelik satiri basılamadı: {exc}")
 
     return 1 if had_error else 0
 

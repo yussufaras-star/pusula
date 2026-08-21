@@ -1,10 +1,9 @@
-"""Açık commitment'ları CRM call_status ve sonraki aramalara göre günceller.
+"""Açık commitment'ları sonraki aramalara ve vadeye göre günceller.
 
 Kurallar (öncelik sırasıyla):
   1. Aynı thread'de due_at'ten sonra gerçekleşmiş, scheduled olmayan
      bir call event varsa → fulfilled (+ fulfilled_event_id)
-  2. due_at geçmişte VE kaynak event meta.call_status = 'overdue'
-     → broken
+  2. due_at geçmişte VE sonrasında uygun bir call event yok → broken
   3. Diğerleri open kalır
 
 Kullanım:
@@ -32,7 +31,6 @@ _CANDIDATES_SQL = """
     SELECT
         c.id AS commitment_id,
         c.due_at < now() AS is_past,
-        e.meta->>'call_status' AS call_status,
         (
             SELECT e2.id
             FROM events e2
@@ -46,7 +44,6 @@ _CANDIDATES_SQL = """
             LIMIT 1
         ) AS fulfill_event_id
     FROM commitments c
-    LEFT JOIN events e ON e.id = c.source_event_id
     WHERE c.org_id = %s
       AND c.status = 'open'
 """
@@ -77,17 +74,17 @@ def main() -> int:
             to_broken: list[int] = []
             to_fulfilled: list[tuple[int, int]] = []
 
-            for commitment_id, is_past, call_status, fulfill_event_id in rows:
+            for commitment_id, is_past, fulfill_event_id in rows:
                 if fulfill_event_id is not None:
                     to_fulfilled.append((int(commitment_id), int(fulfill_event_id)))
-                elif is_past and call_status == "overdue":
+                elif is_past:
                     to_broken.append(int(commitment_id))
 
             stay_open = len(rows) - len(to_fulfilled) - len(to_broken)
-            print(f"açık commitment: {len(rows)} (org={org_id})")
-            print(f"  → fulfilled: {len(to_fulfilled)}")
-            print(f"  → broken:    {len(to_broken)}")
-            print(f"  → open:      {stay_open}")
+            print(f"acik commitment: {len(rows)} (org={org_id})")
+            print(f"  -> fulfilled: {len(to_fulfilled)}")
+            print(f"  -> broken:    {len(to_broken)}")
+            print(f"  -> open:      {stay_open}")
 
             if dry_run:
                 print("dry-run: yazılmadı. Yazmak için --apply kullan.")

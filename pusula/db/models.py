@@ -15,6 +15,9 @@ Channel = Literal["call", "email", "whatsapp", "meeting", "note", "task"]
 Direction = Literal["inbound", "outbound", "internal"]
 BodyQuality = Literal["low", "medium", "high"]
 CommitmentStatus = Literal["open", "fulfilled", "broken", "expired"]
+PusulaLeadState = Literal[
+    "active", "stale", "aging", "archived", "nurture", "closed"
+]
 
 
 class Event(BaseModel):
@@ -75,3 +78,46 @@ class SyncState(BaseModel):
     last_synced_at: datetime | None = None
     last_cursor: str | None = None
     updated_at: datetime | None = None
+
+
+class Lead(BaseModel):
+    """leads tablosu: Zoho özeti + yerel pusula_state."""
+
+    lead_id: str
+    thread_id: str | None = None
+    status: str | None = None  # Zoho Lead_Status; Pusula yazmaz
+    owner_rep_id: str | None = None
+    assigned_at: datetime | None = None  # Zoho Created_Time
+    source: str | None = None
+    full_name: str | None = None  # Zoho Full_Name; identities'e yazılmaz
+    pusula_state: PusulaLeadState | None = None
+    pusula_state_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class Contact(BaseModel):
+    """contacts tablosu: Zoho Contacts + opsiyonel lead/thread bağları."""
+
+    contact_id: str
+    lead_id: str | None = None
+    thread_id: str | None = None
+    created_at: datetime | None = None  # Zoho Created_Time
+    owner_rep_id: str | None = None
+    full_name: str | None = None  # Zoho Full_Name; identities'e yazılmaz
+
+
+class Deal(BaseModel):
+    """deals tablosu: Zoho Deals + satış döngüsü başlangıcı."""
+
+    deal_id: str
+    contact_id: str | None = None
+    lead_id: str | None = None
+    thread_id: str | None = None
+    stage: str | None = None
+    amount: float | None = None
+    created_at: datetime | None = None
+    closed_at: datetime | None = None
+    owner_rep_id: str | None = None
+    source: str | None = None
+    cycle_start_at: datetime | None = None
+    cycle_start_reliable: bool | None = None
