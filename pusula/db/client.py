@@ -11,6 +11,7 @@ sorgular config.get_org_id() ile aktif org'a kapsamlanır.
 
 import logging
 import os
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
@@ -39,12 +40,21 @@ _POOL_MAX_IDLE = 300.0
 _POOL_MAX_LIFETIME = 1800.0
 
 
+def _database_url() -> str:
+    """DATABASE_URL yoksa anahtarı yazıp çık (KeyError yutulmasın)."""
+    url = os.environ.get("DATABASE_URL")
+    if url:
+        return url
+    print("eksik ortam değişkeni: DATABASE_URL")
+    sys.exit(1)
+
+
 def _get_pool() -> ConnectionPool:
     # Tembel başlatma: DATABASE_URL sadece gerçekten gerektiğinde okunur.
     global _pool
     if _pool is None:
         _pool = ConnectionPool(
-            conninfo=os.environ["DATABASE_URL"],
+            conninfo=_database_url(),
             open=True,
             reconnect_timeout=_POOL_RECONNECT_TIMEOUT,
             max_idle=_POOL_MAX_IDLE,

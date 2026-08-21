@@ -15,6 +15,7 @@ permissions:
 
 env:
   PYTHONUNBUFFERED: "1"
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
   DATABASE_URL_POOLED: ${{ secrets.DATABASE_URL_POOLED }}
   ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
   ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
