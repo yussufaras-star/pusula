@@ -16,6 +16,7 @@ Boş veya tanımsız: gerçek temsilci emaillerine gider (hata değil).
 
 Kullanım:
     python scripts/send_nudges.py
+    python scripts/send_nudges.py --as-of 2026-08-24
     python scripts/send_nudges.py --apply
 """
 
@@ -46,6 +47,7 @@ from pusula.ingest.lead_identity import ensure_status_changed_columns
 from pusula.lead_reach import is_dokunulmamis_sql
 from pusula.sifir_satis import (
     ILK_SATIN_ALAN,
+    WON_STAGE,
     classified_deals_cte,
     won_stage_sql,
 )
@@ -86,6 +88,9 @@ _EXCL_IN = (
 )
 _STATUS_OK_L = f"coalesce(l.status, '') NOT IN {_EXCL_IN}"
 _KARAR_CHOICES = ("randevu", "kaybetti", "tekrar_ara")
+_MEVCUT_MUSTERI = "Mevcut Müşteri"
+_IKINCI_ARAMA_DAYS = 60
+_IKINCI_ARAMA_MIN_TWO = 10
 _TIME_SENSITIVE = (
     "ikinci_arama",
     "planlanmis_arama",
@@ -743,6 +748,16 @@ class WeekSnapshotPair:
     last_date: date
     this_vals: dict[str, int]
     last_vals: dict[str, int]
+
+
+@dataclass(frozen=True)
+class IkinciAramaStats:
+    """Son 60 gün: ikinci arama vs tek arama, satışa dönüş."""
+
+    two_plus: int
+    two_plus_won: int
+    one_call: int
+    one_call_won: int
 
 
 @dataclass(frozen=True)
@@ -1515,6 +1530,127 @@ def _show_ilk_satin(now: datetime | None = None) -> bool:
     return local.weekday() not in (0, 1)
 
 
+def _is_monday(now: datetime | None = None) -> bool:
+    local = now or datetime.now(_TZ)
+    if local.tzinfo is None:
+        local = local.replace(tzinfo=_TZ)
+    else:
+        local = local.astimezone(_TZ)
+    return local.weekday() == 0
+
+
+def _load_ikinci_arama_stats(
+    conn: psycopg.Connection,
+    org_id: str,
+    rep_id: str,
+    *,
+    now: datetime | None = None,
+) -> IkinciAramaStats:
+    """assigned_at son 60 gün; connected çağrı; dönüşüm deal created_at."""
+    local = now or datetime.now(_TZ)
+    if local.tzinfo is None:
+        local = local.replace(tzinfo=_TZ)
+    else:
+        local = local.astimezone(_TZ)
+    start = local - timedelta(days=_IKINCI_ARAMA_DAYS)
+    row = conn.execute(
+        """
+        WITH cohort AS (
+            SELECT l.lead_id, l.thread_id, l.assigned_at, l.org_id
+            FROM leads l
+            WHERE l.org_id = %s
+              AND l.owner_rep_id = %s
+              AND l.assigned_at >= %s
+              AND l.assigned_at <= %s
+              AND coalesce(l.status, '') <> %s
+        ),
+        conv AS (
+            SELECT d.lead_id, min(d.created_at) AS conv_at
+            FROM deals d
+            WHERE d.org_id = %s
+              AND d.stage = %s
+              AND d.lead_id IS NOT NULL
+            GROUP BY d.lead_id
+        ),
+        bounded AS (
+            SELECT
+                c.lead_id,
+                c.org_id,
+                c.thread_id,
+                CASE
+                    WHEN v.conv_at IS NOT NULL AND v.conv_at > c.assigned_at
+                    THEN v.conv_at
+                END AS conv_at,
+                coalesce(
+                    CASE
+                        WHEN v.conv_at IS NOT NULL AND v.conv_at > c.assigned_at
+                        THEN v.conv_at
+                    END,
+                    %s
+                ) AS until_at
+            FROM cohort c
+            LEFT JOIN conv v ON v.lead_id = c.lead_id
+        ),
+        scored AS (
+            SELECT
+                b.lead_id,
+                (b.conv_at IS NOT NULL) AS converted,
+                (
+                    SELECT count(*)::int
+                    FROM events e
+                    WHERE e.org_id = b.org_id
+                      AND e.thread_id = b.thread_id
+                      AND e.channel = 'call'
+                      AND e.direction = 'outbound'
+                      AND e.meta->>'call_status' = 'connected'
+                      AND e.occurred_at <= b.until_at
+                ) AS n_call
+            FROM bounded b
+        )
+        SELECT
+          count(*) FILTER (WHERE n_call >= 2)::int,
+          count(*) FILTER (WHERE n_call >= 2 AND converted)::int,
+          count(*) FILTER (WHERE n_call = 1)::int,
+          count(*) FILTER (WHERE n_call = 1 AND converted)::int
+        FROM scored
+        """,
+        (
+            org_id,
+            rep_id,
+            start,
+            local,
+            _MEVCUT_MUSTERI,
+            org_id,
+            WON_STAGE,
+            local,
+        ),
+    ).fetchone()
+    return IkinciAramaStats(
+        two_plus=int(row[0] or 0) if row else 0,
+        two_plus_won=int(row[1] or 0) if row else 0,
+        one_call=int(row[2] or 0) if row else 0,
+        one_call_won=int(row[3] or 0) if row else 0,
+    )
+
+
+def _ikinci_arama_lines(stats: IkinciAramaStats) -> list[str] | None:
+    """Pazartesi koçluk satırları; eşik tutmazsa None."""
+    if stats.two_plus < _IKINCI_ARAMA_MIN_TWO:
+        return None
+    if stats.two_plus_won == 0 and stats.one_call_won == 0:
+        return None
+    return [
+        (
+            f"Son iki ayda {stats.two_plus} lead'i ikinci kez aradın, "
+            f"{stats.two_plus_won}'i satışa döndü."
+        ),
+        (
+            f"Tek aramada bırakılan {stats.one_call} lead'den "
+            f"{stats.one_call_won}'i satışa döndü."
+        ),
+    ]
+
+
 def _build_message(
     *,
     rep_name: str,
@@ -1524,6 +1660,7 @@ def _build_message(
     dunden: DundenStats | None = None,
     discipline_total: int = 0,
     discipline_names: list[tuple[str, str | None]] | None = None,
+    ikinci_lines: list[str] | None = None,
 ) -> str:
     who = rep_name
     if rep_email:
@@ -1553,16 +1690,12 @@ def _build_message(
             reason = _reason_for(n)
             if reason:
                 parts.append(f"   {reason}")
-        types_shown = {n.nudge_type for n in selected}
-        if _IKINCI_TYPE in types_shown:
-            parts.append(
-                "Satışa dönen müşterilerini en az iki kez aramışsın: %43. "
-                "Dönmeyenlerde bu oran %22."
-            )
-        if _SUNUMSUZ_TYPE in types_shown:
-            parts.append(
-                "Sunum yapılan görüşmelerin satışa dönme şansı yaklaşık üç katı."
-            )
+        if ikinci_lines:
+            parts.append("")
+            parts.extend(ikinci_lines)
+        parts.append("")
+    elif ikinci_lines:
+        parts.extend(ikinci_lines)
         parts.append("")
 
     if karar:
@@ -2153,8 +2286,26 @@ def main() -> int:
         action="store_true",
         help="Cliq'e gönder ve nudges'a yaz (varsayılan: dry-run)",
     )
+    parser.add_argument(
+        "--as-of",
+        metavar="YYYY-MM-DD",
+        help="Mesaj gününü bu tarihe sabitle (Pazartesi koçluk satırı)",
+    )
     args = parser.parse_args()
     dry_run = not args.apply
+
+    as_of: datetime | None = None
+    if args.as_of:
+        try:
+            as_of_date = date.fromisoformat(args.as_of)
+        except ValueError:
+            print(f"gecersiz --as-of tarihi: {args.as_of}")
+            print("üretilen=0, gönderilen=0, hata=1")
+            return 1
+        as_of = datetime(
+            as_of_date.year, as_of_date.month, as_of_date.day,
+            12, 0, tzinfo=_TZ,
+        )
 
     load_dotenv()
     shadow_email = _shadow_email()
@@ -2302,6 +2453,7 @@ def main() -> int:
                     str,
                 ]
             ] = []
+            ikinci_by_rep: dict[str, IkinciAramaStats] = {}
             for rep_id in sorted(
                 recipient_ids,
                 key=lambda x: (recipients[x][2], recipients[x][0]),
@@ -2315,6 +2467,14 @@ def main() -> int:
                 name, email, category = recipients[rep_id]
                 dunden = _load_dunden(conn, org_id, rep_id)
                 disc_total, disc_names = _load_discipline(conn, org_id, rep_id)
+                ikinci_lines: list[str] | None = None
+                ikinci_stats: IkinciAramaStats | None = None
+                if _is_monday(as_of):
+                    ikinci_stats = _load_ikinci_arama_stats(
+                        conn, org_id, rep_id
+                    )
+                    ikinci_by_rep[rep_id] = ikinci_stats
+                    ikinci_lines = _ikinci_arama_lines(ikinci_stats)
                 msg = _build_message(
                     rep_name=name,
                     rep_email=email,
@@ -2323,6 +2483,7 @@ def main() -> int:
                     dunden=dunden,
                     discipline_total=disc_total,
                     discipline_names=disc_names,
+                    ikinci_lines=ikinci_lines,
                 )
                 plans.append(
                     (
@@ -2366,6 +2527,13 @@ def main() -> int:
                     f"({detail}), karar={len(karar_shown)}, "
                     f"tetik_30g_ustu={old30}"
                 )
+                st = ikinci_by_rep.get(rep_id)
+                if st is not None:
+                    print(
+                        f"    ikinci_arama_60g="
+                        f"{st.two_plus}/{st.two_plus_won}/"
+                        f"{st.one_call}/{st.one_call_won}"
+                    )
                 if old30 > 2:
                     print(
                         f"    uyari: 30 günden eski tetikleyici {old30} > 2"
