@@ -1,13 +1,15 @@
 """Günlük dürtü üretir ve Cliq'e gönderir.
 
-BUGUN (en fazla 3): pencere_aciliyor, planlanmis_arama, kayip_randevu,
-gecikmis_taahhut. karar_bekleyen bu kotaya girmez.
+Koçluk formatı: kayıt disiplini, BUGUN (en fazla 8), KARAR BEKLEYEN
+(günde 1), DUN paragrafı.
 
-KARAR BEKLEYEN (en fazla 2 + havuz): status='Düşünmek İstiyor' ve
-status_changed_at 48 saatten eski.
+Zaman-hassas (tetikleyici son 14 gün, tazelik sırası): kayip_randevu,
+planlanmis_arama, gecikmis_taahhut, ikinci_arama.
+14 günden eski aynı tipler backlog: günde en fazla 2, en eski önce.
+Havuz: karar_bekleyen 1/gün, sunumsuz_temas 2/gün.
 
-Temas: scheduled değil, category <> 'not_reached' (süre yok).
-Süre eşiği yalnız DÜN 10 sn+ görüşme satırında.
+Temas: pusula.temas.temas_mi — süre eşiği yok.
+Çevirme: call_status=connected. overdue/scheduled faaliyet dışı.
 
 PUSULA_SHADOW_EMAIL dolu: tüm Cliq mesajları o adrese gider.
 Boş veya tanımsız: gerçek temsilci emaillerine gider (hata değil).
@@ -48,27 +50,54 @@ from pusula.sifir_satis import (
     won_stage_sql,
 )
 from pusula.temas import (
-    TEMAS_MIN_SEC,
+    TEMAS_MIGRATION_SITES,
     duration_sec,
     is_attempt_sql,
+    is_cevirme_sql,
+    is_not_planned_sql,
     is_temas_sql,
     outcome_join,
 )
 
 _TZ = ZoneInfo("Europe/Istanbul")
-_MAX_PER_REP = 3
+_MAX_PER_REP = 3  # _allocate_slots geriye dönük; BUGUN kotası aşağıda
 _MAX_LINE = 60
-_KARAR_MAX = 2
-_KARAR_HOURS = 48
+_BUGUN_CAP = 8
+_FRESH_DAYS = 14
+_BACKLOG_QUOTA = 2
+_SUNUMSUZ_QUOTA = 2
+_KARAR_MAX = 1
+_KARAR_DAYS = 7
+_KARAR_WINDOW_DAYS = 30
 _KARAR_STATUS = "Düşünmek İstiyor"
-_AVG_MIN_TALKS = 5  # 10 sn+ ortalama basmak için min görüşme
 _PENCERE_TYPE = "pencere_aciliyor"
+_IKINCI_TYPE = "ikinci_arama"
+_SUNUMSUZ_TYPE = "sunumsuz_temas"
 _KARAR_TYPE = "karar_bekleyen"
-_TYPE_ORDER = (
-    "pencere_aciliyor",
+_EXCLUDED_STATUSES = (
+    "Aranmamalı",
+    "İletişim Kurulamadı/Numara Hatalı",
+    "Nitelikli Değil-İlgisiz",
+)
+_EXCL_IN = (
+    "("
+    + ", ".join("'" + s.replace("'", "''") + "'" for s in _EXCLUDED_STATUSES)
+    + ")"
+)
+_STATUS_OK_L = f"coalesce(l.status, '') NOT IN {_EXCL_IN}"
+_KARAR_CHOICES = ("randevu", "kaybetti", "tekrar_ara")
+_TIME_SENSITIVE = (
+    "ikinci_arama",
     "planlanmis_arama",
-    "kayip_randevu",
     "gecikmis_taahhut",
+    "kayip_randevu",
+)
+_TYPE_ORDER = (
+    "ikinci_arama",
+    "planlanmis_arama",
+    "gecikmis_taahhut",
+    "kayip_randevu",
+    "sunumsuz_temas",
 )
 _MONTHS_SHORT = (
     "Oca", "Şub", "Mar", "Nis", "May", "Haz",
@@ -87,6 +116,8 @@ _DURATION_SEC = duration_sec("e")
 _ATTEMPT_E = is_attempt_sql("e")
 _TEMAS_E = is_temas_sql("e")
 _TEMAS_E3 = is_temas_sql("e3")
+_CEVIRME_E = is_cevirme_sql("e")
+_NOT_PLANNED_E = is_not_planned_sql("e")
 _OUTCOME_JOIN = outcome_join  # callable(alias) -> SQL; geriye dönük .format yok
 
 # Kanıt: yalnızca hesaplanmış sayı cümlesi. Sabit/genel ifade yok.
@@ -131,6 +162,17 @@ _PENCERE_SQL = """
               AND """ + _TEMAS_E + """
         ) AS temas_calls,
         (
+            SELECT count(*)::int
+            FROM events e
+            WHERE e.org_id = l.org_id
+              AND e.thread_id = l.thread_id
+              AND e.channel = 'call'
+              AND e.direction = 'outbound'
+              AND e.occurred_at <= now()
+              AND e.occurred_at >= coalesce(l.assigned_at, l.created_at)
+              AND """ + _CEVIRME_E + """
+        ) AS cevirme_calls,
+        (
             SELECT i.id_value FROM identities i
             WHERE i.org_id = l.org_id
               AND i.thread_id = l.thread_id
@@ -155,6 +197,7 @@ _PENCERE_SQL = """
     WHERE l.org_id = %s
       AND l.owner_rep_id IS NOT NULL
       AND l.thread_id IS NOT NULL
+      AND """ + _STATUS_OK_L + """
       AND (
             l.pusula_state = 'active'
             OR (""" + is_dokunulmamis_sql("l.status") + """)
@@ -253,6 +296,12 @@ _PLANLANMIS_SQL = """
       ON t.org_id = o.org_id AND t.thread_id = o.thread_id
     WHERE o.rn = 1
       AND coalesce(o.rep_id, t.owner_rep_id) IS NOT NULL
+      AND coalesce((
+            SELECT lx.status FROM leads lx
+            WHERE lx.org_id = o.org_id AND lx.thread_id = o.thread_id
+            ORDER BY lx.assigned_at DESC NULLS LAST
+            LIMIT 1
+          ), '') NOT IN """ + _EXCL_IN + """
     ORDER BY o.planned_at ASC
 """
 
@@ -348,6 +397,12 @@ _KAYIP_SQL = """
                 )
             )
       )
+      AND coalesce((
+            SELECT lx.status FROM leads lx
+            WHERE lx.org_id = r.org_id AND lx.thread_id = r.thread_id
+            ORDER BY lx.assigned_at DESC NULLS LAST
+            LIMIT 1
+          ), '') NOT IN """ + _EXCL_IN + """
     ORDER BY r.randevu_at DESC
 """
 
@@ -374,7 +429,7 @@ _TAAHHUT_SQL = """
         l.full_name AS contact_name
     FROM commitments c
     JOIN LATERAL (
-        SELECT lead_id, owner_rep_id, full_name
+        SELECT lead_id, owner_rep_id, full_name, status
         FROM leads
         WHERE org_id = c.org_id AND thread_id = c.thread_id
         ORDER BY assigned_at DESC NULLS LAST
@@ -387,7 +442,126 @@ _TAAHHUT_SQL = """
       AND c.due_at < now()
       AND c.thread_id IS NOT NULL
       AND l.owner_rep_id IS NOT NULL
+      AND coalesce(l.status, '') NOT IN """ + _EXCL_IN + """
     ORDER BY c.due_at DESC
+"""
+
+# Son 7 gün: 1 çevirme, temas yok, ikinci deneme yok.
+_IKINCI_ARAMA_SQL = """
+    WITH week AS (
+        SELECT
+            e.org_id,
+            e.thread_id,
+            count(*) FILTER (WHERE """ + _CEVIRME_E + """)::int AS cevirme,
+            count(*) FILTER (WHERE """ + _TEMAS_E + """)::int AS temas,
+            count(*) FILTER (
+                WHERE e.channel = 'call'
+                  AND e.direction = 'outbound'
+                  AND """ + _ATTEMPT_E + """
+            )::int AS attempts,
+            min(e.occurred_at) FILTER (
+                WHERE """ + _CEVIRME_E + """
+            ) AS first_cevirme
+        FROM events e
+""" + outcome_join("e") + """
+        WHERE e.org_id = %s
+          AND e.thread_id IS NOT NULL
+          AND e.occurred_at <= now()
+          AND e.occurred_at >= now() - interval '7 days'
+        GROUP BY e.org_id, e.thread_id
+        HAVING count(*) FILTER (WHERE """ + _CEVIRME_E + """) = 1
+           AND count(*) FILTER (WHERE """ + _TEMAS_E + """) = 0
+           AND count(*) FILTER (
+                WHERE e.channel = 'call'
+                  AND e.direction = 'outbound'
+                  AND """ + _ATTEMPT_E + """
+           ) = 1
+    )
+    SELECT
+        l.owner_rep_id AS rep_id,
+        w.thread_id,
+        l.lead_id,
+        NULL::bigint AS commitment_id,
+        'ikinci_arama'::text AS nudge_type,
+        extract(epoch FROM w.first_cevirme) AS sort_key,
+        1::int AS outbound_calls,
+        0::int AS temas_calls,
+        (
+            SELECT i.id_value FROM identities i
+            WHERE i.org_id = w.org_id
+              AND i.thread_id = w.thread_id
+              AND i.id_type = 'phone'
+            ORDER BY i.id_value
+            LIMIT 1
+        ) AS phone,
+        l.full_name AS contact_name
+    FROM week w
+    JOIN LATERAL (
+        SELECT lead_id, owner_rep_id, full_name, status
+        FROM leads
+        WHERE org_id = w.org_id AND thread_id = w.thread_id
+        ORDER BY assigned_at DESC NULLS LAST
+        LIMIT 1
+    ) l ON true
+    WHERE l.owner_rep_id IS NOT NULL
+      AND coalesce(l.status, '') NOT IN """ + _EXCL_IN + """
+    ORDER BY w.first_cevirme ASC NULLS LAST
+"""
+
+# Son 14 gün temas var, hiçbir çağrıda demo_done yok. En eski önce.
+_SUNUMSUZ_SQL = """
+    WITH touched AS (
+        SELECT
+            e.org_id,
+            e.thread_id,
+            min(e.occurred_at) AS first_temas
+        FROM events e
+""" + outcome_join("e") + """
+        WHERE e.org_id = %s
+          AND e.thread_id IS NOT NULL
+          AND e.occurred_at <= now()
+          AND e.occurred_at >= now() - interval '14 days'
+          AND """ + _TEMAS_E + """
+        GROUP BY e.org_id, e.thread_id
+    )
+    SELECT
+        l.owner_rep_id AS rep_id,
+        t.thread_id,
+        l.lead_id,
+        NULL::bigint AS commitment_id,
+        'sunumsuz_temas'::text AS nudge_type,
+        extract(epoch FROM t.first_temas) AS sort_key,
+        NULL::int AS outbound_calls,
+        NULL::int AS temas_calls,
+        (
+            SELECT i.id_value FROM identities i
+            WHERE i.org_id = t.org_id
+              AND i.thread_id = t.thread_id
+              AND i.id_type = 'phone'
+            ORDER BY i.id_value
+            LIMIT 1
+        ) AS phone,
+        l.full_name AS contact_name
+    FROM touched t
+    JOIN LATERAL (
+        SELECT lead_id, owner_rep_id, full_name, status
+        FROM leads
+        WHERE org_id = t.org_id AND thread_id = t.thread_id
+        ORDER BY assigned_at DESC NULLS LAST
+        LIMIT 1
+    ) l ON true
+    WHERE l.owner_rep_id IS NOT NULL
+      AND coalesce(l.status, '') NOT IN """ + _EXCL_IN + """
+      AND NOT EXISTS (
+            SELECT 1 FROM events e2
+            WHERE e2.org_id = t.org_id
+              AND e2.thread_id = t.thread_id
+              AND (
+                    e2.meta->>'outcome_key' = 'demo_done'
+                    OR e2.meta->>'call_result' = 'Sunum Yapıldı'
+              )
+      )
+    ORDER BY t.first_temas ASC NULLS LAST
 """
 
 _KARAR_SQL = """
@@ -417,7 +591,6 @@ _KARAR_SQL = """
             WHERE e.org_id = l.org_id
               AND e.thread_id = l.thread_id
               AND e.occurred_at <= now()
-              AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
               AND (
                     (e.channel = 'call' AND """ + _TEMAS_E + """)
                     OR e.channel = 'meeting'
@@ -428,8 +601,17 @@ _KARAR_SQL = """
       AND l.owner_rep_id IS NOT NULL
       AND l.thread_id IS NOT NULL
       AND l.status = %s
+      AND """ + _STATUS_OK_L + """
       AND l.status_changed_at IS NOT NULL
-      AND l.status_changed_at < now() - make_interval(hours => %s)
+      AND l.status_changed_at < now() - interval '7 days'
+      AND l.status_changed_at >= now() - interval '30 days'
+      AND NOT EXISTS (
+            SELECT 1 FROM nudges n
+            WHERE n.org_id = l.org_id
+              AND n.lead_id = l.lead_id
+              AND n.nudge_type = 'karar_bekleyen'
+              AND n.payload->>'karar' IS NOT NULL
+      )
     ORDER BY l.status_changed_at ASC
 """
 
@@ -457,67 +639,77 @@ _WEEK_SNAPSHOT_SQL = """
     ORDER BY snapshot_date DESC
 """
 
-# Dün / süre: yalnız duration >= TEMAS_MIN_SEC (bağlanmadı paydada yok).
+# Dün çevirme (connected); süre yalnız çevirme kaydı.
 _DUNDEN_SQL = """
     SELECT
-        count(*)::int AS talks,
+        count(*)::int AS cevirme,
+        count(*) FILTER (WHERE """ + _TEMAS_E + """)::int AS temas,
         count(*) FILTER (
-            WHERE coalesce(nullif(trim(e.meta->>'call_result'), ''), '') = ''
+            WHERE """ + _TEMAS_E + """
+              AND coalesce(nullif(trim(e.meta->>'call_result'), ''), '') = ''
         )::int AS empty_result,
         coalesce(sum(""" + _DURATION_SEC + """), 0)::float AS total_sec,
-        coalesce(avg(""" + _DURATION_SEC + """), 0)::float AS avg_sec
-    FROM events e
-    WHERE e.org_id = %s
-      AND e.rep_id = %s
-      AND e.channel = 'call'
-      AND e.direction = 'outbound'
-      AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
-      AND """ + _DURATION_SEC + """ >= """ + str(TEMAS_MIN_SEC) + """
-      AND e.occurred_at <= now()
-      AND e.occurred_at >= %s
-      AND e.occurred_at < %s
-"""
-
-# Ekip ortalaması: yalnız sales, mesaj sahibi hariç.
-_DUNDEN_TEAM_SQL = """
-    SELECT
-        count(*)::int AS talks,
-        coalesce(avg(""" + _DURATION_SEC + """), 0)::float AS avg_sec
-    FROM events e
-    JOIN reps r
-      ON r.org_id = e.org_id AND r.rep_id = e.rep_id
-    WHERE e.org_id = %s
-      AND e.rep_id IS DISTINCT FROM %s
-      AND r.category = 'sales'
-      AND r.active = true
-      AND e.channel = 'call'
-      AND e.direction = 'outbound'
-      AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
-      AND """ + _DURATION_SEC + """ >= """ + str(TEMAS_MIN_SEC) + """
-      AND e.occurred_at <= now()
-      AND e.occurred_at >= %s
-      AND e.occurred_at < %s
-"""
-
-# Dün tüm arama (süresiz): pencere + bağlanmadı.
-_DUN_CALLS_SQL = """
-    SELECT
-        count(*)::int AS total_calls,
+        coalesce(avg(""" + _DURATION_SEC + """), 0)::float AS avg_sec,
         count(*) FILTER (
-            WHERE co.category = 'not_reached'
-        )::int AS not_reached,
-        min(e.occurred_at) AS first_at,
-        max(e.occurred_at) AS last_at
+            WHERE (e.occurred_at AT TIME ZONE 'Europe/Istanbul')::time
+                  >= time '15:00'
+        )::int AS afternoon_cevirme,
+        count(*) FILTER (
+            WHERE (e.occurred_at AT TIME ZONE 'Europe/Istanbul')::time
+                  >= time '15:00'
+              AND """ + _TEMAS_E + """
+        )::int AS afternoon_temas,
+        count(*) FILTER (
+            WHERE (e.occurred_at AT TIME ZONE 'Europe/Istanbul')::time
+                  < time '15:00'
+        )::int AS morning_cevirme,
+        count(*) FILTER (
+            WHERE (e.occurred_at AT TIME ZONE 'Europe/Istanbul')::time
+                  < time '15:00'
+              AND """ + _TEMAS_E + """
+        )::int AS morning_temas
     FROM events e
-""" + outcome_join("e") + """
     WHERE e.org_id = %s
       AND e.rep_id = %s
       AND e.channel = 'call'
       AND e.direction = 'outbound'
-      AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
+      AND """ + _CEVIRME_E + """
       AND e.occurred_at <= now()
       AND e.occurred_at >= %s
       AND e.occurred_at < %s
+"""
+
+_DISCIPLINE_SQL = """
+    SELECT
+        l.full_name AS contact_name,
+        i.id_value AS phone
+    FROM events e
+    LEFT JOIN LATERAL (
+        SELECT full_name, lead_id
+        FROM leads
+        WHERE org_id = e.org_id AND thread_id = e.thread_id
+          AND """ + _STATUS_OK_L.replace("l.status", "status") + """
+        ORDER BY assigned_at DESC NULLS LAST
+        LIMIT 1
+    ) l ON true
+    LEFT JOIN LATERAL (
+        SELECT id_value FROM identities
+        WHERE org_id = e.org_id AND thread_id = e.thread_id
+          AND id_type = 'phone'
+        ORDER BY id_value
+        LIMIT 1
+    ) i ON true
+    WHERE e.org_id = %s
+      AND e.rep_id = %s
+      AND e.channel = 'call'
+      AND e.direction = 'outbound'
+      AND """ + _TEMAS_E + """
+      AND coalesce(nullif(trim(e.meta->>'call_result'), ''), '') = ''
+      AND e.occurred_at <= now()
+      AND e.occurred_at >= %s
+      AND e.occurred_at < %s
+    ORDER BY e.occurred_at DESC
+    LIMIT 10
 """
 
 
@@ -533,6 +725,7 @@ class NudgeCandidate:
     contact_name: str | None = None
     outbound_calls: int | None = None
     temas_calls: int | None = None
+    cevirme_calls: int | None = None
     randevu_at: datetime | None = None
     due_at: datetime | None = None
     planned_at: datetime | None = None
@@ -554,15 +747,13 @@ class WeekSnapshotPair:
 
 @dataclass(frozen=True)
 class DundenStats:
-    talks: int
+    cevirme: int
+    temas: int
     empty_result: int
     total_sec: float | None = None
     avg_sec: float | None = None
     week4_avg_sec: float | None = None
-    total_calls: int = 0
-    not_reached: int = 0
-    first_at: datetime | None = None
-    last_at: datetime | None = None
+    afternoon_line: str | None = None
 
 
 @dataclass(frozen=True)
@@ -623,6 +814,14 @@ def _clip(text: str, n: int = _MAX_LINE) -> str:
     return text[: n - 1].rstrip() + "…"
 
 
+def _fmt_sure(seconds: float | None) -> str:
+    """DUN şablonu: dakika; '{sure}'ti ekiyle okunur."""
+    if seconds is None:
+        return "?"
+    mins = max(0, int(round(float(seconds) / 60.0)))
+    return f"{mins} dk"
+
+
 def _fmt_duration(seconds: float | None) -> str:
     if seconds is None:
         return "?"
@@ -657,12 +856,53 @@ def _fmt_hours(value: Any) -> str:
     return f"{hours:.0f} saat"
 
 
+def _looks_like_phone(value: str | None) -> bool:
+    raw = (value or "").strip()
+    if not raw:
+        return False
+    digits = "".join(c for c in raw if c.isdigit())
+    letters = sum(1 for c in raw if c.isalpha())
+    return letters == 0 and len(digits) >= 10
+
+
+def _title_name(name: str | None) -> str:
+    """Türkçe başlık: mehmet tavali -> Mehmet Tavali."""
+    raw = (name or "").strip()
+    if not raw or _looks_like_phone(raw):
+        return "İsimsiz"
+    words: list[str] = []
+    for part in raw.split():
+        folded = part.replace("I", "ı").replace("İ", "i").lower()
+        if not folded:
+            continue
+        first = "İ" if folded[0] == "i" else folded[0].upper()
+        words.append(first + folded[1:])
+    return " ".join(words) if words else "İsimsiz"
+
+
+def _fmt_phone(raw: str | None) -> str:
+    """+905353241988 -> 0535 324 1988."""
+    if not raw or not str(raw).strip():
+        return "telefon yok"
+    digits = "".join(c for c in str(raw) if c.isdigit())
+    if digits.startswith("90") and len(digits) >= 12:
+        digits = "0" + digits[2:12]
+    elif len(digits) == 10 and digits.startswith("5"):
+        digits = "0" + digits
+    elif len(digits) > 11 and digits.startswith("0"):
+        digits = digits[:11]
+    if len(digits) == 11 and digits.startswith("0"):
+        return f"{digits[:4]} {digits[4:7]} {digits[7:]}"
+    return str(raw).strip()
+
+
+def _person_line(n: NudgeCandidate) -> str:
+    name = _title_name(n.contact_name)
+    return f"{name} · {_fmt_phone(n.phone)}"
+
+
 def _identity_label(n: NudgeCandidate) -> str:
-    phone = n.phone or "telefon yok"
-    name = (n.contact_name or "").strip()
-    if name:
-        return _clip(f"{name} - {phone}")
-    return _clip(phone)
+    return _person_line(n)
 
 
 def _days_since(value: datetime | None, *, now: datetime | None = None) -> int | None:
@@ -679,37 +919,66 @@ def _days_since(value: datetime | None, *, now: datetime | None = None) -> int |
     return max(0, days)
 
 
+def _as_local(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=_TZ)
+    return value.astimezone(_TZ)
+
+
+def _trigger_at(n: NudgeCandidate) -> datetime | None:
+    """Tetikleyici olay zamanı (SQL değişmez; mevcut alan / sort_key)."""
+    for val in (n.randevu_at, n.planned_at, n.due_at):
+        if val is not None:
+            return _as_local(val)
+    if n.sort_key:
+        return datetime.fromtimestamp(
+            float(n.sort_key), tz=ZoneInfo("UTC")
+        ).astimezone(_TZ)
+    return None
+
+
+def _is_fresh(
+    n: NudgeCandidate, *, now: datetime | None = None
+) -> bool:
+    trigger = _trigger_at(n)
+    if trigger is None:
+        return False
+    ref = now or datetime.now(_TZ)
+    if ref.tzinfo is None:
+        ref = ref.replace(tzinfo=_TZ)
+    else:
+        ref = ref.astimezone(_TZ)
+    return trigger >= ref - timedelta(days=_FRESH_DAYS)
+
+
 def _reason_for(n: NudgeCandidate, *, now: datetime | None = None) -> str | None:
-    """Sinyal şablonu; tarih/sayı yoksa None (satır basılmaz)."""
+    """Madde gerekçesi: olgu. İstatistik BUGUN altında ayrı."""
     if n.nudge_type == "kayip_randevu":
-        gun = _fmt_gun(n.randevu_at)
-        if gun is None:
+        days = _days_since(n.randevu_at, now=now)
+        if days is None:
             return None
-        return _clip(f"{gun} randevu alındı, sonrasında temas yok")
+        return f"Randevudan {days} gün geçti, dönüş yapılmadı."
+    if n.nudge_type == "ikinci_arama":
+        return "1 kez arandı, açılmadı."
+    if n.nudge_type == "sunumsuz_temas":
+        return "Konuşuldu, sunum yapılmadı."
     if n.nudge_type == "planlanmis_arama":
         gun = _fmt_gun(n.planned_at)
         if gun is None:
             return None
-        return _clip(f"{gun}'ya planlanan arama yapılmadı")
+        return f"{gun} için planladığın arama yapılmadı."
     if n.nudge_type == "gecikmis_taahhut":
-        gun = _fmt_gun(n.due_at)
-        if gun is None:
+        days = _days_since(n.due_at, now=now)
+        if days is None:
             return None
-        return _clip(f"{gun} vadeli söz, arama yapılmadı")
+        return f"{days} gün önce söz verdiğin dönüş yapılmadı."
     if n.nudge_type == "karar_bekleyen":
         days = _days_since(n.status_changed_at, now=now)
-        gun = _fmt_gun(n.last_temas_at)
-        if days is None or gun is None:
+        if days is None:
             return None
-        return _clip(f"{days} gündür karar verilmedi, son temas {gun}")
-    if n.nudge_type == "pencere_aciliyor":
-        calls = n.outbound_calls if n.outbound_calls is not None else None
-        gun = _fmt_gun(n.last_attempt_at) or _fmt_gun(n.assigned_at)
-        if calls is None or gun is None:
-            return None
-        if n.last_attempt_at is not None:
-            return _clip(f"{calls} deneme, son {gun}")
-        return _clip(f"{gun}'dan beri {calls} deneme")
+        return (
+            f"{days} gündür 'düşünüyor'. Bir arayıp netleştir, sonra işaretle:"
+        )
     return None
 
 
@@ -1054,7 +1323,7 @@ def _count_talks(
     *,
     category: str | None = "sales",
 ) -> int:
-    """Belirli günde 10 sn+ outbound çağrı sayısı (scheduled hariç)."""
+    """Belirli günde çevirme (connected, planlanmış hariç)."""
     y0, y1 = _day_bounds(day)
     if category:
         row = conn.execute(
@@ -1066,10 +1335,9 @@ def _count_talks(
               AND r.category = %s
               AND e.channel = 'call'
               AND e.direction = 'outbound'
-              AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
               AND """
-            + _DURATION_SEC
-            + """ >= """ + str(TEMAS_MIN_SEC) + """
+            + _CEVIRME_E
+            + """
               AND e.occurred_at <= now()
               AND e.occurred_at >= %s
               AND e.occurred_at < %s
@@ -1084,10 +1352,9 @@ def _count_talks(
             WHERE e.org_id = %s
               AND e.channel = 'call'
               AND e.direction = 'outbound'
-              AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
               AND """
-            + _DURATION_SEC
-            + """ >= """ + str(TEMAS_MIN_SEC) + """
+            + _CEVIRME_E
+            + """
               AND e.occurred_at <= now()
               AND e.occurred_at >= %s
               AND e.occurred_at < %s
@@ -1109,7 +1376,7 @@ def _load_dunden(
     *,
     now: datetime | None = None,
 ) -> DundenStats:
-    """Dün görüşme + arama penceresi; süre yalnız 10 sn+."""
+    """Dün çevirme + süre; öğleden sonra temas oranı koşullu."""
     local = now or datetime.now(_TZ)
     if local.tzinfo is None:
         local = local.replace(tzinfo=_TZ)
@@ -1118,35 +1385,90 @@ def _load_dunden(
     yesterday = local.date() - timedelta(days=1)
     y0, y1 = _day_bounds(yesterday)
     row = conn.execute(_DUNDEN_SQL, (org_id, rep_id, y0, y1)).fetchone()
-    talks = int(row[0] or 0) if row else 0
-    empty = int(row[1] or 0) if row else 0
-    total_sec = float(row[2] or 0) if row else 0.0
-    avg_sec = float(row[3] or 0) if row else 0.0
-
-    calls = conn.execute(_DUN_CALLS_SQL, (org_id, rep_id, y0, y1)).fetchone()
-    total_calls = int(calls[0] or 0) if calls else 0
-    not_reached = int(calls[1] or 0) if calls else 0
-    first_at = calls[2] if calls else None
-    last_at = calls[3] if calls else None
+    cevirme = int(row[0] or 0) if row else 0
+    temas = int(row[1] or 0) if row else 0
+    empty = int(row[2] or 0) if row else 0
+    total_sec = float(row[3] or 0) if row else 0.0
+    avg_sec = float(row[4] or 0) if row else 0.0
+    aft_c = int(row[5] or 0) if row else 0
+    aft_t = int(row[6] or 0) if row else 0
+    mor_c = int(row[7] or 0) if row else 0
+    mor_t = int(row[8] or 0) if row else 0
 
     w0 = y1 - timedelta(days=28)
     week4 = conn.execute(_DUNDEN_SQL, (org_id, rep_id, w0, y1)).fetchone()
-    week4_talks = int(week4[0] or 0) if week4 else 0
+    week4_n = int(week4[0] or 0) if week4 else 0
     week4_avg: float | None = None
-    if week4_talks > 0:
-        week4_avg = float(week4[3] or 0)
+    if week4_n > 0:
+        week4_avg = float(week4[4] or 0)
+
+    afternoon_line: str | None = None
+    if cevirme > 0 and (aft_c / cevirme) > 0.40 and mor_c > 0:
+        aft_rate = aft_t / aft_c if aft_c else 0.0
+        mor_rate = mor_t / mor_c if mor_c else 0.0
+        if aft_rate < mor_rate:
+            afternoon_line = _clip(
+                f"15:00 sonrası temas {aft_t}/{aft_c}, "
+                f"öğleden önce {mor_t}/{mor_c}"
+            )
 
     return DundenStats(
-        talks=talks,
+        cevirme=cevirme,
+        temas=temas,
         empty_result=empty,
-        total_sec=total_sec if talks > 0 else None,
-        avg_sec=avg_sec if talks > 0 else None,
+        total_sec=total_sec if cevirme > 0 else None,
+        avg_sec=avg_sec if cevirme > 0 else None,
         week4_avg_sec=week4_avg,
-        total_calls=total_calls,
-        not_reached=not_reached,
-        first_at=first_at,
-        last_at=last_at,
+        afternoon_line=afternoon_line,
     )
+
+
+def _load_discipline(
+    conn: psycopg.Connection,
+    org_id: str,
+    rep_id: str,
+    *,
+    now: datetime | None = None,
+) -> tuple[int, list[tuple[str, str | None]]]:
+    """Dün temas var, call_result boş. (toplam, en fazla 3 isim)."""
+    local = now or datetime.now(_TZ)
+    if local.tzinfo is None:
+        local = local.replace(tzinfo=_TZ)
+    else:
+        local = local.astimezone(_TZ)
+    yesterday = local.date() - timedelta(days=1)
+    y0, y1 = _day_bounds(yesterday)
+    total_row = conn.execute(
+        """
+        SELECT count(*)::int
+        FROM events e
+        WHERE e.org_id = %s
+          AND e.rep_id = %s
+          AND e.channel = 'call'
+          AND e.direction = 'outbound'
+          AND """
+        + _TEMAS_E
+        + """
+          AND coalesce(nullif(trim(e.meta->>'call_result'), ''), '') = ''
+          AND e.occurred_at <= now()
+          AND e.occurred_at >= %s
+          AND e.occurred_at < %s
+        """,
+        (org_id, rep_id, y0, y1),
+    ).fetchone()
+    total = int(total_row[0] or 0) if total_row else 0
+    if total <= 0:
+        return 0, []
+    rows = conn.execute(_DISCIPLINE_SQL, (org_id, rep_id, y0, y1)).fetchall()
+    names: list[tuple[str, str | None]] = []
+    for r in rows:
+        raw_name = str(r[0]).strip() if r[0] else ""
+        if not raw_name or _looks_like_phone(raw_name):
+            continue
+        names.append((raw_name, str(r[1]) if r[1] else None))
+        if len(names) >= 3:
+            break
+    return total, names
 
 
 def _load_ilk_satin(
@@ -1183,78 +1505,132 @@ def _load_ilk_satin(
     return (int(row[0] or 0) if row else 0, int(row[1] or 0) if row else 0)
 
 
+def _show_ilk_satin(now: datetime | None = None) -> bool:
+    """Pazartesi ve salı satır yok."""
+    local = now or datetime.now(_TZ)
+    if local.tzinfo is None:
+        local = local.replace(tzinfo=_TZ)
+    else:
+        local = local.astimezone(_TZ)
+    return local.weekday() not in (0, 1)
+
+
 def _build_message(
     *,
     rep_name: str,
     rep_email: str | None,
     selected: list[NudgeCandidate],
     karar: list[NudgeCandidate],
-    karar_pool: int,
     dunden: DundenStats | None = None,
-    ilk_this: int = 0,
-    ilk_prev: int = 0,
+    discipline_total: int = 0,
+    discipline_names: list[tuple[str, str | None]] | None = None,
 ) -> str:
     who = rep_name
     if rep_email:
         who = f"{rep_name} <{rep_email}>"
+    first = _first_name(_title_name(rep_name))
     parts: list[str] = [
         f"[gölge] {who} için",
         "",
-        "BUGUN",
+        f"Günaydın {first}",
+        "",
     ]
-    for n in selected:
-        reason = _reason_for(n)
-        if reason is None:
-            continue
-        parts.append(_identity_label(n))
-        parts.append(reason)
-
-    parts.append("")
-    parts.append(_clip(f"KARAR BEKLEYEN — {karar_pool}"))
-    for n in karar:
-        reason = _reason_for(n)
-        if reason is None:
-            continue
-        parts.append(_identity_label(n))
-        parts.append(reason)
-    if karar:
+    if discipline_total > 0:
+        shown_names = [
+            _title_name(name) for name, _phone in (discipline_names or [])
+        ]
+        listed = ", ".join(shown_names)
         parts.append(
-            _clip("Zoho'da güncelle: randevu / kaybetti / tekrar ara")
+            f"Dün {discipline_total} görüşmenin sonucu boş kaldı: {listed}."
         )
+        parts.append("Önce bunları doldur.")
+        parts.append("")
 
-    parts.append("")
-    parts.append("DUN")
-    if dunden is None:
-        parts.append("görüşme 0")
+    if selected:
+        parts.append("BUGUN")
+        for idx, n in enumerate(selected, start=1):
+            parts.append(f"{idx}. {_person_line(n)}")
+            reason = _reason_for(n)
+            if reason:
+                parts.append(f"   {reason}")
+        types_shown = {n.nudge_type for n in selected}
+        if _IKINCI_TYPE in types_shown:
+            parts.append(
+                "Satışa dönen müşterilerini en az iki kez aramışsın: %43. "
+                "Dönmeyenlerde bu oran %22."
+            )
+        if _SUNUMSUZ_TYPE in types_shown:
+            parts.append(
+                "Sunum yapılan görüşmelerin satışa dönme şansı yaklaşık üç katı."
+            )
+        parts.append("")
+
+    if karar:
+        n = karar[0]
+        parts.append("KARAR BEKLEYEN")
+        parts.append(_person_line(n))
+        reason = _reason_for(n)
+        if reason:
+            parts.append(reason)
+        parts.append("buton: randevu / kaybetti / tekrar ara")
+        parts.append("")
+
+    cevirme = dunden.cevirme if dunden else 0
+    temas = dunden.temas if dunden else 0
+    sure = (
+        _fmt_duration(dunden.avg_sec)
+        if dunden is not None and dunden.avg_sec is not None
+        else "?"
+    )
+    dun_line = (
+        f"{cevirme} çevirme, {temas} kişi açtı. Ortalama görüşme {sure}"
+    )
+    avg = dunden.avg_sec if dunden is not None else None
+    week4 = dunden.week4_avg_sec if dunden is not None else None
+    if avg is not None and week4 is not None:
+        if int(round(float(avg))) != int(round(float(week4))):
+            sure4 = _fmt_duration(week4)
+            dun_line += f" — son 4 haftanda {sure4}'ydi."
+        else:
+            dun_line += "."
     else:
-        parts.append(f"görüşme {dunden.talks}")
-        if dunden.total_sec is not None:
-            parts.append(f"toplam süre {_fmt_total_minutes(dunden.total_sec)}")
-        if dunden.avg_sec is not None:
-            parts.append(f"ortalama {_fmt_duration(dunden.avg_sec)}")
-        if dunden.week4_avg_sec is not None:
-            parts.append(
-                f"4 hafta ortalama {_fmt_duration(dunden.week4_avg_sec)}"
-            )
-        first_s = _fmt_saat(dunden.first_at)
-        last_s = _fmt_saat(dunden.last_at)
-        if first_s and last_s:
-            parts.append(f"pencere {first_s}-{last_s}")
-        if dunden.total_calls > 0:
-            parts.append(
-                f"arama {dunden.total_calls}, bağlanmadı {dunden.not_reached}"
-            )
-        if dunden.talks > 0:
-            parts.append(f"sonuç boş {dunden.empty_result}")
-
-    parts.append("")
-    parts.append("BU HAFTA")
-    parts.append(f"ilk kez satın alan {ilk_this} / {ilk_prev}")
-    parts.append(f"karar bekleyen {karar_pool}")
+        dun_line += "."
+    parts.append("DUN")
+    parts.append(dun_line)
     return "\n".join(parts).rstrip() + "\n"
 
 
+def _karar_buttons(karar: list[NudgeCandidate]) -> list[dict[str, Any]]:
+    """En eski kayda 3 Cliq butonu; tıklanınca pusula_karar fonksiyonu."""
+    if not karar:
+        return []
+    n = karar[0]
+    lead_id = n.lead_id or ""
+    labels = (
+        ("Randevu", "randevu"),
+        ("Kaybetti", "kaybetti"),
+        ("Tekrar ara", "tekrar_ara"),
+    )
+    buttons: list[dict[str, Any]] = []
+    for label, choice in labels:
+        buttons.append(
+            {
+                "label": label,
+                "hint": (n.contact_name or lead_id)[:40],
+                "type": "+",
+                "key": f"{lead_id}|{n.thread_id}|{choice}",
+                "action": {
+                    "type": "invoke.function",
+                    "data": {"name": "pusula_karar"},
+                },
+            }
+        )
+    return buttons
+
+
 def _is_dup(conn: psycopg.Connection, org_id: str, n: NudgeCandidate) -> bool:
+    if n.nudge_type == _KARAR_TYPE:
+        return False
     row = conn.execute(
         _DEDUP_SQL, (org_id, n.rep_id, n.nudge_type, n.thread_id)
     ).fetchone()
@@ -1357,30 +1733,6 @@ def _print_taahhut_funnel(conn: psycopg.Connection, org_id: str) -> None:
 def _load_candidates(conn: psycopg.Connection, org_id: str) -> list[NudgeCandidate]:
     out: list[NudgeCandidate] = []
 
-    for row in conn.execute(_PENCERE_SQL, (org_id,)).fetchall():
-        (
-            rep_id, thread_id, lead_id, commitment_id, nudge_type,
-            sort_key, outbound_calls, temas_calls, phone, contact_name,
-            is_dokunulmamis, last_attempt_at, assigned_at,
-        ) = row
-        out.append(
-            NudgeCandidate(
-                rep_id=str(rep_id),
-                thread_id=str(thread_id),
-                lead_id=str(lead_id) if lead_id else None,
-                commitment_id=None,
-                nudge_type=str(nudge_type),
-                sort_key=float(sort_key or 0),
-                phone=str(phone) if phone else None,
-                contact_name=str(contact_name) if contact_name else None,
-                outbound_calls=int(outbound_calls or 0),
-                temas_calls=int(temas_calls or 0),
-                is_dokunulmamis=bool(is_dokunulmamis),
-                last_attempt_at=last_attempt_at,
-                assigned_at=assigned_at,
-            )
-        )
-
     for row in conn.execute(_PLANLANMIS_SQL, (org_id,)).fetchall():
         (
             rep_id, thread_id, lead_id, commitment_id, nudge_type,
@@ -1442,6 +1794,44 @@ def _load_candidates(conn: psycopg.Connection, org_id: str) -> list[NudgeCandida
             )
         )
 
+    for row in conn.execute(_IKINCI_ARAMA_SQL, (org_id,)).fetchall():
+        (
+            rep_id, thread_id, lead_id, commitment_id, nudge_type,
+            sort_key, outbound_calls, temas_calls, phone, contact_name,
+        ) = row
+        out.append(
+            NudgeCandidate(
+                rep_id=str(rep_id),
+                thread_id=str(thread_id),
+                lead_id=str(lead_id) if lead_id else None,
+                commitment_id=None,
+                nudge_type=str(nudge_type),
+                sort_key=float(sort_key or 0),
+                phone=str(phone) if phone else None,
+                contact_name=str(contact_name) if contact_name else None,
+                outbound_calls=int(outbound_calls or 0),
+                temas_calls=int(temas_calls or 0),
+            )
+        )
+
+    for row in conn.execute(_SUNUMSUZ_SQL, (org_id,)).fetchall():
+        (
+            rep_id, thread_id, lead_id, commitment_id, nudge_type,
+            sort_key, outbound_calls, temas_calls, phone, contact_name,
+        ) = row
+        out.append(
+            NudgeCandidate(
+                rep_id=str(rep_id),
+                thread_id=str(thread_id),
+                lead_id=str(lead_id) if lead_id else None,
+                commitment_id=None,
+                nudge_type=str(nudge_type),
+                sort_key=float(sort_key or 0),
+                phone=str(phone) if phone else None,
+                contact_name=str(contact_name) if contact_name else None,
+            )
+        )
+
     return out
 
 
@@ -1451,7 +1841,7 @@ def _load_karar(
     """Düşünmek İstiyor + 48 saatten eski; en eski önce."""
     out: list[NudgeCandidate] = []
     rows = conn.execute(
-        _KARAR_SQL, (org_id, _KARAR_STATUS, _KARAR_HOURS)
+        _KARAR_SQL, (org_id, _KARAR_STATUS)
     ).fetchall()
     for row in rows:
         (
@@ -1542,45 +1932,88 @@ def _allocate_slots(counts: dict[str, int], max_slots: int) -> dict[str, int]:
 def _select_for_rep(
     items: list[NudgeCandidate],
 ) -> tuple[list[NudgeCandidate], dict[str, int], dict[str, int], int]:
+    """Taze (14g) tazelik sırası; backlog en fazla 2; BUGUN en fazla 8."""
     by_type: dict[str, list[NudgeCandidate]] = defaultdict(list)
     for n in items:
         by_type[n.nudge_type].append(n)
-    for nudge_type in _TYPE_ORDER:
-        # planlanmis: isimli + en eski önce; diğerleri en yüksek sort_key önce
-        if nudge_type == "planlanmis_arama":
-            by_type[nudge_type].sort(
-                key=lambda x: (
-                    0 if (x.contact_name or "").strip() else 1,
-                    x.sort_key,
-                )
-            )
-        elif nudge_type == "pencere_aciliyor":
-            by_type[nudge_type].sort(
-                key=lambda x: (0 if x.is_dokunulmamis else 1, -x.sort_key)
-            )
-        else:
-            by_type[nudge_type].sort(key=lambda x: x.sort_key, reverse=True)
 
     suitable = {t: len(by_type[t]) for t in _TYPE_ORDER}
-    slots = _allocate_slots(suitable, _MAX_PER_REP)
+    seen: set[str] = set()
 
+    def _take(
+        src: list[NudgeCandidate],
+        *,
+        newest_first: bool,
+    ) -> list[NudgeCandidate]:
+        dated: list[tuple[datetime, NudgeCandidate]] = []
+        undated: list[NudgeCandidate] = []
+        for n in src:
+            if n.thread_id in seen:
+                continue
+            if _reason_for(n) is None:
+                continue
+            trigger = _trigger_at(n)
+            if trigger is None:
+                undated.append(n)
+            else:
+                dated.append((trigger, n))
+        dated.sort(key=lambda x: x[0], reverse=newest_first)
+        ordered = [n for _t, n in dated] + undated
+        out: list[NudgeCandidate] = []
+        for n in ordered:
+            if n.thread_id in seen:
+                continue
+            seen.add(n.thread_id)
+            out.append(n)
+        return out
+
+    fresh_src = [
+        n for n in items
+        if n.nudge_type in _TIME_SENSITIVE and _is_fresh(n)
+    ]
+    backlog_src = [
+        n for n in items
+        if n.nudge_type in _TIME_SENSITIVE and not _is_fresh(n)
+    ]
+    sunumsuz_src = list(by_type[_SUNUMSUZ_TYPE])
+
+    fresh = _take(fresh_src, newest_first=True)
+    backlog = _take(backlog_src, newest_first=False)
+    sunumsuz = _take(sunumsuz_src, newest_first=False)
+
+    sunumsuz_keep = sunumsuz[: min(_SUNUMSUZ_QUOTA, _BUGUN_CAP)]
+    rest_cap = _BUGUN_CAP - len(sunumsuz_keep)
     selected: list[NudgeCandidate] = []
+    selected.extend(fresh[:rest_cap])
+    remain = rest_cap - len(selected)
+    if remain > 0 and backlog:
+        selected.extend(backlog[: min(_BACKLOG_QUOTA, remain)])
+    selected.extend(sunumsuz_keep)
+
     shown = {t: 0 for t in _TYPE_ORDER}
-    for nudge_type in _TYPE_ORDER:
-        take = slots[nudge_type]
-        for n in by_type[nudge_type][:take]:
-            selected.append(n)
-            shown[nudge_type] += 1
-
-    stock = max(0, len(items) - len(selected))
-    return selected, suitable, shown, stock
+    for n in selected:
+        shown[n.nudge_type] += 1
+    return selected, suitable, shown, 0
 
 
-def _post_cliq(webhook_url: str, text: str, userids: str) -> None:
-    body = json.dumps(
-        {"type": "message", "text": text, "userids": userids},
-        ensure_ascii=False,
-    ).encode("utf-8")
+def _post_cliq(
+    webhook_url: str,
+    text: str,
+    userids: str,
+    buttons: list[dict[str, Any]] | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "type": "message",
+        "text": text,
+        "userids": userids,
+    }
+    if buttons:
+        payload["card"] = {
+            "theme": "modern-inline",
+            "title": "Karar",
+            "buttons": buttons,
+        }
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         webhook_url,
         data=body,
@@ -1617,6 +2050,98 @@ def _insert_nudge(
         ),
     )
     return int(cur.rowcount)
+
+
+def record_karar(
+    conn: psycopg.Connection,
+    *,
+    org_id: str,
+    rep_id: str,
+    thread_id: str,
+    lead_id: str | None,
+    karar: str,
+) -> int:
+    """Cliq buton kararı — ertesi gün aynı lead karar_bekleyen'de çıkmaz."""
+    if karar not in _KARAR_CHOICES:
+        raise ValueError(f"bilinmeyen karar: {karar}")
+    n = NudgeCandidate(
+        rep_id=rep_id,
+        thread_id=thread_id,
+        lead_id=lead_id,
+        commitment_id=None,
+        nudge_type=_KARAR_TYPE,
+        sort_key=0.0,
+        phone=None,
+    )
+    return _insert_nudge(
+        conn,
+        org_id=org_id,
+        n=n,
+        payload={"karar": karar, "source": "cliq_button"},
+    )
+
+
+def _print_temas_sites() -> None:
+    print(
+        f"temas fonksiyonu: temas_mi / is_temas_sql — "
+        f"sure esigi kaldirilan yer={TEMAS_MIGRATION_SITES} "
+        "(weekly_report 13, send_nudges 3, update_lead_status 1, "
+        "is_temas_sql govde 1)"
+    )
+
+
+def _print_exclusion(
+    conn: psycopg.Connection, org_id: str
+) -> None:
+    print(
+        "dislama filtresi: send_nudges SQL'de yoktu; eklendi. "
+        f"Statuler: {', '.join(_EXCLUDED_STATUSES)}"
+    )
+    print(
+        "  pencere_aciliyor once pusula_state=active ile kapali "
+        "statuleri dolayli eleyebilirdi; kayip/planlanmis/taahhut/"
+        "karar_bekleyen'de dogrudan filtre yoktu."
+    )
+    for status in _EXCLUDED_STATUSES:
+        row = conn.execute(
+            """
+            SELECT count(*)::int FROM leads
+            WHERE org_id = %s AND status = %s
+            """,
+            (org_id, status),
+        ).fetchone()
+        print(f"  {status}: {int(row[0] or 0) if row else 0} lead")
+
+
+def _print_call_filter_compare(
+    conn: psycopg.Connection, org_id: str
+) -> None:
+    """30 gun temsilci basi cagri: planned dahil vs haric."""
+    print("--- 30g cagri once -> sonra (overdue/scheduled haric) ---")
+    rows = conn.execute(
+        """
+        SELECT r.full_name,
+          count(*)::int AS once,
+          count(*) FILTER (WHERE """
+        + _NOT_PLANNED_E
+        + """)::int AS sonra
+        FROM events e
+        JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+        WHERE e.org_id = %s
+          AND r.category = 'sales' AND r.active = true
+          AND e.channel = 'call'
+          AND e.direction = 'outbound'
+          AND e.occurred_at <= now()
+          AND e.occurred_at >= now() - interval '30 days'
+        GROUP BY r.full_name
+        ORDER BY r.full_name
+        """,
+        (org_id,),
+    ).fetchall()
+    for name, before, after in rows:
+        print(f"  {name}: {int(before)} -> {int(after)}")
+    if not rows:
+        print("  (sales cagri yok)")
 
 
 def main() -> int:
@@ -1656,6 +2181,9 @@ def main() -> int:
             ensure_status_changed_columns(conn)
             conn.commit()
             print_call_stale_warning(conn, org_id)
+            _print_temas_sites()
+            _print_exclusion(conn, org_id)
+            _print_call_filter_compare(conn, org_id)
             recipients = _load_recipients(conn, org_id)
             recipient_ids = set(recipients.keys())
             extras = _parse_extra_recipients()
@@ -1681,7 +2209,7 @@ def main() -> int:
                 conn, org_id, yesterday, category=None
             )
             print(
-                f"dün ({yesterday}) 10sn+ çağrı: "
+                f"dün ({yesterday}) çevirme: "
                 f"sales={talks_sales}, tüm={talks_all}"
             )
 
@@ -1704,11 +2232,21 @@ def main() -> int:
                 lambda: {t: 0 for t in _TYPE_ORDER}
             )
             for n in raw:
-                suitable_raw[n.rep_id][n.nudge_type] += 1
+                if n.nudge_type in suitable_raw[n.rep_id]:
+                    suitable_raw[n.rep_id][n.nudge_type] += 1
 
-            karar_pool_raw: dict[str, int] = defaultdict(int)
-            for n in karar_raw:
-                karar_pool_raw[n.rep_id] += 1
+            print("--- ikinci_arama / sunumsuz_temas aday (temsilci) ---")
+            for rid in sorted(
+                recipient_ids,
+                key=lambda x: (recipients[x][2], recipients[x][0]),
+            ):
+                name = recipients[rid][0]
+                ikinci_n = suitable_raw[rid].get(_IKINCI_TYPE, 0)
+                sunumsuz_n = suitable_raw[rid].get(_SUNUMSUZ_TYPE, 0)
+                print(
+                    f"  {name}: ikinci_arama={ikinci_n} "
+                    f"sunumsuz_temas={sunumsuz_n}"
+                )
 
             planlanmis_total = sum(
                 1 for n in raw if n.nudge_type == "planlanmis_arama"
@@ -1768,33 +2306,23 @@ def main() -> int:
                 recipient_ids,
                 key=lambda x: (recipients[x][2], recipients[x][0]),
             ):
-                suitable_pool = suitable_raw.get(
-                    rep_id, {t: 0 for t in _TYPE_ORDER}
-                )
                 items = by_rep.get(rep_id) or []
-                selected, suitable_elig, shown, _rest = _select_for_rep(items)
-                selected = [n for n in selected if _reason_for(n) is not None]
+                selected, suitable_elig, shown, _unused = _select_for_rep(
+                    items
+                )
                 karar_items = karar_by_rep.get(rep_id) or []
-                karar_shown: list[NudgeCandidate] = []
-                for n in karar_items:
-                    if _reason_for(n) is None:
-                        continue
-                    karar_shown.append(n)
-                    if len(karar_shown) >= _KARAR_MAX:
-                        break
-                karar_pool = karar_pool_raw.get(rep_id, 0)
+                karar_shown = karar_items[:_KARAR_MAX]
                 name, email, category = recipients[rep_id]
                 dunden = _load_dunden(conn, org_id, rep_id)
-                ilk_this, ilk_prev = _load_ilk_satin(conn, org_id, rep_id)
+                disc_total, disc_names = _load_discipline(conn, org_id, rep_id)
                 msg = _build_message(
                     rep_name=name,
                     rep_email=email,
                     selected=selected,
                     karar=karar_shown,
-                    karar_pool=karar_pool,
                     dunden=dunden,
-                    ilk_this=ilk_this,
-                    ilk_prev=ilk_prev,
+                    discipline_total=disc_total,
+                    discipline_names=disc_names,
                 )
                 plans.append(
                     (
@@ -1803,7 +2331,7 @@ def main() -> int:
                         karar_shown,
                         suitable_elig,
                         shown,
-                        karar_pool,
+                        0,
                         msg,
                     )
                 )
@@ -1816,7 +2344,7 @@ def main() -> int:
                 f"mesaj={len(plans)}, dürtü={produced} (org={org_id})"
             )
             for (
-                rep_id, selected, karar_shown, suitable, shown, pool, _msg
+                rep_id, selected, karar_shown, suitable, shown, _ov, _msg
             ) in plans:
                 name, _email, category = recipients[rep_id]
                 detail = ", ".join(
@@ -1824,21 +2352,34 @@ def main() -> int:
                     for t in _TYPE_ORDER
                     if suitable[t] or shown[t]
                 )
+                old30 = 0
+                now_local = datetime.now(_TZ)
+                for n in selected:
+                    trigger = _trigger_at(n)
+                    if trigger is None:
+                        continue
+                    age = now_local - trigger
+                    if age.days >= 30:
+                        old30 += 1
                 print(
                     f"  {name} [{category}]: bugun={len(selected)} "
-                    f"({detail}), karar={len(karar_shown)}/{pool}"
+                    f"({detail}), karar={len(karar_shown)}, "
+                    f"tetik_30g_ustu={old30}"
                 )
+                if old30 > 2:
+                    print(
+                        f"    uyari: 30 günden eski tetikleyici {old30} > 2"
+                    )
+                if "ve " in _msg and "tane daha" in _msg:
+                    print("    uyari: bakiye satiri mesajda var")
 
             if dry_run:
                 print("dry-run: gönderilmedi. Yazmak için --apply kullan.")
-                if plans:
-                    sample = plans[0][6]
-                    for p in plans:
-                        if p[1] or p[2]:
-                            sample = p[6]
-                            break
-                    print("--- örnek mesaj ---")
-                    print(sample)
+                for p in plans:
+                    rid = p[0]
+                    name, _e, _c = recipients[rid]
+                    print(f"--- mesaj: {name} ---")
+                    print(p[6])
             else:
                 assert webhook_url
                 if shadow_email is None:
@@ -1847,13 +2388,13 @@ def main() -> int:
                         "(gercek temsilciler)"
                     )
                     for (
-                        rep_id, _sel, _kar, _su, _sh, _pool, _msg
+                        rep_id, _sel, _kar, _su, _sh, _ov, _msg
                     ) in plans:
                         name, email, category = recipients[rep_id]
                         dest = email or "(email yok)"
                         print(f"  {name} [{category}] -> {dest}")
                 for (
-                    rep_id, selected, karar_shown, suitable, shown, pool, msg
+                    rep_id, selected, karar_shown, suitable, shown, overflow, msg
                 ) in plans:
                     name, email, category = recipients[rep_id]
                     dest = shadow_email or email
@@ -1862,7 +2403,12 @@ def main() -> int:
                         print(f"hata (cliq {name}): email yok")
                         continue
                     try:
-                        _post_cliq(webhook_url, msg, dest)
+                        _post_cliq(
+                            webhook_url,
+                            msg,
+                            dest,
+                            buttons=_karar_buttons(karar_shown),
+                        )
                     except (
                         urllib.error.URLError,
                         urllib.error.HTTPError,
@@ -1871,6 +2417,7 @@ def main() -> int:
                         errors += 1
                         print(f"hata (cliq {name}): {exc}")
                         continue
+                    print(f"cliq gitti: {name} -> {dest}")
 
                     to_store = selected + karar_shown
                     if not to_store:
@@ -1886,7 +2433,6 @@ def main() -> int:
                                 "nudge_type": n.nudge_type,
                                 "phone": n.phone,
                                 "contact_name": n.contact_name,
-                                "karar_pool": pool,
                                 "suitable": suitable,
                                 "shown": shown,
                             }
