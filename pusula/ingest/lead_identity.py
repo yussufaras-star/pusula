@@ -321,6 +321,72 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
     return stats
 
 
+def sync_leads(*, since: datetime, dry_run: bool = False) -> dict[str, int]:
+    """Leads Created_Time >= since. Dry-run yazmaz; inserted henüz DB'de olmayanlar."""
+    stats = {
+        "fetched": 0,
+        "written": 0,
+        "inserted": 0,
+        "updated": 0,
+        "errors": 0,
+    }
+    since_str = _format_zoho_dt(since)
+    fields = ", ".join(_LEAD_FIELDS)
+    query = (
+        f"select {fields} from Leads "
+        f"where Created_Time >= '{since_str}' "
+        "order by Created_Time asc"
+    )
+    ids: list[str] = []
+    try:
+        for record in coql(query):
+            rid = record.get("id")
+            if rid is None:
+                stats["errors"] += 1
+                continue
+            ids.append(str(rid))
+            stats["fetched"] += 1
+    except Exception:
+        logger.exception("Leads COQL başarısız")
+        stats["errors"] += 1
+        return stats
+
+    existing = _existing_lead_ids(ids)
+    stats["inserted"] = sum(1 for lid in ids if lid not in existing)
+    stats["updated"] = len(ids) - stats["inserted"]
+    if dry_run:
+        stats["written"] = len(ids)
+        return stats
+    if not ids:
+        return stats
+    inner = sync_lead_identities(set(ids))
+    stats["written"] = inner.get("leads_written", 0)
+    stats["errors"] += inner.get("errors", 0)
+    return stats
+
+
+def _existing_lead_ids(lead_ids: list[str]) -> set[str]:
+    if not lead_ids:
+        return set()
+    with client.transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT lead_id FROM leads
+            WHERE org_id = %s AND lead_id = ANY(%s)
+            """,
+            (get_org_id(), lead_ids),
+        ).fetchall()
+    return {str(row[0]) for row in rows}
+
+
+def _format_zoho_dt(value: datetime) -> str:
+    local = to_istanbul(value)
+    offset = local.strftime("%z")
+    if len(offset) == 5:
+        offset = f"{offset[:3]}:{offset[3:]}"
+    return local.strftime("%Y-%m-%dT%H:%M:%S") + offset
+
+
 def _active_pairs(lead_id: str, record: dict[str, Any]) -> list[tuple[str, str]]:
     """Normalize + blocklist sonrası (id_type, id_value) listesi."""
     pairs: list[tuple[str, str]] = [("zoho_lead", lead_id)]

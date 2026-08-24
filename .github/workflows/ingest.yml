@@ -35,5 +35,9 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
-      - name: Run ingest
+      - name: Sync leads
+        run: python scripts/ingest_leads.py --lookback-days 14
+      - name: Sync contacts
+        run: python scripts/ingest_sales_cycle.py --contacts-only --lookback-days 14
+      - name: Sync calls
         run: python scripts/run_ingest.py

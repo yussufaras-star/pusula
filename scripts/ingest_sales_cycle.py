@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -58,6 +59,11 @@ def main() -> int:
         action="store_true",
         help="DB'ye yazma",
     )
+    parser.add_argument(
+        "--lookback-days",
+        type=int,
+        help="Contacts Created_Time için bugünden geriye gün (cron)",
+    )
     args = parser.parse_args()
     _load_env()
 
@@ -70,11 +76,34 @@ def main() -> int:
     run_contacts = not args.deals_only
     run_deals = not args.contacts_only
 
+    contacts_since: datetime | None = None
+    if args.lookback_days is not None:
+        if args.lookback_days < 1:
+            print("--lookback-days en az 1 olmalı")
+            return 1
+        contacts_since = datetime.now(ZoneInfo("Europe/Istanbul")) - timedelta(
+            days=args.lookback_days
+        )
+        contacts_since = contacts_since.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+    elif args.contacts_only and any(
+        arg == "--since" or arg.startswith("--since=") for arg in sys.argv
+    ):
+        contacts_since = since
+
     if run_contacts:
-        print("=== Contacts (tümü) ===")
-        cstats = sync_contacts(dry_run=args.dry_run)
+        if contacts_since is None:
+            print("=== Contacts (tümü) ===")
+        else:
+            print(
+                f"=== Contacts (Created_Time >= {contacts_since.isoformat()}) ==="
+            )
+        cstats = sync_contacts(since=contacts_since, dry_run=args.dry_run)
         print(
             f"fetched={cstats['fetched']} written={cstats['written']} "
+            f"inserted={cstats.get('inserted', 0)} "
+            f"updated={cstats.get('updated', 0)} "
             f"threadli={cstats['with_thread']} leadli={cstats['with_lead']} "
             f"hata={cstats['errors']}"
         )

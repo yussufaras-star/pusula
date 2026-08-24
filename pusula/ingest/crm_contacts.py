@@ -5,6 +5,7 @@ thread'e bağlar; contacts tablosuna yazar. lead_id, aynı thread'deki
 zoho_lead kimliğinden çözülür (Zoho Contact'ta Lead_Id alanı yok).
 
 Kullanım (scripts/ingest_sales_cycle.py üzerinden).
+since verilirse Created_Time filtresi; yoksa tam liste.
 """
 
 from __future__ import annotations
@@ -43,21 +44,35 @@ _CONTACT_FIELDS = [
 _BATCH_SIZE = 25
 
 
-def sync_contacts(*, dry_run: bool = False) -> dict[str, int]:
-    """Tüm Contacts kayıtlarını sync eder. --since yok."""
+def sync_contacts(
+    *,
+    since: datetime | None = None,
+    dry_run: bool = False,
+) -> dict[str, int]:
+    """Contacts sync. since verilirse Created_Time >= since; yoksa tümü."""
     stats = {
         "fetched": 0,
         "written": 0,
+        "inserted": 0,
+        "updated": 0,
         "with_thread": 0,
         "with_lead": 0,
         "errors": 0,
     }
     org_id = get_org_id()
-    query = (
-        "select " + ", ".join(_CONTACT_FIELDS) + " from Contacts "
-        "where Created_Time is not null "
-        "order by Created_Time asc"
-    )
+    if since is None:
+        query = (
+            "select " + ", ".join(_CONTACT_FIELDS) + " from Contacts "
+            "where Created_Time is not null "
+            "order by Created_Time asc"
+        )
+    else:
+        since_str = _format_zoho_dt(since)
+        query = (
+            "select " + ", ".join(_CONTACT_FIELDS) + " from Contacts "
+            f"where Created_Time >= '{since_str}' "
+            "order by Created_Time asc"
+        )
     parsed: list[dict[str, Any]] = []
 
     try:
@@ -116,6 +131,11 @@ def sync_contacts(*, dry_run: bool = False) -> dict[str, int]:
         stats["errors"] += 1
         return stats
 
+    existing = _existing_contact_ids([row["contact_id"] for row in parsed])
+    stats["inserted"] = sum(
+        1 for row in parsed if row["contact_id"] not in existing
+    )
+    stats["updated"] = len(parsed) - stats["inserted"]
     if dry_run:
         stats["written"] = len(parsed)
         return stats
@@ -217,6 +237,28 @@ def _write_contact_chunk_on_conn(
             upserts,
         )
     stats["written"] += len(upserts)
+
+
+def _existing_contact_ids(contact_ids: list[str]) -> set[str]:
+    if not contact_ids:
+        return set()
+    with client.transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT contact_id FROM contacts
+            WHERE org_id = %s AND contact_id = ANY(%s)
+            """,
+            (get_org_id(), contact_ids),
+        ).fetchall()
+    return {str(row[0]) for row in rows}
+
+
+def _format_zoho_dt(value: datetime) -> str:
+    local = to_istanbul(value)
+    offset = local.strftime("%z")
+    if len(offset) == 5:
+        offset = f"{offset[:3]}:{offset[3:]}"
+    return local.strftime("%Y-%m-%dT%H:%M:%S") + offset
 
 
 def _lead_for_thread(conn: Any, org_id: str, thread_id: str) -> str | None:
