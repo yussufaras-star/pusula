@@ -443,12 +443,11 @@ _TAAHHUT_SQL = """
     WHERE c.org_id = %s
       AND c.status = 'broken'
       AND c.due_at IS NOT NULL
-      AND c.due_at >= now() - interval '14 days'
       AND c.due_at < now()
       AND c.thread_id IS NOT NULL
       AND l.owner_rep_id IS NOT NULL
       AND coalesce(l.status, '') NOT IN """ + _EXCL_IN + """
-    ORDER BY c.due_at DESC
+    ORDER BY c.due_at ASC
 """
 
 # Son 7 gün: 1 çevirme, temas yok, ikinci deneme yok.
@@ -1790,13 +1789,13 @@ def _print_taahhut_funnel(conn: psycopg.Connection, org_id: str) -> None:
           ) AS in_14d,
           count(*) FILTER (
             WHERE status = 'broken'
-              AND due_at >= now() - interval '14 days'
+              AND due_at IS NOT NULL
               AND due_at < now()
               AND thread_id IS NOT NULL
           ) AS with_thread,
           count(*) FILTER (
             WHERE status = 'broken'
-              AND due_at >= now() - interval '14 days'
+              AND due_at IS NOT NULL
               AND due_at < now()
               AND thread_id IS NOT NULL
               AND EXISTS (
@@ -1815,10 +1814,10 @@ def _print_taahhut_funnel(conn: psycopg.Connection, org_id: str) -> None:
         f"gecmis_due={totals[2]} son_14g={totals[3]} "
         f"threadli={totals[4]} owner_lead={totals[5]}"
     )
-    if int(totals[2] or 0) > 0 and int(totals[3] or 0) == 0:
+    if int(totals[2] or 0) > int(totals[3] or 0):
         print(
-            "  not: son 14g=0 — due_at'ler 14 günden eski "
-            "(temas filtresi bu sinyalde yok)"
+            "  not: 14g dışı broken backlog kotasına girer "
+            f"(günde en fazla {_BACKLOG_QUOTA}, en eski önce)"
         )
     elif int(totals[3] or 0) > int(totals[5] or 0):
         print(
@@ -1856,10 +1855,10 @@ def _print_taahhut_funnel(conn: psycopg.Connection, org_id: str) -> None:
         (org_id,),
     ).fetchall()
     for name, past, in14 in per_rep:
-        elenen = int(past or 0) - int(in14 or 0)
+        older = int(past or 0) - int(in14 or 0)
         print(
-            f"  {name}: gecmis_due={past} -> son_14g={in14} "
-            f"(14g dışı elenen={elenen})"
+            f"  {name}: gecmis_due={past} taze_14g={in14} "
+            f"backlog={older} (gösterilen en fazla {_BACKLOG_QUOTA})"
         )
 
 
@@ -2065,7 +2064,8 @@ def _allocate_slots(counts: dict[str, int], max_slots: int) -> dict[str, int]:
 def _select_for_rep(
     items: list[NudgeCandidate],
 ) -> tuple[list[NudgeCandidate], dict[str, int], dict[str, int], int]:
-    """Taze (14g) tazelik sırası; backlog en fazla 2; BUGUN en fazla 8."""
+    """Taze (14g) tazelik sırası; gecikmis_taahhut backlog en fazla 2
+    (en eski önce, kotası taze ikinci_arama ile ezilmez); BUGUN en fazla 8."""
     by_type: dict[str, list[NudgeCandidate]] = defaultdict(list)
     for n in items:
         by_type[n.nudge_type].append(n)
@@ -2115,12 +2115,20 @@ def _select_for_rep(
     sunumsuz = _take(sunumsuz_src, newest_first=False)
 
     sunumsuz_keep = sunumsuz[: min(_SUNUMSUZ_QUOTA, _BUGUN_CAP)]
-    rest_cap = _BUGUN_CAP - len(sunumsuz_keep)
+    taahhut_backlog = [
+        n for n in backlog if n.nudge_type == "gecikmis_taahhut"
+    ]
+    other_backlog = [
+        n for n in backlog if n.nudge_type != "gecikmis_taahhut"
+    ]
+    taahhut_keep = taahhut_backlog[: min(_BACKLOG_QUOTA, _BUGUN_CAP)]
+    rest_cap = _BUGUN_CAP - len(sunumsuz_keep) - len(taahhut_keep)
     selected: list[NudgeCandidate] = []
-    selected.extend(fresh[:rest_cap])
-    remain = rest_cap - len(selected)
-    if remain > 0 and backlog:
-        selected.extend(backlog[: min(_BACKLOG_QUOTA, remain)])
+    selected.extend(fresh[: max(0, rest_cap)])
+    remain = max(0, rest_cap) - len(selected)
+    if remain > 0 and other_backlog:
+        selected.extend(other_backlog[: min(_BACKLOG_QUOTA, remain)])
+    selected.extend(taahhut_keep)
     selected.extend(sunumsuz_keep)
 
     shown = {t: 0 for t in _TYPE_ORDER}
