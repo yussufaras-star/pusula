@@ -92,6 +92,8 @@ class Lead(BaseModel):
     full_name: str | None = None  # Zoho Full_Name; identities'e yazılmaz
     pusula_state: PusulaLeadState | None = None
     pusula_state_at: datetime | None = None
+    status_changed_at: datetime | None = None
+    status_changed_source: str | None = None  # gercek | tahmini
     created_at: datetime | None = None
 
 

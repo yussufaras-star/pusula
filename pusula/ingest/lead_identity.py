@@ -55,6 +55,60 @@ LeadRow = tuple[
 ]
 
 
+def ensure_status_changed_columns(conn: Any) -> None:
+    """Kolonlar yoksa ekler; boş kayıtları son event ile tahmini doldurur."""
+    conn.execute(
+        "ALTER TABLE leads ADD COLUMN IF NOT EXISTS status_changed_at timestamptz"
+    )
+    conn.execute(
+        "ALTER TABLE leads ADD COLUMN IF NOT EXISTS status_changed_source text"
+    )
+    conn.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'leads_status_changed_source_check'
+            ) THEN
+                ALTER TABLE leads
+                    ADD CONSTRAINT leads_status_changed_source_check
+                    CHECK (
+                        status_changed_source IS NULL
+                        OR status_changed_source IN ('gercek', 'tahmini')
+                    );
+            END IF;
+        END $$
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_leads_karar_bekleyen
+            ON leads (org_id, owner_rep_id, status_changed_at)
+            WHERE status = 'Düşünmek İstiyor'
+        """
+    )
+    conn.execute(
+        """
+        UPDATE leads l
+        SET status_changed_at = e.last_at,
+            status_changed_source = 'tahmini'
+        FROM (
+            SELECT l2.org_id, l2.lead_id, max(ev.occurred_at) AS last_at
+            FROM leads l2
+            JOIN events ev
+              ON ev.org_id = l2.org_id AND ev.thread_id = l2.thread_id
+            WHERE l2.status_changed_at IS NULL
+              AND l2.thread_id IS NOT NULL
+            GROUP BY l2.org_id, l2.lead_id
+        ) e
+        WHERE l.org_id = e.org_id
+          AND l.lead_id = e.lead_id
+          AND l.status_changed_at IS NULL
+        """
+    )
+
+
 def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
     """Lead id'ler için kimlik + leads satırını batch çeker ve yazar.
 
@@ -70,6 +124,7 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
     cleaned = {lid.strip() for lid in lead_ids if lid and str(lid).strip()}
     with client.transaction() as conn:
         client.load_blocklist(conn)
+        ensure_status_changed_columns(conn)
     if not cleaned:
         return stats
 
@@ -205,16 +260,30 @@ def sync_lead_identities(lead_ids: set[str]) -> dict[str, int]:
                         """
                         INSERT INTO leads (
                             org_id, lead_id, thread_id, status,
-                            owner_rep_id, assigned_at, source, full_name
+                            owner_rep_id, assigned_at, source, full_name,
+                            status_changed_at, status_changed_source
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s,
+                            now(), 'gercek'
+                        )
                         ON CONFLICT (org_id, lead_id) DO UPDATE SET
                             thread_id = COALESCE(EXCLUDED.thread_id, leads.thread_id),
                             status = EXCLUDED.status,
                             owner_rep_id = EXCLUDED.owner_rep_id,
                             assigned_at = EXCLUDED.assigned_at,
                             source = EXCLUDED.source,
-                            full_name = EXCLUDED.full_name
+                            full_name = EXCLUDED.full_name,
+                            status_changed_at = CASE
+                                WHEN leads.status IS DISTINCT FROM EXCLUDED.status
+                                THEN now()
+                                ELSE leads.status_changed_at
+                            END,
+                            status_changed_source = CASE
+                                WHEN leads.status IS DISTINCT FROM EXCLUDED.status
+                                THEN 'gercek'
+                                ELSE leads.status_changed_source
+                            END
                         """,
                         [
                             (

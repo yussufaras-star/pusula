@@ -69,7 +69,6 @@ from pusula.sifir_satis import (
     won_stage_sql,
 )
 from pusula.temas import (
-    TEMAS_MIN_SEC,
     duration_sec,
     is_temas_sql,
     outcome_join,
@@ -377,11 +376,11 @@ def metric_kayit_disiplini(
         f"""
         SELECT r.full_name,
           count(*) FILTER (
-            WHERE {_DUR} >= {TEMAS_MIN_SEC}
+            WHERE {_TEMAS}
               AND nullif(e.meta->>'call_result', '') IS NOT NULL
           )::int AS filled,
           count(*) FILTER (
-            WHERE {_DUR} >= {TEMAS_MIN_SEC}
+            WHERE {_TEMAS}
           )::int AS total
         FROM events e
         JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
@@ -394,10 +393,10 @@ def metric_kayit_disiplini(
         GROUP BY r.full_name
         ORDER BY
           (count(*) FILTER (
-             WHERE {_DUR} >= {TEMAS_MIN_SEC}
+             WHERE {_TEMAS}
                AND nullif(e.meta->>'call_result', '') IS NOT NULL
            )::float
-           / nullif(count(*) FILTER (WHERE {_DUR} >= {TEMAS_MIN_SEC}), 0)
+           / nullif(count(*) FILTER (WHERE {_TEMAS}), 0)
           ) ASC NULLS LAST,
           r.full_name
         """,
@@ -419,7 +418,7 @@ def metric_kayit_disiplini(
                       AND r.category = 'sales' AND r.active = true
                       AND e.channel = 'call' AND e.direction = 'outbound'
                       AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
-                      AND {_DUR} >= {TEMAS_MIN_SEC}
+                      AND {_TEMAS}
                       AND e.occurred_at <= now()
                       AND e.occurred_at >= %s AND e.occurred_at < %s
                     ORDER BY e.occurred_at
@@ -531,7 +530,7 @@ def metric_gorusme_suresi(
           AND r.category = 'sales' AND r.active = true
           AND e.channel = 'call' AND e.direction = 'outbound'
           AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
-          AND {_DUR} >= {TEMAS_MIN_SEC}
+          AND {_TEMAS}
           AND e.occurred_at <= now()
         GROUP BY r.full_name
         ORDER BY avg({_DUR}) DESC NULLS LAST, r.full_name
@@ -559,7 +558,7 @@ def metric_gorusme_suresi(
           AND r.category = 'sales' AND r.active = true
           AND e.channel = 'call' AND e.direction = 'outbound'
           AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
-          AND {_DUR} >= {TEMAS_MIN_SEC}
+          AND {_TEMAS}
           AND e.occurred_at <= now()
         """,
         (org_id,),
@@ -579,7 +578,7 @@ def metric_gorusme_suresi(
               AND e.thread_id = l.thread_id
               AND e.channel = 'call' AND e.direction = 'outbound'
               AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
-              AND {_DUR} >= {TEMAS_MIN_SEC}
+              AND {_TEMAS}
               AND e.occurred_at <= now()
           )
         """,
@@ -797,7 +796,7 @@ def metric_hareket(
         f"""
         SELECT
           count(*)::int AS calls,
-          count(*) FILTER (WHERE {_DUR} >= {TEMAS_MIN_SEC})::int AS talks10
+          count(*) FILTER (WHERE {_TEMAS})::int AS talks10
         FROM events e
         JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
         WHERE e.org_id = %s
@@ -1233,13 +1232,13 @@ def metric_temsilci_ozeti(
           )::int AS calls_week,
           count(*)::int AS calls_4w,
           count(*) FILTER (
-            WHERE {_DUR} >= {TEMAS_MIN_SEC}
+            WHERE {_TEMAS}
           )::int AS talks10,
           avg({_DUR}) FILTER (
-            WHERE {_DUR} >= {TEMAS_MIN_SEC}
+            WHERE {_TEMAS}
           )::float AS avg_sec,
           (percentile_cont(0.5) WITHIN GROUP (ORDER BY {_DUR})
-            FILTER (WHERE {_DUR} >= {TEMAS_MIN_SEC}))::float AS med_sec
+            FILTER (WHERE {_TEMAS}))::float AS med_sec
         FROM events e
         JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
         WHERE e.org_id = %s
@@ -1377,7 +1376,7 @@ def metric_temsilci_ozeti(
           AND {sales}
           AND e.channel = 'call' AND e.direction = 'outbound'
           AND coalesce(e.meta->>'scheduled', 'false') <> 'true'
-          AND {_DUR} >= {TEMAS_MIN_SEC}
+          AND {_TEMAS}
           AND e.occurred_at <= now()
           AND e.occurred_at >= %s AND e.occurred_at < %s
         GROUP BY r.full_name
