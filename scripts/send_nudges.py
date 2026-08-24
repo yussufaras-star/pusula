@@ -108,6 +108,10 @@ _MONTHS_SHORT = (
     "Oca", "Şub", "Mar", "Nis", "May", "Haz",
     "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara",
 )
+_MONTHS_FULL = (
+    "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+    "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık",
+)
 # Bu hafta snapshot satırları (bekleyen_lead yok: stok ayrı tek metrik).
 _SNAPSHOT_LABELS = (
     ("kayip_randevu", "Kayıp randevu"),
@@ -814,6 +818,14 @@ def _fmt_gun(value: datetime | None) -> str | None:
     return f"{local.day} {_MONTHS_SHORT[local.month - 1]}"
 
 
+def _fmt_month_full(value: datetime | None) -> str | None:
+    """Tam ay adı, sayı yoksa None."""
+    if value is None:
+        return None
+    local = value.astimezone(_TZ) if value.tzinfo else value.replace(tzinfo=_TZ)
+    return _MONTHS_FULL[local.month - 1]
+
+
 def _fmt_saat(value: datetime | None) -> str | None:
     if value is None:
         return None
@@ -985,7 +997,15 @@ def _reason_for(n: NudgeCandidate, *, now: datetime | None = None) -> str | None
         days = _days_since(n.due_at, now=now)
         if days is None:
             return None
-        return f"{days} gün önce söz verdiğin dönüş yapılmadı."
+        if _is_fresh(n, now=now):
+            return f"{days} gün önce söz verdiğin dönüş yapılmadı."
+        month = _fmt_month_full(n.due_at)
+        if month is None:
+            return None
+        return (
+            f"{month} ayında söz verilmiş, hala kapatılmamış.\n"
+            "   Ara ve durumu netleştir."
+        )
     if n.nudge_type == "karar_bekleyen":
         days = _days_since(n.status_changed_at, now=now)
         if days is None:
@@ -1708,27 +1728,22 @@ def _build_message(
         parts.append("")
 
     cevirme = dunden.cevirme if dunden else 0
-    temas = dunden.temas if dunden else 0
-    sure = (
-        _fmt_duration(dunden.avg_sec)
-        if dunden is not None and dunden.avg_sec is not None
-        else "?"
-    )
-    dun_line = (
-        f"{cevirme} çevirme, {temas} kişi açtı. Ortalama görüşme {sure}"
-    )
-    avg = dunden.avg_sec if dunden is not None else None
-    week4 = dunden.week4_avg_sec if dunden is not None else None
-    if avg is not None and week4 is not None:
-        if int(round(float(avg))) != int(round(float(week4))):
-            sure4 = _fmt_duration(week4)
-            dun_line += f" — son 4 haftanda {sure4}'ydi."
-        else:
-            dun_line += "."
-    else:
-        dun_line += "."
-    parts.append("DUN")
-    parts.append(dun_line)
+    if cevirme > 0:
+        temas = dunden.temas if dunden else 0
+        avg = dunden.avg_sec if dunden is not None else None
+        week4 = dunden.week4_avg_sec if dunden is not None else None
+        dun_line = f"{cevirme} çevirme, {temas} kişi açtı."
+        if avg is not None:
+            sure = _fmt_duration(avg)
+            dun_line += f" Ortalama görüşme {sure}"
+            if week4 is not None and int(round(float(avg))) != int(
+                round(float(week4))
+            ):
+                dun_line += f" — son 4 haftanda {_fmt_duration(week4)}'ydi."
+            else:
+                dun_line += "."
+        parts.append("DUN")
+        parts.append(dun_line)
     return "\n".join(parts).rstrip() + "\n"
 
 
