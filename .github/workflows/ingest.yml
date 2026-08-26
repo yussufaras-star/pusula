@@ -39,5 +39,7 @@ jobs:
         run: python scripts/ingest_leads.py --lookback-days 14
       - name: Sync contacts
         run: python scripts/ingest_sales_cycle.py --contacts-only --lookback-days 14
+      - name: Sync bookings
+        run: python scripts/run_ingest.py --source zoho_bookings
       - name: Sync calls
-        run: python scripts/run_ingest.py
+        run: python scripts/run_ingest.py --source zoho_crm_calls
