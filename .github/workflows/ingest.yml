@@ -1,4 +1,6 @@
 # Günlük ingest — 08:00 Europe/Istanbul = 05:00 UTC (TR UTC+3, DST yok).
+# Her kaynak ayrı job: timeout paylaşılmaz. Sıra: calls → leads →
+# contacts → bookings. nudges aynı concurrency grubunu bekler.
 name: ingest
 
 on:
@@ -24,7 +26,23 @@ env:
   ZOHO_API_DOMAIN: ${{ secrets.ZOHO_API_DOMAIN }}
 
 jobs:
-  ingest:
+  sync-calls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Sync calls
+        run: python scripts/run_ingest.py --source zoho_crm_calls
+
+  sync-leads:
+    needs: sync-calls
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -37,9 +55,35 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Sync leads
         run: python scripts/ingest_leads.py --lookback-days 14
+
+  sync-contacts:
+    needs: sync-leads
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
       - name: Sync contacts
         run: python scripts/ingest_sales_cycle.py --contacts-only --lookback-days 14
+
+  sync-bookings:
+    needs: sync-contacts
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
       - name: Sync bookings
         run: python scripts/run_ingest.py --source zoho_bookings
-      - name: Sync calls
-        run: python scripts/run_ingest.py --source zoho_crm_calls

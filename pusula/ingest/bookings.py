@@ -7,8 +7,8 @@ Yazılmayan kayıtlar: @rexven.com (iç hesap), satış ekibi dışındaki
 staff (mentor ve diğerleri), e-posta ile lead'e bağlanamayanlar.
 Yeni thread açılmaz.
 
-Pencere: son 90 gün (watermark yok sayılır; durum güncellemesi
-kaçmasın). --since 90 günden eskiyse pencere o tarihe uzar.
+Pencere: son 7 gün (watermark yok sayılır; durum güncellemesi
+kaçmasın). --since 7 günden eskiyse pencere o tarihe uzar.
 Idempotent: UNIQUE (org_id, channel, source_ref) + meta upsert.
 """
 
@@ -33,7 +33,7 @@ from pusula.zoho.auth import get_access_token, get_api_domain
 
 logger = logging.getLogger(__name__)
 
-LOOKBACK_DAYS = 90
+LOOKBACK_DAYS = 7
 _PER_PAGE = 100
 _MAX_PAGES = 200
 _HTTP_TIMEOUT = httpx.Timeout(90.0, connect=15.0)
@@ -115,10 +115,10 @@ class BookingsIngester(Ingester):
         self._lead_emails: set[str] | None = None
 
     def fetch(self, since: datetime | None) -> Iterator[RawRecord]:
-        """90 günlük randevuları çeker; occurred_at artan sırada verir.
+        """7 günlük randevuları çeker; occurred_at artan sırada verir.
 
         since watermark olarak kullanılmaz (durum güncellemesi).
-        90 günden eski --since pencereyi geriye uzatır.
+        7 günden eski --since pencereyi geriye uzatır.
         """
         self._sales_reps = _load_sales_reps()
         self._lead_emails = _load_lead_emails()
