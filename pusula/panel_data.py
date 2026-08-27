@@ -1,0 +1,1052 @@
+"""Streamlit paneli için salt-okunur metrik sorguları.
+
+Temas / çevirme / faaliyet: pusula.temas. Dönüşüm evreni 1 Mayıs 2026
+sonrası, Mevcut Müşteri hariç. Operasyon kıyası son 90 gün.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+from zoneinfo import ZoneInfo
+
+import psycopg
+from psycopg.rows import dict_row
+
+from pusula.config import get_org_id
+from pusula.sifir_satis import WON_STAGE, won_stage_sql
+from pusula.temas import duration_sec, is_attempt_sql, is_cevirme_sql, is_temas_sql
+
+_TZ = ZoneInfo("Europe/Istanbul")
+WINDOW_DAYS = 90
+WEEK_COUNT = 12
+CONV_START = datetime(2026, 5, 1, tzinfo=_TZ)
+MEVCUT_MUSTERI = "Mevcut Müşteri"
+CRM_DK_PER_ARAMA = 1.5
+TOPLANTI_DK_VARSAYILAN = 30.0
+
+_FUNNEL_STATUSES = (
+    "1.Arama-Ulaşılamadı",
+    "2.Arama-Ulaşılamadı",
+    "3.Arama-Ulaşılamadı",
+    "Aging",
+)
+
+_SOURCE_FORM = "Contact Form"
+_SOURCE_REGISTER = "Register"
+
+_TEMAS_E = is_temas_sql("e")
+_CEVIRME_E = is_cevirme_sql("e")
+_ATTEMPT_E = is_attempt_sql("e")
+_DUR_E = duration_sec("e")
+_WON_D = won_stage_sql("d")
+
+
+@dataclass(frozen=True)
+class Rep:
+    rep_id: str
+    full_name: str
+
+
+def _database_url() -> str:
+    url = os.environ.get("DATABASE_URL_POOLED") or os.environ.get("DATABASE_URL")
+    if not url:
+        raise RuntimeError("DATABASE_URL_POOLED / DATABASE_URL yok")
+    return url
+
+
+def connect() -> psycopg.Connection:
+    return psycopg.connect(_database_url(), prepare_threshold=None)
+
+
+def _sales_rep_sql(alias: str = "r") -> str:
+    return f"{alias}.category = 'sales' AND {alias}.active = true"
+
+
+def _rep_filter(
+    alias: str, rep_id: str | None, column: str = "rep_id"
+) -> tuple[str, list[Any]]:
+    if not rep_id:
+        return "", []
+    return f" AND {alias}.{column} = %s ", [rep_id]
+
+
+def load_reps() -> list[Rep]:
+    org_id = get_org_id()
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT rep_id, full_name
+            FROM reps r
+            WHERE r.org_id = %s AND {_sales_rep_sql()}
+            ORDER BY r.full_name
+            """,
+            (org_id,),
+        ).fetchall()
+    return [Rep(str(r[0]), str(r[1])) for r in rows]
+
+
+def _hour_expr(alias: str = "e") -> str:
+    return f"extract(hour FROM {alias}.occurred_at AT TIME ZONE 'Europe/Istanbul')::int"
+
+
+def hourly_table(rep_id: str | None) -> list[dict[str, Any]]:
+    """Saat, arama, ulaşılan, randevu, katıldı — son 90 gün."""
+    org_id = get_org_id()
+    extra, params = _rep_filter("e", rep_id)
+    hour = _hour_expr("e")
+    sql = f"""
+        WITH hours AS (
+            SELECT h FROM generate_series(9, 18) AS h
+        ),
+        calls AS (
+            SELECT
+              {hour} AS saat,
+              count(*) FILTER (WHERE {_CEVIRME_E})::int AS arama,
+              count(*) FILTER (WHERE {_TEMAS_E})::int AS ulasilan
+            FROM events e
+            JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+            WHERE e.org_id = %s
+              AND {_sales_rep_sql()}
+              AND e.channel = 'call' AND e.direction = 'outbound'
+              AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
+              AND e.occurred_at <= now()
+              {extra}
+            GROUP BY 1
+        ),
+        meetings AS (
+            SELECT
+              {hour} AS saat,
+              count(*) FILTER (
+                WHERE e.meta->>'randevu_durumu' IN ('katildi', 'katilmadi')
+              )::int AS randevu,
+              count(*) FILTER (
+                WHERE e.meta->>'randevu_durumu' = 'katildi'
+              )::int AS katildi
+            FROM events e
+            JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+            WHERE e.org_id = %s
+              AND {_sales_rep_sql()}
+              AND e.channel = 'meeting'
+              AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
+              AND e.occurred_at <= now()
+              {extra}
+            GROUP BY 1
+        )
+        SELECT
+          hours.h AS saat,
+          coalesce(c.arama, 0) AS arama,
+          coalesce(c.ulasilan, 0) AS ulasilan,
+          coalesce(m.randevu, 0) AS randevu,
+          coalesce(m.katildi, 0) AS katildi
+        FROM hours
+        LEFT JOIN calls c ON c.saat = hours.h
+        LEFT JOIN meetings m ON m.saat = hours.h
+        ORDER BY hours.h
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            sql, (org_id, *params, org_id, *params)
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for saat, arama, ulasilan, randevu, katildi in rows:
+        out.append(
+            {
+                "saat": f"{int(saat):02d}:00",
+                "arama": int(arama),
+                "ulasilan": int(ulasilan),
+                "ulasma_orani": _ratio(ulasilan, arama),
+                "randevu": int(randevu),
+                "katildi": int(katildi),
+                "katilim_orani": _ratio(katildi, randevu),
+            }
+        )
+    return out
+
+
+def team_reach_and_join() -> dict[str, float | None]:
+    """Ekip geneli ulaşma ve katılım (90 gün, saatlik tabloyla aynı 09–18)."""
+    rows = hourly_table(None)
+    arama = sum(r["arama"] for r in rows)
+    ulasilan = sum(r["ulasilan"] for r in rows)
+    randevu = sum(r["randevu"] for r in rows)
+    katildi = sum(r["katildi"] for r in rows)
+    return {
+        "ulasma_orani": _ratio(ulasilan, arama),
+        "katilim_orani": _ratio(katildi, randevu),
+        "arama": arama,
+        "ulasilan": ulasilan,
+        "randevu": randevu,
+        "katildi": katildi,
+    }
+
+
+def _workdays() -> int:
+    with connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT count(*)::int
+            FROM generate_series(
+                (now() AT TIME ZONE 'Europe/Istanbul')::date
+                  - interval '{WINDOW_DAYS} days',
+                (now() AT TIME ZONE 'Europe/Istanbul')::date,
+                interval '1 day'
+            ) AS d
+            WHERE extract(isodow FROM d) < 6
+            """
+        ).fetchone()
+    return int(row[0]) if row else WINDOW_DAYS
+
+
+def daily_workload() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
+    """Kişi başı günlük iş yükü + ulaşılamayan ort. / ulaşılan medyan süre."""
+    org_id = get_org_id()
+    days = max(_workdays(), 1)
+    meet_dk = f"""
+        COALESCE(
+            NULLIF(regexp_replace(e.meta->>'duration', '[^0-9]', '', 'g'), '')
+                ::numeric,
+            {TOPLANTI_DK_VARSAYILAN}
+        )
+    """
+    sql = f"""
+        SELECT r.full_name,
+          count(*) FILTER (
+            WHERE e.channel = 'call' AND e.direction = 'outbound'
+              AND {_CEVIRME_E}
+          )::int AS arama,
+          count(*) FILTER (
+            WHERE e.channel = 'call' AND e.direction = 'outbound'
+              AND {_TEMAS_E}
+          )::int AS ulasilan,
+          count(*) FILTER (
+            WHERE e.channel = 'meeting'
+              AND e.meta->>'randevu_durumu' IN ('katildi', 'katilmadi')
+          )::int AS randevu,
+          count(*) FILTER (
+            WHERE e.channel = 'meeting'
+              AND e.meta->>'randevu_durumu' = 'katildi'
+          )::int AS katildi,
+          coalesce(sum({_DUR_E}) FILTER (
+            WHERE e.channel = 'call' AND e.direction = 'outbound'
+              AND {_CEVIRME_E}
+          ), 0)::float AS arama_sn,
+          coalesce(sum({_DUR_E}) FILTER (
+            WHERE e.channel = 'call' AND e.direction = 'outbound'
+              AND {_TEMAS_E}
+          ), 0)::float AS temas_sn,
+          coalesce(sum({meet_dk}) FILTER (
+            WHERE e.channel = 'meeting'
+              AND e.meta->>'randevu_durumu' IN ('katildi', 'katilmadi')
+          ), 0)::float AS randevu_dk,
+          coalesce(sum({meet_dk}) FILTER (
+            WHERE e.channel = 'meeting'
+              AND e.meta->>'randevu_durumu' = 'katildi'
+          ), 0)::float AS katildi_dk
+        FROM reps r
+        LEFT JOIN events e
+          ON e.org_id = r.org_id AND e.rep_id = r.rep_id
+         AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
+         AND e.occurred_at <= now()
+        WHERE r.org_id = %s AND {_sales_rep_sql()}
+        GROUP BY r.full_name
+        ORDER BY r.full_name
+    """
+    with connect() as conn:
+        rows = conn.execute(sql, (org_id,)).fetchall()
+        dur = conn.execute(
+            f"""
+            SELECT
+              avg({_DUR_E}) FILTER (
+                WHERE {_CEVIRME_E} AND NOT ({_TEMAS_E})
+              )::float AS avg_miss,
+              percentile_cont(0.5) WITHIN GROUP (ORDER BY {_DUR_E})
+                FILTER (WHERE {_TEMAS_E})::float AS med_hit
+            FROM events e
+            JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+            WHERE e.org_id = %s
+              AND {_sales_rep_sql()}
+              AND e.channel = 'call' AND e.direction = 'outbound'
+              AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
+              AND e.occurred_at <= now()
+            """,
+            (org_id,),
+        ).fetchone()
+    out: list[dict[str, Any]] = []
+    for name, arama, ulasilan, randevu, katildi, arama_sn, temas_sn, randevu_dk, katildi_dk in rows:
+        arama_n = int(arama)
+        out.append(
+            {
+                "temsilci": str(name),
+                "arama": round(arama_n / days, 1),
+                "arama_dk": round(float(arama_sn) / 60.0 / days, 1),
+                "ulasilan": round(int(ulasilan) / days, 1),
+                "ulasilan_dk": round(float(temas_sn) / 60.0 / days, 1),
+                "randevu": round(int(randevu) / days, 1),
+                "randevu_dk": round(float(randevu_dk) / days, 1),
+                "toplanti": round(int(katildi) / days, 1),
+                "toplanti_dk": round(float(katildi_dk) / days, 1),
+                "crm": round(arama_n / days, 1),
+                "crm_dk": round(arama_n * CRM_DK_PER_ARAMA / days, 1),
+            }
+        )
+    extras = {
+        "ulasilamayan_ort_sn": float(dur[0]) if dur and dur[0] is not None else None,
+        "ulasilan_medyan_sn": float(dur[1]) if dur and dur[1] is not None else None,
+        "workdays": days,
+        "crm_dk_per_arama": CRM_DK_PER_ARAMA,
+    }
+    return out, extras
+
+
+def talk_duration_by_rep() -> list[dict[str, Any]]:
+    org_id = get_org_id()
+    sql = f"""
+        SELECT r.full_name,
+          avg({_DUR_E}) FILTER (WHERE {_TEMAS_E})::float AS avg_sec,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY {_DUR_E})
+            FILTER (WHERE {_TEMAS_E})::float AS med_sec,
+          count(*) FILTER (WHERE {_TEMAS_E})::int AS n
+        FROM events e
+        JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+        WHERE e.org_id = %s
+          AND {_sales_rep_sql()}
+          AND e.channel = 'call' AND e.direction = 'outbound'
+          AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
+          AND e.occurred_at <= now()
+        GROUP BY r.full_name
+        ORDER BY r.full_name
+    """
+    with connect() as conn:
+        rows = conn.execute(sql, (org_id,)).fetchall()
+    return [
+        {
+            "temsilci": str(n),
+            "ortalama_sn": round(float(a), 1) if a is not None else None,
+            "medyan_sn": round(float(m), 1) if m is not None else None,
+            "n": int(c),
+        }
+        for n, a, m, c in rows
+    ]
+
+
+def _conversion_lead_sql() -> str:
+    return f"""
+        FROM leads l
+        JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
+        WHERE l.org_id = %s
+          AND {_sales_rep_sql()}
+          AND coalesce(l.assigned_at, l.created_at) >= %s
+          AND coalesce(l.status, '') <> %s
+    """
+
+
+def sales_cycle() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
+    """assigned_at → contacts.created_at, gün."""
+    org_id = get_org_id()
+    conv = f"""
+        conv AS (
+            SELECT l.lead_id, l.thread_id, l.org_id, l.assigned_at, l.created_at,
+                   r.full_name
+            {_conversion_lead_sql()}
+        )
+    """
+    paired = f"""
+        paired AS (
+            SELECT conv.full_name,
+              extract(epoch FROM (
+                  c.created_at - coalesce(conv.assigned_at, conv.created_at)
+              )) / 86400.0 AS gun
+            FROM conv
+            JOIN LATERAL (
+                SELECT ct.created_at
+                FROM contacts ct
+                WHERE ct.org_id = conv.org_id
+                  AND (
+                    ct.lead_id = conv.lead_id
+                    OR ct.thread_id = conv.thread_id
+                  )
+                  AND ct.created_at IS NOT NULL
+                ORDER BY ct.created_at ASC
+                LIMIT 1
+            ) c ON true
+            WHERE coalesce(conv.assigned_at, conv.created_at) IS NOT NULL
+              AND c.created_at >= coalesce(conv.assigned_at, conv.created_at)
+        )
+    """
+    sql = f"""
+        WITH {conv},
+        {paired}
+        SELECT full_name,
+          avg(gun)::float,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY gun)::float,
+          count(*)::int
+        FROM paired
+        GROUP BY full_name
+        ORDER BY full_name
+    """
+    team_sql = f"""
+        WITH {conv},
+        {paired}
+        SELECT avg(gun)::float,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY gun)::float,
+          count(*)::int
+        FROM paired
+    """
+    args = (org_id, CONV_START, MEVCUT_MUSTERI)
+    with connect() as conn:
+        rows = conn.execute(sql, args).fetchall()
+        team = conn.execute(team_sql, args).fetchone()
+    by_rep = [
+        {
+            "temsilci": str(n),
+            "ortalama_gun": round(float(a), 1) if a is not None else None,
+            "medyan_gun": round(float(m), 1) if m is not None else None,
+            "n": int(c),
+        }
+        for n, a, m, c in rows
+    ]
+    team_d = {
+        "ortalama_gun": round(float(team[0]), 1) if team and team[0] is not None else None,
+        "medyan_gun": round(float(team[1]), 1) if team and team[1] is not None else None,
+        "n": int(team[2]) if team else 0,
+    }
+    return by_rep, team_d
+
+
+def take_rate() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
+    org_id = get_org_id()
+    base = _conversion_lead_sql()
+    sql = f"""
+        SELECT r.full_name,
+          count(*)::int AS leads,
+          count(*) FILTER (WHERE {_has_contact_sql()})::int AS contacts,
+          count(*) FILTER (WHERE {_has_temas_sql()})::int AS reached,
+          count(*) FILTER (
+            WHERE {_has_temas_sql()} AND {_has_contact_sql()}
+          )::int AS reached_contacts
+        {base}
+        GROUP BY r.full_name
+        ORDER BY r.full_name
+    """
+    team_sql = f"""
+        SELECT
+          count(*)::int,
+          count(*) FILTER (WHERE {_has_contact_sql()})::int,
+          count(*) FILTER (WHERE {_has_temas_sql()})::int,
+          count(*) FILTER (
+            WHERE {_has_temas_sql()} AND {_has_contact_sql()}
+          )::int
+        {base}
+    """
+    args = (org_id, CONV_START, MEVCUT_MUSTERI)
+    with connect() as conn:
+        rows = conn.execute(sql, args).fetchall()
+        team = conn.execute(team_sql, args).fetchone()
+    by_rep = []
+    for name, leads, contacts, reached, reached_c in rows:
+        by_rep.append(
+            {
+                "temsilci": str(name),
+                "leads": int(leads),
+                "genel": _ratio(contacts, leads),
+                "ulasilanda": _ratio(reached_c, reached),
+            }
+        )
+    team_d = {
+        "leads": int(team[0]) if team else 0,
+        "genel": _ratio(team[1], team[0]) if team else None,
+        "ulasilanda": _ratio(team[3], team[2]) if team else None,
+    }
+    return by_rep, team_d
+
+
+def _has_contact_sql() -> str:
+    return """
+        EXISTS (
+            SELECT 1 FROM contacts ct
+            WHERE ct.org_id = l.org_id
+              AND (ct.lead_id = l.lead_id OR ct.thread_id = l.thread_id)
+        )
+    """
+
+
+def _has_won_sql() -> str:
+    return f"""
+        EXISTS (
+            SELECT 1 FROM deals d
+            WHERE d.org_id = l.org_id
+              AND d.thread_id = l.thread_id
+              AND {_WON_D}
+        )
+    """
+
+
+def _has_temas_sql() -> str:
+    return f"""
+        EXISTS (
+            SELECT 1 FROM events e
+            WHERE e.org_id = l.org_id
+              AND e.thread_id = l.thread_id
+              AND e.channel = 'call'
+              AND e.direction = 'outbound'
+              AND {_TEMAS_E}
+        )
+    """
+
+
+def _has_attempt_sql() -> str:
+    return f"""
+        EXISTS (
+            SELECT 1 FROM events e
+            WHERE e.org_id = l.org_id
+              AND e.thread_id = l.thread_id
+              AND e.channel = 'call'
+              AND e.direction = 'outbound'
+              AND {_ATTEMPT_E}
+        )
+    """
+
+
+def source_take_rate() -> list[dict[str, Any]]:
+    org_id = get_org_id()
+    base = _conversion_lead_sql()
+    sql = f"""
+        SELECT
+          CASE
+            WHEN l.source = %s THEN %s
+            WHEN l.source = %s THEN %s
+            ELSE 'diger'
+          END AS src,
+          count(*)::int AS leads,
+          count(*) FILTER (WHERE {_has_won_sql()})::int AS satis,
+          count(*) FILTER (WHERE {_has_contact_sql()})::int AS contacts
+        {base}
+        GROUP BY 1
+        ORDER BY 1
+    """
+    args = (
+        _SOURCE_FORM,
+        _SOURCE_FORM,
+        _SOURCE_REGISTER,
+        _SOURCE_REGISTER,
+        org_id,
+        CONV_START,
+        MEVCUT_MUSTERI,
+    )
+    with connect() as conn:
+        rows = conn.execute(sql, args).fetchall()
+    order = {_SOURCE_FORM: 0, _SOURCE_REGISTER: 1, "diger": 2}
+    out = [
+        {
+            "kaynak": str(src),
+            "lead": int(leads),
+            "satis": int(satis),
+            "take_rate": _ratio(contacts, leads),
+        }
+        for src, leads, satis, contacts in rows
+    ]
+    out.sort(key=lambda r: order.get(str(r["kaynak"]), 9))
+    return out
+
+
+def path_take_rate() -> list[dict[str, Any]]:
+    """Satışa giden yol: katıldı / katılmadı / yalnız arama / hiç aranmamış."""
+    org_id = get_org_id()
+    base = _conversion_lead_sql()
+    sql = f"""
+        WITH uni AS (
+            SELECT
+              CASE
+                WHEN EXISTS (
+                    SELECT 1 FROM events e
+                    WHERE e.org_id = l.org_id AND e.thread_id = l.thread_id
+                      AND e.channel = 'meeting'
+                      AND e.meta->>'randevu_durumu' = 'katildi'
+                      AND e.occurred_at <= now()
+                ) THEN 'toplantiya katildi'
+                WHEN EXISTS (
+                    SELECT 1 FROM events e
+                    WHERE e.org_id = l.org_id AND e.thread_id = l.thread_id
+                      AND e.channel = 'meeting'
+                      AND e.meta->>'randevu_durumu' = 'katilmadi'
+                      AND e.occurred_at <= now()
+                ) THEN 'randevu var katilmadi'
+                WHEN {_has_attempt_sql()} THEN 'toplanti yok sadece arama'
+                ELSE 'hic aranmamis'
+              END AS yol,
+              {_has_won_sql()} AS won,
+              {_has_contact_sql()} AS has_contact
+            {base}
+        )
+        SELECT yol,
+          count(*)::int AS leads,
+          count(*) FILTER (WHERE won)::int AS satis,
+          count(*) FILTER (WHERE has_contact)::int AS contacts
+        FROM uni
+        GROUP BY yol
+    """
+    order = {
+        "toplantiya katildi": 0,
+        "randevu var katilmadi": 1,
+        "toplanti yok sadece arama": 2,
+        "hic aranmamis": 3,
+    }
+    labels = {
+        "toplantiya katildi": "toplantıya katıldı",
+        "randevu var katilmadi": "randevu var katılmadı",
+        "toplanti yok sadece arama": "toplantı yok sadece arama",
+        "hic aranmamis": "hiç aranmamış",
+    }
+    with connect() as conn:
+        rows = conn.execute(
+            sql, (org_id, CONV_START, MEVCUT_MUSTERI)
+        ).fetchall()
+    out = [
+        {
+            "yol": labels.get(str(yol), str(yol)),
+            "lead": int(leads),
+            "satis": int(satis),
+            "take_rate": _ratio(contacts, leads),
+            "_ord": order.get(str(yol), 9),
+        }
+        for yol, leads, satis, contacts in rows
+    ]
+    out.sort(key=lambda r: int(r["_ord"]))
+    for row in out:
+        del row["_ord"]
+    return out
+
+
+def funnel(rep_id: str | None, *, named: bool) -> list[dict[str, Any]]:
+    org_id = get_org_id()
+    extra, params = _rep_filter("l", rep_id, "owner_rep_id")
+    statuses = ", ".join("'" + s.replace("'", "''") + "'" for s in _FUNNEL_STATUSES)
+    if named:
+        sql = f"""
+            SELECT r.full_name, l.status, count(*)::int
+            FROM leads l
+            JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
+            WHERE l.org_id = %s
+              AND {_sales_rep_sql()}
+              AND l.status IN ({statuses})
+              AND coalesce(l.assigned_at, l.created_at)
+                    >= now() - interval '{WINDOW_DAYS} days'
+              {extra}
+            GROUP BY r.full_name, l.status
+        """
+        with connect() as conn:
+            rows = conn.execute(sql, (org_id, *params)).fetchall()
+        by_rep: dict[str, dict[str, int]] = {}
+        for name, status, n in rows:
+            by_rep.setdefault(str(name), {s: 0 for s in _FUNNEL_STATUSES})
+            by_rep[str(name)][str(status)] = int(n)
+        names = [r.full_name for r in load_reps()]
+        if extra:
+            names = [n for n in names if n in by_rep] or names
+        out = []
+        for name in names:
+            bucket = by_rep.get(name, {s: 0 for s in _FUNNEL_STATUSES})
+            row: dict[str, Any] = {"temsilci": name}
+            for s in _FUNNEL_STATUSES:
+                row[s] = bucket.get(s, 0)
+            out.append(row)
+        return out
+    sql = f"""
+        SELECT l.status, count(*)::int
+        FROM leads l
+        JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
+        WHERE l.org_id = %s
+          AND {_sales_rep_sql()}
+          AND l.status IN ({statuses})
+          AND coalesce(l.assigned_at, l.created_at)
+                >= now() - interval '{WINDOW_DAYS} days'
+        GROUP BY l.status
+    """
+    with connect() as conn:
+        rows = conn.execute(sql, (org_id,)).fetchall()
+    counts = {str(s): int(n) for s, n in rows}
+    return [{"durum": s, "lead": counts.get(s, 0)} for s in _FUNNEL_STATUSES]
+
+
+def first_meeting_week() -> dict[str, datetime | None]:
+    """Temsilci → ilk meeting'in hafta başı (Istanbul). Veri boşluğu için."""
+    org_id = get_org_id()
+    sql = f"""
+        SELECT r.full_name,
+          date_trunc(
+            'week',
+            min(e.occurred_at AT TIME ZONE 'Europe/Istanbul')
+          )
+        FROM events e
+        JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+        WHERE e.org_id = %s
+          AND {_sales_rep_sql()}
+          AND e.channel = 'meeting'
+          AND e.occurred_at <= now()
+        GROUP BY r.full_name
+    """
+    with connect() as conn:
+        rows = conn.execute(sql, (org_id,)).fetchall()
+    return {str(n): (w if w is not None else None) for n, w in rows}
+
+
+def weekly_series(rep_id: str | None) -> list[dict[str, Any]]:
+    """Son 12 hafta: arama, ulaşma, randevu, katılım, take rate.
+
+    Meeting metrikleri ilk randevudan önceki haftalarda None (boşluk).
+    """
+    org_id = get_org_id()
+    extra, params = _rep_filter("e", rep_id)
+    extra_l, params_l = _rep_filter("l", rep_id, "owner_rep_id")
+    n_reps = max(len(load_reps()), 1)
+    sql = f"""
+        WITH weeks AS (
+            SELECT generate_series(
+                date_trunc(
+                    'week',
+                    (now() AT TIME ZONE 'Europe/Istanbul')
+                ) - interval '{WEEK_COUNT - 1} weeks',
+                date_trunc('week', (now() AT TIME ZONE 'Europe/Istanbul')),
+                interval '1 week'
+            ) AS week_start
+        ),
+        call_w AS (
+            SELECT
+              date_trunc(
+                'week', e.occurred_at AT TIME ZONE 'Europe/Istanbul'
+              ) AS week_start,
+              count(*) FILTER (WHERE {_CEVIRME_E})::int AS arama,
+              count(*) FILTER (WHERE {_TEMAS_E})::int AS ulasilan
+            FROM events e
+            JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+            WHERE e.org_id = %s
+              AND {_sales_rep_sql()}
+              AND e.channel = 'call' AND e.direction = 'outbound'
+              AND e.occurred_at <= now()
+              AND e.occurred_at >= date_trunc(
+                    'week', (now() AT TIME ZONE 'Europe/Istanbul')
+                  ) - interval '{WEEK_COUNT - 1} weeks'
+              {extra}
+            GROUP BY 1
+        ),
+        meet_w AS (
+            SELECT
+              date_trunc(
+                'week', e.occurred_at AT TIME ZONE 'Europe/Istanbul'
+              ) AS week_start,
+              count(*) FILTER (
+                WHERE e.meta->>'randevu_durumu' IN ('katildi', 'katilmadi')
+              )::int AS randevu,
+              count(*) FILTER (
+                WHERE e.meta->>'randevu_durumu' = 'katildi'
+              )::int AS katildi
+            FROM events e
+            JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+            WHERE e.org_id = %s
+              AND {_sales_rep_sql()}
+              AND e.channel = 'meeting'
+              AND e.occurred_at <= now()
+              AND e.occurred_at >= date_trunc(
+                    'week', (now() AT TIME ZONE 'Europe/Istanbul')
+                  ) - interval '{WEEK_COUNT - 1} weeks'
+              {extra}
+            GROUP BY 1
+        ),
+        lead_w AS (
+            SELECT
+              date_trunc(
+                'week',
+                coalesce(l.assigned_at, l.created_at)
+                    AT TIME ZONE 'Europe/Istanbul'
+              ) AS week_start,
+              count(*)::int AS leads,
+              count(*) FILTER (WHERE {_has_contact_sql()})::int AS contacts
+            FROM leads l
+            JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
+            WHERE l.org_id = %s
+              AND {_sales_rep_sql()}
+              AND coalesce(l.assigned_at, l.created_at) >= %s
+              AND coalesce(l.status, '') <> %s
+              AND coalesce(l.assigned_at, l.created_at) >= date_trunc(
+                    'week', (now() AT TIME ZONE 'Europe/Istanbul')
+                  ) - interval '{WEEK_COUNT - 1} weeks'
+              {extra_l}
+            GROUP BY 1
+        )
+        SELECT
+          weeks.week_start,
+          c.arama,
+          c.ulasilan,
+          m.randevu,
+          m.katildi,
+          lw.leads,
+          lw.contacts
+        FROM weeks
+        LEFT JOIN call_w c ON c.week_start = weeks.week_start
+        LEFT JOIN meet_w m ON m.week_start = weeks.week_start
+        LEFT JOIN lead_w lw ON lw.week_start = weeks.week_start
+        ORDER BY weeks.week_start
+    """
+    args = (
+        org_id,
+        *params,
+        org_id,
+        *params,
+        org_id,
+        CONV_START,
+        MEVCUT_MUSTERI,
+        *params_l,
+    )
+    with connect() as conn:
+        rows = conn.execute(sql, args).fetchall()
+    first_meet = first_meeting_week()
+    # Bookings herkeste 12 haftayı kapsamaz. İlk meeting öncesi hafta = boşluk.
+    gap_from: datetime | None = None
+    if rep_id:
+        names = {r.rep_id: r.full_name for r in load_reps()}
+        gap_from = first_meet.get(names.get(rep_id, ""))
+    else:
+        starts = [v for v in first_meet.values() if v is not None]
+        gap_from = min(starts) if starts else None
+    out: list[dict[str, Any]] = []
+    for week_start, arama, ulasilan, randevu, katildi, leads, contacts in rows:
+        week = week_start
+        arama_n = int(arama) if arama is not None else 0
+        ulasilan_n = int(ulasilan) if ulasilan is not None else 0
+        randevu_n = int(randevu) if randevu is not None else None
+        katildi_n = int(katildi) if katildi is not None else None
+        meeting_gap = bool(
+            gap_from is not None and week is not None and week < gap_from
+        )
+        if meeting_gap:
+            randevu_val: float | None = None
+            katilim_val: float | None = None
+        else:
+            n_r = randevu_n or 0
+            randevu_val = float(n_r)
+            if not rep_id:
+                randevu_val = randevu_val / n_reps
+            katilim_val = _ratio(katildi_n or 0, n_r)
+        kisi_basi = arama_n / n_reps if not rep_id else float(arama_n)
+        out.append(
+            {
+                "hafta": week,
+                "arama": kisi_basi,
+                "arama_ham": arama_n,
+                "ulasma_orani": _ratio(ulasilan_n, arama_n),
+                "randevu": randevu_val,
+                "katilim_orani": katilim_val,
+                "take_rate": _ratio(contacts, leads),
+            }
+        )
+    return out
+
+
+def weekly_team_series() -> list[dict[str, Any]]:
+    return weekly_series(None)
+
+
+def katilim_by_rep() -> list[dict[str, Any]]:
+    org_id = get_org_id()
+    sql = f"""
+        SELECT r.full_name,
+          count(*) FILTER (
+            WHERE e.meta->>'randevu_durumu' = 'katildi'
+          )::int AS katildi,
+          count(*) FILTER (
+            WHERE e.meta->>'randevu_durumu' IN ('katildi', 'katilmadi')
+          )::int AS randevu
+        FROM events e
+        JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+        WHERE e.org_id = %s
+          AND {_sales_rep_sql()}
+          AND e.channel = 'meeting'
+          AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
+          AND e.occurred_at <= now()
+        GROUP BY r.full_name
+        ORDER BY r.full_name
+    """
+    with connect() as conn:
+        rows = conn.execute(sql, (org_id,)).fetchall()
+    return [
+        {
+            "temsilci": str(n),
+            "katildi": int(k),
+            "randevu": int(d),
+            "katilim_orani": _ratio(k, d),
+        }
+        for n, k, d in rows
+    ]
+
+
+def rep_snapshot(rep_id: str) -> dict[str, Any]:
+    """Temsilcinin son 90 günü ve önceki 90 günü."""
+    org_id = get_org_id()
+
+    def _window(start_sql: str, end_sql: str) -> dict[str, Any]:
+        sql = f"""
+            SELECT
+              count(*) FILTER (
+                WHERE e.channel = 'call' AND e.direction = 'outbound'
+                  AND {_CEVIRME_E}
+              )::int AS arama,
+              count(*) FILTER (
+                WHERE e.channel = 'call' AND e.direction = 'outbound'
+                  AND {_TEMAS_E}
+              )::int AS ulasilan,
+              count(*) FILTER (
+                WHERE e.channel = 'meeting'
+                  AND e.meta->>'randevu_durumu' IN ('katildi', 'katilmadi')
+              )::int AS randevu,
+              count(*) FILTER (
+                WHERE e.channel = 'meeting'
+                  AND e.meta->>'randevu_durumu' = 'katildi'
+              )::int AS katildi,
+              avg({_DUR_E}) FILTER (
+                WHERE e.channel = 'call' AND e.direction = 'outbound'
+                  AND {_TEMAS_E}
+              )::float AS avg_sn,
+              percentile_cont(0.5) WITHIN GROUP (ORDER BY {_DUR_E})
+                FILTER (
+                  WHERE e.channel = 'call' AND e.direction = 'outbound'
+                    AND {_TEMAS_E}
+                )::float AS med_sn
+            FROM events e
+            WHERE e.org_id = %s
+              AND e.rep_id = %s
+              AND e.occurred_at >= {start_sql}
+              AND e.occurred_at < {end_sql}
+              AND e.occurred_at <= now()
+        """
+        with connect() as conn:
+            row = conn.execute(sql, (org_id, rep_id)).fetchone()
+        arama = int(row[0] or 0) if row else 0
+        ulasilan = int(row[1] or 0) if row else 0
+        randevu = int(row[2] or 0) if row else 0
+        katildi = int(row[3] or 0) if row else 0
+        return {
+            "arama": arama,
+            "ulasilan": ulasilan,
+            "ulasma_orani": _ratio(ulasilan, arama),
+            "randevu": randevu,
+            "katildi": katildi,
+            "katilim_orani": _ratio(katildi, randevu),
+            "temas_randevu_orani": _ratio(randevu, ulasilan),
+            "ortalama_sn": float(row[4]) if row and row[4] is not None else None,
+            "medyan_sn": float(row[5]) if row and row[5] is not None else None,
+        }
+
+    current = _window("now() - interval '90 days'", "now() + interval '1 day'")
+    previous = _window("now() - interval '180 days'", "now() - interval '90 days'")
+    with connect() as conn:
+        leads_now = conn.execute(
+            """
+            SELECT count(*)::int
+            FROM leads
+            WHERE org_id = %s AND owner_rep_id = %s
+              AND coalesce(assigned_at, created_at) >= now() - interval '90 days'
+            """,
+            (org_id, rep_id),
+        ).fetchone()
+        leads_prev = conn.execute(
+            """
+            SELECT count(*)::int
+            FROM leads
+            WHERE org_id = %s AND owner_rep_id = %s
+              AND coalesce(assigned_at, created_at) >= now() - interval '180 days'
+              AND coalesce(assigned_at, created_at) < now() - interval '90 days'
+            """,
+            (org_id, rep_id),
+        ).fetchone()
+    current["lead"] = int(leads_now[0] or 0) if leads_now else 0
+    previous["lead"] = int(leads_prev[0] or 0) if leads_prev else 0
+    days = max(_workdays(), 1)
+    for bucket in (current, previous):
+        bucket["arama_gun"] = round(bucket["arama"] / days, 1)
+        bucket["ulasilan_gun"] = round(bucket["ulasilan"] / days, 1)
+        bucket["randevu_gun"] = round(bucket["randevu"] / days, 1)
+        bucket["toplanti_gun"] = round(bucket["katildi"] / days, 1)
+        bucket["crm_gun"] = round(bucket["arama"] / days, 1)
+    return {"current": current, "previous": previous}
+
+
+def source_temas_gap() -> float | None:
+    """Contact Form vs Register temas oranı farkı (puan)."""
+    org_id = get_org_id()
+    sql = f"""
+        SELECT
+          round(100.0 * count(*) FILTER (
+            WHERE l.source = %s AND {_has_temas_sql()}
+          ) / nullif(count(*) FILTER (WHERE l.source = %s), 0), 1)
+          -
+          round(100.0 * count(*) FILTER (
+            WHERE l.source = %s AND {_has_temas_sql()}
+          ) / nullif(count(*) FILTER (WHERE l.source = %s), 0), 1)
+        FROM leads l
+        JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
+        WHERE l.org_id = %s
+          AND {_sales_rep_sql()}
+          AND coalesce(l.assigned_at, l.created_at) >= now() - interval '{WINDOW_DAYS} days'
+    """
+    with connect() as conn:
+        row = conn.execute(
+            sql,
+            (
+                _SOURCE_FORM,
+                _SOURCE_FORM,
+                _SOURCE_REGISTER,
+                _SOURCE_REGISTER,
+                org_id,
+            ),
+        ).fetchone()
+    if not row or row[0] is None:
+        return None
+    return float(row[0])
+
+
+def _ratio(num: int | float | None, den: int | float | None) -> float | None:
+    if num is None or den is None:
+        return None
+    if float(den) == 0:
+        return None
+    return round(100.0 * float(num) / float(den), 1)
+
+
+def fmt_pct(value: float | None) -> str:
+    if value is None:
+        return "—"
+    try:
+        if value != value:  # NaN
+            return "—"
+    except (TypeError, ValueError):
+        return "—"
+    return f"%{float(value):.1f}"
+
+
+def fmt_num(value: float | int | None, digits: int = 1) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, int):
+        return str(value)
+    return f"{value:.{digits}f}"
+
+
+def arrow(current: float | None, previous: float | None) -> str:
+    """Son değer vs ortalama/önceki. Ok işareti."""
+    if current is None or previous is None:
+        return "veri yetersiz"
+    diff = current - previous
+    if abs(diff) < 0.05:
+        return "→ 0"
+    mark = "↑" if diff > 0 else "↓"
+    return f"{mark} {diff:+.1f}"
+
+
+def mean(values: list[float | None]) -> float | None:
+    present = [v for v in values if v is not None]
+    if not present:
+        return None
+    return sum(present) / len(present)

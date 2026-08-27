@@ -51,12 +51,13 @@ Temel ilkeler:
 
 ## Bağımlılıklar
 
-Kod şu kütüphaneleri kullanır (henüz requirements dosyası eklenmedi;
-kurulum aşağıdaki komutla yapılır):
+`requirements.txt` üzerinden:
 
 - `psycopg[binary]` + `psycopg-pool` — Postgres erişimi
 - `pydantic` — model doğrulama
-- Planlanan (henüz kod yok): `anthropic`, `fastapi`
+- `httpx` — Zoho HTTP
+- `python-dotenv` — ortam değişkenleri
+- `streamlit` — iç operasyon paneli
 
 ## Kurulum
 
@@ -65,7 +66,7 @@ kurulum aşağıdaki komutla yapılır):
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-pip install "psycopg[binary]" psycopg-pool pydantic
+pip install -r requirements.txt
 ```
 
 2. Ortam değişkenlerini ayarla:
@@ -81,5 +82,10 @@ cp .env.example .env
 psql "$DATABASE_URL" -f pusula/db/schema.sql
 ```
 
-Pipeline modülleri (ingest, analyze, deliver) sonraki görevlerde
-eklenecek.
+4. Operasyon paneli (iç kullanım, kimlik doğrulama yok):
+
+```bash
+streamlit run app/panel.py
+```
+
+Bağlantı `DATABASE_URL_POOLED` (yoksa `DATABASE_URL`). Sorgu önbelleği 15 dakika.
