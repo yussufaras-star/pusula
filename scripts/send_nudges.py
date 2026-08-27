@@ -249,6 +249,7 @@ _PLANLANMIS_SQL = """
                 AND e2.thread_id = e.thread_id
                 AND e2.channel = 'call'
                 AND e2.occurred_at > e.occurred_at
+                AND e2.occurred_at <= now()
                 AND coalesce(e2.meta->>'scheduled', 'false') <> 'true'
                 AND e2.meta->>'call_status' = 'connected'
           )
@@ -1622,6 +1623,7 @@ def _load_ikinci_arama_stats(
                       AND e.channel = 'call'
                       AND e.direction = 'outbound'
                       AND e.meta->>'call_status' = 'connected'
+                      AND e.occurred_at <= now()
                       AND e.occurred_at <= b.until_at
                 ) AS n_call
             FROM bounded b

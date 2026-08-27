@@ -4,6 +4,7 @@ temas_mi(event) / is_temas_sql: görüşme açıldı mı.
   call_result dolu → no_answer ve invalid_number hariç temas.
   call_result boş → duration_sec > 0 ise temas.
   overdue / scheduled faaliyet ve temasa girmez.
+  occurred_at > now() faaliyet ve temasa girmez.
 
 cevirme_mi / is_cevirme_sql: call_status = connected (temas olmasa da).
 Temsilcinin çevirmesi faaliyet, açılması sonuç.
@@ -14,9 +15,13 @@ Lead ilerleme kovası pusula.lead_reach'tedir.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from pusula.db.models import Event
+
+_TZ = ZoneInfo("Europe/Istanbul")
 
 # meta.call_result veya outcome_key; ham Zoho picklist eşleri.
 NOT_TEMAS_KEYS = frozenset({"no_answer", "invalid_number"})
@@ -111,9 +116,28 @@ def is_planned_call(event: Event | Mapping[str, Any]) -> bool:
     return False
 
 
+def _occurred_at_of(event: Event | Mapping[str, Any]) -> datetime | None:
+    if isinstance(event, Event):
+        return event.occurred_at
+    if isinstance(event, Mapping):
+        raw = event.get("occurred_at")
+        if isinstance(raw, datetime):
+            return raw
+    return None
+
+
+def _is_future_occurred(event: Event | Mapping[str, Any]) -> bool:
+    occurred = _occurred_at_of(event)
+    if occurred is None:
+        return False
+    if occurred.tzinfo is None:
+        occurred = occurred.replace(tzinfo=_TZ)
+    return occurred > datetime.now(_TZ)
+
+
 def temas_mi(event: Event | Mapping[str, Any]) -> bool:
-    """Görüşme açıldı mı. Planlanmış kayıt temas değildir."""
-    if is_planned_call(event):
+    """Görüşme açıldı mı. Planlanmış ve gelecek tarihli kayıt temas değildir."""
+    if is_planned_call(event) or _is_future_occurred(event):
         return False
     meta = _meta_of(event)
     token = _result_token(meta)
@@ -123,8 +147,8 @@ def temas_mi(event: Event | Mapping[str, Any]) -> bool:
 
 
 def cevirme_mi(event: Event | Mapping[str, Any]) -> bool:
-    """Faaliyet: bağlı çağrı. Planlanmış kayıt çevirme değildir."""
-    if is_planned_call(event):
+    """Faaliyet: bağlı çağrı. Planlanmış ve gelecek tarihli kayıt çevirme değildir."""
+    if is_planned_call(event) or _is_future_occurred(event):
         return False
     meta = _meta_of(event)
     return str(meta.get("call_status") or "").strip() == "connected"
@@ -144,6 +168,11 @@ def is_not_planned_sql(alias: str = "e") -> str:
     return f"NOT ({is_planned_sql(alias)})"
 
 
+def is_not_future_sql(alias: str = "e") -> str:
+    """İleri tarihli occurred_at — faaliyet ve temas dışı."""
+    return f"{alias}.occurred_at <= now()"
+
+
 def is_temas_sql(alias: str = "e") -> str:
     """SQL karşılığı temas_mi. outcome join gerekmez."""
     dur = duration_sec(alias)
@@ -153,6 +182,7 @@ def is_temas_sql(alias: str = "e") -> str:
     not_keys = ", ".join(f"'{k}'" for k in sorted(NOT_TEMAS_KEYS | NOT_TEMAS_RAW))
     return f"""
         {is_not_planned_sql(alias)}
+        AND {is_not_future_sql(alias)}
         AND (
             CASE
                 WHEN {token} IS NOT NULL
@@ -167,13 +197,17 @@ def is_cevirme_sql(alias: str = "e") -> str:
     """SQL karşılığı cevirme_mi."""
     return f"""
         {is_not_planned_sql(alias)}
+        AND {is_not_future_sql(alias)}
         AND {alias}.meta->>'call_status' = 'connected'
     """
 
 
 def is_attempt_sql(alias: str = "e") -> str:
-    """Faaliyet paydası: planlanmış olmayan outbound çağrı adayı."""
-    return is_not_planned_sql(alias)
+    """Faaliyet paydası: planlanmış olmayan, geçmiş outbound çağrı adayı."""
+    return f"""
+        {is_not_planned_sql(alias)}
+        AND {is_not_future_sql(alias)}
+    """
 
 
 def is_countable_call_sql(alias: str = "e") -> str:

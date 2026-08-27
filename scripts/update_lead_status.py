@@ -38,7 +38,7 @@ import psycopg
 from dotenv import load_dotenv
 
 from pusula.config import get_org_id
-from pusula.temas import is_not_planned_sql, is_temas_sql
+from pusula.temas import is_attempt_sql, is_temas_sql
 
 _STATES = ("active", "stale", "aging", "archived", "nurture", "closed")
 
@@ -99,7 +99,7 @@ _CANDIDATES_SQL = """
                   AND e.thread_id = l.thread_id
                   AND e.channel = 'call'
                   AND e.direction = 'outbound'
-                  AND """ + is_not_planned_sql("e") + """
+                  AND """ + is_attempt_sql("e") + """
                   AND e.occurred_at >= coalesce(l.assigned_at, l.created_at)
             ) AS outbound_calls,
             EXISTS (
@@ -107,6 +107,7 @@ _CANDIDATES_SQL = """
                 FROM events e
                 WHERE e.org_id = l.org_id
                   AND e.thread_id = l.thread_id
+                  AND e.occurred_at <= now()
                   AND e.occurred_at >= coalesce(l.assigned_at, l.created_at)
                   AND (
                       (e.channel = 'call' AND e.direction = 'inbound')
