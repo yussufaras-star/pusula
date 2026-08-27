@@ -1050,3 +1050,19 @@ def mean(values: list[float | None]) -> float | None:
     if not present:
         return None
     return sum(present) / len(present)
+
+
+def latest_event_created_at() -> datetime | None:
+    """events.created_at en yenisi — ingest gecikmesi için."""
+    org_id = get_org_id()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT max(created_at) FROM events WHERE org_id = %s",
+            (org_id,),
+        ).fetchone()
+    if not row or row[0] is None:
+        return None
+    value = row[0]
+    if isinstance(value, datetime):
+        return value
+    return None
