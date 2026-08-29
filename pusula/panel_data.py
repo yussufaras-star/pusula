@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 from psycopg.rows import dict_row
 
+from pusula.blocks import BLOK_DISI, PLANNED_BLOCKS, hour_in_planned_sql
 from pusula.config import get_org_id
 from pusula.sifir_satis import WON_STAGE, won_stage_sql
 from pusula.temas import duration_sec, is_attempt_sql, is_cevirme_sql, is_temas_sql
@@ -190,6 +191,254 @@ def team_reach_and_join() -> dict[str, float | None]:
         "randevu": randevu,
         "katildi": katildi,
     }
+
+
+def _hist_weekdays() -> int:
+    """Son 90 gün, bugün hariç, pazartesi–cuma."""
+    with connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT count(*)::int
+            FROM generate_series(
+                (now() AT TIME ZONE 'Europe/Istanbul')::date
+                  - interval '{WINDOW_DAYS} days',
+                (now() AT TIME ZONE 'Europe/Istanbul')::date - interval '1 day',
+                interval '1 day'
+            ) AS d
+            WHERE extract(isodow FROM d) < 6
+            """
+        ).fetchone()
+    return int(row[0]) if row else WINDOW_DAYS
+
+
+def today_arama_count(rep_id: str | None = None) -> int:
+    """Bugün Istanbul, satış outbound bağlı arama."""
+    org_id = get_org_id()
+    extra, params = _rep_filter("e", rep_id)
+    sql = f"""
+        SELECT count(*)::int
+        FROM events e
+        JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+        WHERE e.org_id = %s
+          AND {_sales_rep_sql()}
+          AND e.channel = 'call' AND e.direction = 'outbound'
+          AND {_CEVIRME_E}
+          AND (e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date
+                = (now() AT TIME ZONE 'Europe/Istanbul')::date
+          {extra}
+    """
+    with connect() as conn:
+        row = conn.execute(sql, (org_id, *params)).fetchone()
+    return int(row[0]) if row else 0
+
+
+def today_blocks(rep_id: str | None) -> dict[str, Any]:
+    """Bugünün dört bloğu + 90 günlük aynı blok ortalaması."""
+    org_id = get_org_id()
+    extra, params = _rep_filter("e", rep_id)
+    hour = _hour_expr("e")
+    day = "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date"
+    today = f"{day} = (now() AT TIME ZONE 'Europe/Istanbul')::date"
+    hist = f"""
+        {day} >= (now() AT TIME ZONE 'Europe/Istanbul')::date
+                 - interval '{WINDOW_DAYS} days'
+        AND {day} < (now() AT TIME ZONE 'Europe/Istanbul')::date
+        AND extract(isodow FROM {day}) < 6
+    """
+    is_call = "e.channel = 'call' AND e.direction = 'outbound'"
+    is_meet = "e.channel = 'meeting'"
+    planned = hour_in_planned_sql(hour)
+
+    select_parts: list[str] = []
+    for block in PLANNED_BLOCKS:
+        rng = f"{hour} >= {block.start_hour} AND {hour} < {block.end_hour}"
+        if block.kind == "call":
+            select_parts.append(
+                f"count(*) FILTER (WHERE {today} AND {rng} AND {is_call}"
+                f" AND {_CEVIRME_E})::int AS t_{block.key}_arama"
+            )
+            select_parts.append(
+                f"count(*) FILTER (WHERE {today} AND {rng} AND {is_call}"
+                f" AND {_TEMAS_E})::int AS t_{block.key}_ulasilan"
+            )
+            select_parts.append(
+                f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_call}"
+                f" AND {_CEVIRME_E})::int AS h_{block.key}_arama"
+            )
+            select_parts.append(
+                f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_call}"
+                f" AND {_TEMAS_E})::int AS h_{block.key}_ulasilan"
+            )
+        else:
+            select_parts.append(
+                f"count(*) FILTER (WHERE {today} AND {rng} AND {is_meet})"
+                f"::int AS t_{block.key}_randevu"
+            )
+            select_parts.append(
+                f"count(*) FILTER (WHERE {today} AND {rng} AND {is_meet}"
+                f" AND e.meta->>'randevu_durumu' = 'katildi')"
+                f"::int AS t_{block.key}_katildi"
+            )
+            select_parts.append(
+                f"count(*) FILTER (WHERE {today} AND {rng} AND {is_meet}"
+                f" AND e.meta->>'randevu_durumu' = 'katilmadi')"
+                f"::int AS t_{block.key}_katilmadi"
+            )
+            select_parts.append(
+                f"count(*) FILTER (WHERE {today} AND {rng} AND {is_meet}"
+                f" AND e.meta->>'randevu_durumu' = 'sonuc_girilmedi')"
+                f"::int AS t_{block.key}_sonuc"
+            )
+            select_parts.append(
+                f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_meet})"
+                f"::int AS h_{block.key}_randevu"
+            )
+            select_parts.append(
+                f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_meet}"
+                f" AND e.meta->>'randevu_durumu' = 'katildi')"
+                f"::int AS h_{block.key}_katildi"
+            )
+            select_parts.append(
+                f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_meet}"
+                f" AND e.meta->>'randevu_durumu' = 'katilmadi')"
+                f"::int AS h_{block.key}_katilmadi"
+            )
+            select_parts.append(
+                f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_meet}"
+                f" AND e.meta->>'randevu_durumu' = 'sonuc_girilmedi')"
+                f"::int AS h_{block.key}_sonuc"
+            )
+
+    disi = f"NOT {planned}"
+    select_parts.extend(
+        [
+            f"count(*) FILTER (WHERE {today} AND {disi} AND {is_call}"
+            f" AND {_CEVIRME_E})::int AS t_disi_arama",
+            f"count(*) FILTER (WHERE {today} AND {disi} AND {is_call}"
+            f" AND {_TEMAS_E})::int AS t_disi_ulasilan",
+            f"count(*) FILTER (WHERE {today} AND {disi} AND {is_meet})"
+            f"::int AS t_disi_randevu",
+            f"count(*) FILTER (WHERE {today} AND {disi} AND {is_meet}"
+            f" AND e.meta->>'randevu_durumu' = 'katildi')"
+            f"::int AS t_disi_katildi",
+            f"count(*) FILTER (WHERE {hist} AND {disi} AND {is_call}"
+            f" AND {_CEVIRME_E})::int AS h_disi_arama",
+            f"count(*) FILTER (WHERE {hist} AND {disi} AND {is_call}"
+            f" AND {_TEMAS_E})::int AS h_disi_ulasilan",
+            f"count(*) FILTER (WHERE {hist} AND {disi} AND {is_meet})"
+            f"::int AS h_disi_randevu",
+            f"count(*) FILTER (WHERE {hist} AND {disi} AND {is_meet}"
+            f" AND e.meta->>'randevu_durumu' = 'katildi')"
+            f"::int AS h_disi_katildi",
+        ]
+    )
+    sql = f"""
+        SELECT {", ".join(select_parts)}
+        FROM events e
+        JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+        WHERE e.org_id = %s
+          AND {_sales_rep_sql()}
+          AND e.occurred_at >= (now() AT TIME ZONE 'Europe/Istanbul')::date
+                - interval '{WINDOW_DAYS} days'
+          AND e.occurred_at <= now()
+          {extra}
+    """
+    days = max(_hist_weekdays(), 1)
+    with connect() as conn:
+        cur = conn.execute(sql, (org_id, *params))
+        row = cur.fetchone()
+        colnames = [str(col.name) for col in (cur.description or [])]
+    packed = {
+        name: int((row[i] if row else 0) or 0)
+        for i, name in enumerate(colnames)
+    }
+
+    def _avg(total: int) -> float:
+        return round(total / float(days), 1)
+
+    blocks: list[dict[str, Any]] = []
+    for block in PLANNED_BLOCKS:
+        if block.kind == "call":
+            t_a = packed[f"t_{block.key}_arama"]
+            t_u = packed[f"t_{block.key}_ulasilan"]
+            h_a = packed[f"h_{block.key}_arama"]
+            h_u = packed[f"h_{block.key}_ulasilan"]
+            blocks.append(
+                {
+                    "key": block.key,
+                    "label": block.label,
+                    "kind": block.kind,
+                    "today": {
+                        "arama": t_a,
+                        "ulasilan": t_u,
+                        "ulasma_orani": _ratio(t_u, t_a),
+                    },
+                    "avg90": {
+                        "arama": _avg(h_a),
+                        "ulasilan": _avg(h_u),
+                        "ulasma_orani": _ratio(h_u, h_a),
+                    },
+                }
+            )
+        else:
+            t_r = packed[f"t_{block.key}_randevu"]
+            t_k = packed[f"t_{block.key}_katildi"]
+            t_m = packed[f"t_{block.key}_katilmadi"]
+            t_s = packed[f"t_{block.key}_sonuc"]
+            h_r = packed[f"h_{block.key}_randevu"]
+            h_k = packed[f"h_{block.key}_katildi"]
+            h_m = packed[f"h_{block.key}_katilmadi"]
+            h_s = packed[f"h_{block.key}_sonuc"]
+            blocks.append(
+                {
+                    "key": block.key,
+                    "label": block.label,
+                    "kind": block.kind,
+                    "today": {
+                        "randevu": t_r,
+                        "katildi": t_k,
+                        "katilmadi": t_m,
+                        "sonuc_girilmedi": t_s,
+                    },
+                    "avg90": {
+                        "randevu": _avg(h_r),
+                        "katildi": _avg(h_k),
+                        "katilmadi": _avg(h_m),
+                        "sonuc_girilmedi": _avg(h_s),
+                    },
+                }
+            )
+
+    t_da = packed["t_disi_arama"]
+    t_du = packed["t_disi_ulasilan"]
+    t_dr = packed["t_disi_randevu"]
+    t_dk = packed["t_disi_katildi"]
+    h_da = packed["h_disi_arama"]
+    h_du = packed["h_disi_ulasilan"]
+    h_dr = packed["h_disi_randevu"]
+    h_dk = packed["h_disi_katildi"]
+    blocks.append(
+        {
+            "key": BLOK_DISI.key,
+            "label": BLOK_DISI.label,
+            "kind": BLOK_DISI.kind,
+            "today": {
+                "arama": t_da,
+                "ulasilan": t_du,
+                "ulasma_orani": _ratio(t_du, t_da),
+                "randevu": t_dr,
+                "katildi": t_dk,
+            },
+            "avg90": {
+                "arama": _avg(h_da),
+                "ulasilan": _avg(h_du),
+                "ulasma_orani": _ratio(h_du, h_da),
+                "randevu": _avg(h_dr),
+                "katildi": _avg(h_dk),
+            },
+        }
+    )
+    return {"blocks": blocks, "workdays": days}
 
 
 def _workdays() -> int:

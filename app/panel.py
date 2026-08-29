@@ -45,6 +45,7 @@ from pusula.panel_data import (
     take_rate,
     talk_duration_by_rep,
     team_reach_and_join,
+    today_blocks,
     weekly_series,
     weekly_team_series,
     workload_board,
@@ -120,6 +121,10 @@ HELP_YOL = (
 HELP_SOURCE = (
     "Lead'in Zoho'daki kaynak alani. Contact Form ile Register "
     "arasindaki temas orani farki dusuktur (~4 puan)."
+)
+HELP_BUGUN = (
+    "Bugunun bloklari. Ok, son 90 gunun ayni blok gunluk "
+    "ortalamasina gore."
 )
 
 COL_HELP: dict[str, str] = {
@@ -239,6 +244,11 @@ def _rep_snap(rep_id: str) -> dict[str, Any]:
 
 
 @st.cache_data(ttl=CACHE_TTL)
+def _today_blocks(rep_id: str | None) -> dict[str, Any]:
+    return today_blocks(rep_id)
+
+
+@st.cache_data(ttl=CACHE_TTL)
 def _latest_event() -> datetime | None:
     return latest_event_created_at()
 
@@ -269,11 +279,115 @@ def _heading(title: str, help_text: str | None = None) -> None:
     st.subheader(title, help=help_text)
 
 
+def _fmt_clock(value: datetime | None) -> str:
+    if value is None:
+        return "—"
+    dt = value if value.tzinfo is not None else value.replace(tzinfo=_TZ)
+    return dt.astimezone(_TZ).strftime("%H:%M")
+
+
 def _fmt_event_ts(value: datetime | None) -> str:
     if value is None:
         return "—"
     dt = value if value.tzinfo is not None else value.replace(tzinfo=_TZ)
     return dt.astimezone(_TZ).strftime("%d.%m.%Y %H:%M")
+
+
+def _render_bugun(rep_id: str | None, *, blok_disi: bool) -> None:
+    data = _today_blocks(rep_id)
+    _heading("Bugün", HELP_BUGUN)
+    for block in data.get("blocks") or []:
+        if str(block.get("key")) == "blok_disi" and not blok_disi:
+            continue
+        kind = str(block.get("kind") or "")
+        today = block.get("today") or {}
+        avg90 = block.get("avg90") or {}
+        st.markdown(f"**{block.get('label')}**")
+        if kind == "call":
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                _compare(
+                    "arama",
+                    today.get("arama"),
+                    avg90.get("arama"),
+                    help_text=HELP_ARAMA,
+                )
+            with c2:
+                _compare(
+                    "ulaşılan görüşme",
+                    today.get("ulasilan"),
+                    avg90.get("ulasilan"),
+                    help_text=HELP_ULASILAN,
+                )
+            with c3:
+                _compare(
+                    "ulaşma oranı",
+                    today.get("ulasma_orani"),
+                    avg90.get("ulasma_orani"),
+                    pct=True,
+                    help_text=HELP_ULASMA,
+                )
+        elif kind == "meeting":
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                _compare(
+                    "randevu",
+                    today.get("randevu"),
+                    avg90.get("randevu"),
+                    help_text=HELP_RANDEVU,
+                )
+            with c2:
+                _compare(
+                    "katıldı",
+                    today.get("katildi"),
+                    avg90.get("katildi"),
+                    help_text=HELP_KATILIM,
+                )
+            with c3:
+                _compare(
+                    "katılmadı",
+                    today.get("katilmadi"),
+                    avg90.get("katilmadi"),
+                    help_text=HELP_KATILIM,
+                )
+            with c4:
+                _compare(
+                    "sonuç girilmedi",
+                    today.get("sonuc_girilmedi"),
+                    avg90.get("sonuc_girilmedi"),
+                    help_text=HELP_KATILIM,
+                )
+        else:
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                _compare(
+                    "arama",
+                    today.get("arama"),
+                    avg90.get("arama"),
+                    help_text=HELP_ARAMA,
+                )
+            with c2:
+                _compare(
+                    "ulaşılan görüşme",
+                    today.get("ulasilan"),
+                    avg90.get("ulasilan"),
+                    help_text=HELP_ULASILAN,
+                )
+            with c3:
+                _compare(
+                    "randevu",
+                    today.get("randevu"),
+                    avg90.get("randevu"),
+                    help_text=HELP_RANDEVU,
+                )
+            with c4:
+                _compare(
+                    "katıldı",
+                    today.get("katildi"),
+                    avg90.get("katildi"),
+                    help_text=HELP_KATILIM,
+                )
+    st.caption(f"Son veri guncelleme: {_fmt_clock(_latest_event())}")
 
 
 def _line_chart(
@@ -341,6 +455,8 @@ def render_yonetici() -> None:
         if lab == choice:
             rep_id = None if rid == "tumu" else rid
             break
+
+    _render_bugun(rep_id, blok_disi=True)
 
     st.subheader("Saatlik")
     hourly = _hourly(rep_id)
@@ -574,6 +690,7 @@ def render_temsilci() -> None:
     prev = snap["previous"]
 
     st.caption(f"son {WINDOW_DAYS} gün, önceki {WINDOW_DAYS} günle kıyas")
+    _render_bugun(rep_id, blok_disi=False)
     c1, c2, c3 = st.columns(3)
     with c1:
         _compare(
