@@ -23,10 +23,14 @@ import pandas as pd
 import streamlit as st
 
 from pusula.panel_data import (
-    CRM_DK_PER_ARAMA,
+    CRM_DK_PER_GORUSME,
+    DEFAULT_ARAMA_PER_LEAD,
+    DEFAULT_TOPLANTI_GUN,
+    OLU_ZAMAN_SN,
+    TOPLANTI_DK,
     WINDOW_DAYS,
     arrow,
-    daily_workload,
+    fmt_duration,
     fmt_num,
     fmt_pct,
     funnel,
@@ -43,6 +47,7 @@ from pusula.panel_data import (
     team_reach_and_join,
     weekly_series,
     weekly_team_series,
+    workload_board,
 )
 
 CACHE_TTL = 15 * 60
@@ -56,7 +61,7 @@ HELP_ULASMA = (
     "yapilmamis aramalar sayilmaz."
 )
 HELP_ARAMA = (
-    "Yapilan cevirme sayisi. Karsi taraf acmasa bile sayilir. "
+    "Yapilan arama sayisi. Karsi taraf acmasa bile sayilir. "
     "Planlanmis ama henuz yapilmamis aramalar haric."
 )
 HELP_ULASILAN = "Telefonun acildigi arama sayisi."
@@ -69,25 +74,33 @@ HELP_KATILIM = (
     "Sonucu isaretlenmemis randevular hesaba katilmaz."
 )
 HELP_TAKE_GENEL = (
-    "Lead'lerin kacinin satisa dondugu. Satis isareti, lead'in "
-    "contact kaydina donmesidir. 1 Mayis 2026 sonrasi atanan "
-    "lead'ler, mevcut musteriler haric."
+    "Tum lead'lerin kacinin satisa dondugu. Satis isareti, lead'in "
+    "contact kaydina donmesidir."
 )
 HELP_TAKE_ULASILANDA = (
-    "En az bir kez telefonda konusulmus lead'lerin kacinin "
-    "satisa dondugu."
+    "En az bir kez telefonu acilmis lead'lerin kacinin satisa "
+    "dondugu. Payda daha kucuk oldugu icin oran daha yuksek cikar."
 )
 HELP_DONGU = (
     "Lead'in temsilciye atanmasindan satisa donmesine kadar "
     "gecen gun sayisi. Yalniz satisa donenler hesaba katilir."
 )
+HELP_TIPIK = (
+    "Tipik — siralandiginda tam ortadaki deger. Ortalamadan farki, "
+    "birkac cok uzun kaydin sayiyi yukari cekmemesi."
+)
 HELP_SURE = (
-    "Telefonun acildigi gorusmelerin ortalama suresi. Medyan da "
+    "Telefonun acildigi gorusmelerin ortalama suresi. Tipik de "
     "gosterilir cunku birkac uzun gorusme ortalamayi yukari cekebilir."
 )
 HELP_ISYUKU = (
     "Kisi basi gunluk ortalama. Son 90 gunun pazar disi is "
     "gunlerine bolunmustur."
+)
+HELP_DOLULUK = (
+    "Gun doluluk orani — olculebilen islerin (arama, gorusme, "
+    "toplanti, CRM kayit) gunun kacini doldurdugu. WhatsApp ve "
+    "mola bu hesaba dahil degildir."
 )
 HELP_LEAD = "Temsilciye atanan yeni lead sayisi."
 HELP_HUNI = (
@@ -118,15 +131,22 @@ COL_HELP: dict[str, str] = {
     "randevu": HELP_RANDEVU,
     "randevu/gün": HELP_RANDEVU,
     "katılım %": HELP_KATILIM,
-    "ortalama sn": HELP_SURE,
-    "medyan sn": HELP_SURE,
+    "ortalama": HELP_SURE,
+    "tipik": HELP_TIPIK,
     "ortalama gün": HELP_DONGU,
-    "medyan gün": HELP_DONGU,
-    "genel": HELP_TAKE_GENEL,
-    "ulaşılanda": HELP_TAKE_ULASILANDA,
-    "take_rate": HELP_TAKE_GENEL,
+    "tipik gün": HELP_DONGU,
+    "genelde": HELP_TAKE_GENEL,
+    "ulaşılarda": HELP_TAKE_ULASILANDA,
     "kaynak": HELP_SOURCE,
     "yol": HELP_YOL,
+    "PLANLANAN": HELP_ISYUKU,
+    "GERÇEKLEŞEN": HELP_ISYUKU,
+    "PLANLANAN dk": HELP_ISYUKU,
+    "GERÇEKLEŞEN dk": HELP_ISYUKU,
+    "plan gerçekleşme": (
+        "Plan gerçekleşme oranı — gerçekleşen / planlanan. "
+        "Her satır ve toplam süre için ayrı hesaplanır."
+    ),
     "durum": HELP_HUNI,
     "1.Arama-Ulaşılamadı": HELP_HUNI,
     "2.Arama-Ulaşılamadı": HELP_HUNI,
@@ -140,7 +160,8 @@ CHART_HELP: dict[str, str] = {
     "ulasma_orani": HELP_ULASMA,
     "randevu": HELP_RANDEVU,
     "katilim_orani": HELP_KATILIM,
-    "take_rate": HELP_TAKE_GENEL,
+    "take_genel": HELP_TAKE_GENEL,
+    "take_ulasilanda": HELP_TAKE_ULASILANDA,
 }
 
 
@@ -166,8 +187,10 @@ def _team_dip() -> dict[str, float | None]:
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _workload() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
-    return daily_workload()
+def _board(
+    rep_id: str | None, arama_per_lead: float, toplanti_gun: float
+) -> dict[str, Any]:
+    return workload_board(rep_id, arama_per_lead, toplanti_gun)
 
 
 @st.cache_data(ttl=CACHE_TTL)
@@ -296,10 +319,16 @@ def _compare(
     prev: float | None,
     *,
     pct: bool = False,
+    duration: bool = False,
     help_text: str | None = None,
 ) -> None:
-    fmt = fmt_pct if pct else fmt_num
-    st.metric(label, fmt(cur), arrow(cur, prev), help=help_text)
+    if duration:
+        shown = fmt_duration(cur)
+    elif pct:
+        shown = fmt_pct(cur)
+    else:
+        shown = fmt_num(cur)
+    st.metric(label, shown, arrow(cur, prev), help=help_text)
 
 
 def render_yonetici() -> None:
@@ -343,37 +372,62 @@ def render_yonetici() -> None:
     )
 
     _heading("Günlük iş yükü (kişi başı)", HELP_ISYUKU)
-    work, extra = _workload()
-    wframe = _df(work)
-    _table(
-        wframe.rename(
-            columns={
-                "arama": "arama/gün",
-                "arama_dk": "arama dk",
-                "ulasilan": "ulaşılan/gün",
-                "ulasilan_dk": "ulaşılan dk",
-                "randevu": "randevu/gün",
-                "randevu_dk": "randevu dk",
-                "toplanti": "toplantı/gün",
-                "toplanti_dk": "toplantı dk",
-                "crm": "CRM kayıt/gün",
-                "crm_dk": "CRM dk",
-            }
-        )
+    p1, p2 = st.columns(2)
+    arama_per_lead = p1.number_input(
+        "lead başına arama (plan)",
+        min_value=0.5,
+        max_value=20.0,
+        value=float(DEFAULT_ARAMA_PER_LEAD),
+        step=0.5,
+    )
+    toplanti_gun = p2.number_input(
+        "günde gerçekleşen toplantı (plan)",
+        min_value=0.0,
+        max_value=20.0,
+        value=float(DEFAULT_TOPLANTI_GUN),
+        step=0.5,
+    )
+    board = _board(rep_id, float(arama_per_lead), float(toplanti_gun))
+    bframe = _df(board["rows"]).rename(
+        columns={
+            "planlanan": "PLANLANAN",
+            "plan dk": "PLANLANAN dk",
+            "gerçekleşen": "GERÇEKLEŞEN",
+            "gerçek dk": "GERÇEKLEŞEN dk",
+        }
+    )
+    bframe["plan gerçekleşme"] = bframe["plan gerçekleşme"].map(fmt_pct)
+    _table(bframe)
+    v1, v2, v3 = st.columns(3)
+    v1.metric("planlanan toplam", f"{board['plan_saat']} saat")
+    v2.metric("gerçekleşen toplam", f"{board['gercek_saat']} saat")
+    v3.metric(
+        "gün doluluk oranı",
+        fmt_pct(board.get("doluluk")),
+        help=HELP_DOLULUK,
     )
     st.caption(
-        f"ulaşılamayan çağrı ort. {fmt_num(extra.get('ulasilamayan_ort_sn'), 1)} sn · "
-        f"ulaşılan görüşme medyan {fmt_num(extra.get('ulasilan_medyan_sn'), 0)} sn · "
-        f"CRM kayıt tahmini {CRM_DK_PER_ARAMA} dk/arama · "
-        f"{int(extra.get('workdays') or 0)} iş günü"
+        f"plan gerçekleşme (süre) {fmt_pct(board.get('toplam_oran'))} · "
+        f"ulaşılamayan arama ort. {fmt_duration(board.get('miss_sn'))} · "
+        f"ulaşılan görüşme ort. {fmt_duration(board.get('hit_sn'))} · "
+        f"toplantı {int(TOPLANTI_DK)} dk · CRM {CRM_DK_PER_GORUSME} dk/görüşme · "
+        f"ölü zaman {fmt_duration(OLU_ZAMAN_SN)}/arama · {int(board.get('workdays') or 0)} iş günü"
     )
 
     _heading("Görüşme süresi", HELP_SURE)
     talk = _df(_talk())
-    talk_show = talk.rename(
-        columns={"ortalama_sn": "ortalama sn", "medyan_sn": "medyan sn"}
-    )
-    _table(talk_show)
+    if not talk.empty:
+        talk_show = pd.DataFrame(
+            {
+                "temsilci": talk["temsilci"],
+                "ortalama": talk["ortalama_sn"].map(fmt_duration),
+                "tipik": talk["medyan_sn"].map(fmt_duration),
+                "görüşme": talk["n"],
+            }
+        )
+        _table(talk_show)
+    else:
+        st.caption("veri yetersiz")
 
     _heading("Satış döngüsü (gün)", HELP_DONGU)
     cycle_rep, cycle_team = _cycle()
@@ -384,9 +438,9 @@ def render_yonetici() -> None:
         help=HELP_DONGU,
     )
     d2.metric(
-        "medyan gün",
+        "tipik gün",
         fmt_num(cycle_team.get("medyan_gun")),
-        help=HELP_DONGU,
+        help=HELP_TIPIK,
     )
     d3.metric("n", str(cycle_team.get("n") or 0))
     cyc = _df(cycle_rep)
@@ -395,37 +449,39 @@ def render_yonetici() -> None:
         cyc["medyan_gun"] = cyc["medyan_gun"].map(lambda v: fmt_num(v, 1))
     _table(
         cyc.rename(
-            columns={"ortalama_gun": "ortalama gün", "medyan_gun": "medyan gün"}
+            columns={"ortalama_gun": "ortalama gün", "medyan_gun": "tipik gün"}
         )
     )
 
-    _heading("Take rate", HELP_TAKE_GENEL)
+    _heading("Satışa dönme oranı", HELP_TAKE_GENEL)
     take_rep, take_team = _take()
     t1, t2 = st.columns(2)
     t1.metric(
-        "operasyon genel",
+        "Genelde satışa dönme oranı",
         fmt_pct(take_team.get("genel")),
         help=HELP_TAKE_GENEL,
     )
     t2.metric(
-        "ulaşılanda",
+        "Ulaşılarda satışa dönme oranı",
         fmt_pct(take_team.get("ulasilanda")),
         help=HELP_TAKE_ULASILANDA,
     )
     tframe = _df(take_rep)
-    tframe["genel"] = tframe["genel"].map(fmt_pct)
-    tframe["ulasilanda"] = tframe["ulasilanda"].map(fmt_pct)
-    _table(tframe.rename(columns={"ulasilanda": "ulaşılanda"}))
+    tframe["genelde"] = tframe["genel"].map(fmt_pct)
+    tframe["ulaşılarda"] = tframe["ulasilanda"].map(fmt_pct)
+    _table(tframe[["temsilci", "leads", "genelde", "ulaşılarda"]])
 
     _heading("Satış kaynağı", HELP_SOURCE)
     src = _df(_source())
-    src["take_rate"] = src["take_rate"].map(fmt_pct)
+    src["genelde"] = src["genelde"].map(fmt_pct)
+    src["ulaşılarda"] = src["ulasilanda"].map(fmt_pct)
     st.markdown("Lead source", help=HELP_SOURCE)
-    _table(src)
+    _table(src[["kaynak", "lead", "satis", "genelde", "ulaşılarda"]])
     path = _df(_path())
-    path["take_rate"] = path["take_rate"].map(fmt_pct)
+    path["genelde"] = path["genelde"].map(fmt_pct)
+    path["ulaşılarda"] = path["ulasilanda"].map(fmt_pct)
     st.markdown("Satışa giden yol", help=HELP_YOL)
-    _table(path)
+    _table(path[["yol", "lead", "satis", "genelde", "ulaşılarda"]])
 
     _heading("Huni", HELP_HUNI)
     fun = _funnel(rep_id, True)
@@ -453,8 +509,6 @@ def _render_weekly_charts(
         ("randevu", "randevu", False),
         ("katilim_orani", "katılım oranı", True),
     ]
-    if take:
-        specs.append(("take_rate", "take rate", True))
     for key, title, is_pct in specs:
         parts: list[pd.DataFrame] = []
         team_df = _df(team_rows)
@@ -475,6 +529,36 @@ def _render_weekly_charts(
         _line_chart(merged, key, title, is_pct=is_pct)
         src = rep_rows if rep_rows is not None else team_rows
         st.caption(f"son hafta vs 12 haftalık ortalama: {_week_delta(src, key)}")
+    if take:
+        _render_donusum_weekly(rep_rows if rep_rows is not None else team_rows)
+
+
+def _render_donusum_weekly(rows: list[dict[str, Any]]) -> None:
+    frame = _df(rows)
+    parts: list[pd.DataFrame] = []
+    for key, label in (
+        ("take_genel", "genelde"),
+        ("take_ulasilanda", "ulaşılarda"),
+    ):
+        if frame.empty or key not in frame.columns:
+            continue
+        t = frame[["hafta", key]].copy()
+        t["seri"] = label
+        t = t.rename(columns={key: "oran"})
+        parts.append(t)
+    if not parts:
+        return
+    merged = pd.concat(parts, ignore_index=True)
+    st.markdown("satışa dönme oranı", help=HELP_TAKE_GENEL)
+    _line_chart(merged, "oran", "satışa dönme oranı", is_pct=True)
+    st.caption(
+        f"genelde son hafta vs 12 haftalık ortalama: "
+        f"{_week_delta(rows, 'take_genel')}"
+    )
+    st.caption(
+        f"ulaşılarda son hafta vs 12 haftalık ortalama: "
+        f"{_week_delta(rows, 'take_ulasilanda')}"
+    )
 
 
 def render_temsilci() -> None:
@@ -513,17 +597,19 @@ def render_temsilci() -> None:
             help_text=HELP_ULASILAN,
         )
         _compare(
-            "görüşme ortalama sn",
+            "görüşme ortalama",
             cur.get("ortalama_sn"),
             prev.get("ortalama_sn"),
+            duration=True,
             help_text=HELP_SURE,
         )
     with c3:
         _compare(
-            "görüşme medyan sn",
+            "görüşme tipik",
             cur.get("medyan_sn"),
             prev.get("medyan_sn"),
-            help_text=HELP_SURE,
+            duration=True,
+            help_text=HELP_TIPIK,
         )
         _compare(
             "gelen lead",
@@ -568,7 +654,7 @@ def render_temsilci() -> None:
             prev.get("crm_gun"),
             help_text=HELP_ISYUKU,
         )
-    st.caption(f"CRM kayıt tahmini {CRM_DK_PER_ARAMA} dk/arama")
+    st.caption(f"CRM kayıt tahmini {CRM_DK_PER_GORUSME} dk/görüşme")
 
     _compare(
         "ulaşılan görüşmenin randevuya dönme oranı",
@@ -611,8 +697,9 @@ def render_ekip() -> None:
     st.caption("isim yok. operasyon geneli.")
     _heading("Toplantı etkisi", HELP_TOPLANTI)
     path = _df(_path())
-    path["take_rate"] = path["take_rate"].map(fmt_pct)
-    _table(path)
+    path["genelde"] = path["genelde"].map(fmt_pct)
+    path["ulaşılarda"] = path["ulasilanda"].map(fmt_pct)
+    _table(path[["yol", "lead", "satis", "genelde", "ulaşılarda"]])
 
     _heading("Saatlik katılım oranı", HELP_KATILIM)
     hourly = _hourly(None)

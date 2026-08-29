@@ -24,8 +24,17 @@ WINDOW_DAYS = 90
 WEEK_COUNT = 12
 CONV_START = datetime(2026, 5, 1, tzinfo=_TZ)
 MEVCUT_MUSTERI = "Mevcut Müşteri"
-CRM_DK_PER_ARAMA = 1.5
-TOPLANTI_DK_VARSAYILAN = 30.0
+
+# İş yükü süre varsayımları — tek yer.
+TOPLANTI_DK = 30.0
+CRM_DK_PER_GORUSME = 1.5
+OLU_ZAMAN_SN = 20.0
+GUN_SAAT = 8.0
+DEFAULT_ARAMA_PER_LEAD = 3.0
+DEFAULT_TOPLANTI_GUN = 6.0
+# Eski ad: panel import kırılmasın.
+CRM_DK_PER_ARAMA = CRM_DK_PER_GORUSME
+TOPLANTI_DK_VARSAYILAN = TOPLANTI_DK
 
 _FUNNEL_STATUSES = (
     "1.Arama-Ulaşılamadı",
@@ -294,11 +303,177 @@ def daily_workload() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
         )
     extras = {
         "ulasilamayan_ort_sn": float(dur[0]) if dur and dur[0] is not None else None,
-        "ulasilan_medyan_sn": float(dur[1]) if dur and dur[1] is not None else None,
+        "ulasilan_tipik_sn": float(dur[1]) if dur and dur[1] is not None else None,
         "workdays": days,
-        "crm_dk_per_arama": CRM_DK_PER_ARAMA,
+        "crm_dk_per_gorusme": CRM_DK_PER_GORUSME,
     }
     return out, extras
+
+
+def _minutes_for(
+    *,
+    arama: float,
+    ulasilan: float,
+    katildi: float,
+    miss_sn: float,
+    hit_sn: float,
+) -> dict[str, float]:
+    unreached = max(arama - ulasilan, 0.0)
+    return {
+        "lead": 0.0,
+        "arama": (unreached * miss_sn + arama * OLU_ZAMAN_SN) / 60.0,
+        "ulasilan": ulasilan * hit_sn / 60.0,
+        "randevu": 0.0,
+        "toplanti": katildi * TOPLANTI_DK,
+        "crm": ulasilan * CRM_DK_PER_GORUSME,
+    }
+
+
+def workload_board(
+    rep_id: str | None,
+    arama_per_lead: float,
+    toplanti_gun: float,
+) -> dict[str, Any]:
+    """Kişi başı günlük PLANLANAN / GERÇEKLEŞEN + doluluk."""
+    org_id = get_org_id()
+    days = max(_workdays(), 1)
+    extra, params = _rep_filter("e", rep_id)
+    extra_l, params_l = _rep_filter("l", rep_id, "owner_rep_id")
+    n_reps = 1
+    if not rep_id:
+        n_reps = max(len(load_reps()), 1)
+
+    sql = f"""
+        SELECT
+          count(*) FILTER (
+            WHERE e.channel = 'call' AND e.direction = 'outbound'
+              AND {_CEVIRME_E}
+          )::int AS arama,
+          count(*) FILTER (
+            WHERE e.channel = 'call' AND e.direction = 'outbound'
+              AND {_TEMAS_E}
+          )::int AS ulasilan,
+          count(*) FILTER (
+            WHERE e.channel = 'meeting'
+              AND e.meta->>'randevu_durumu' IN ('katildi', 'katilmadi')
+          )::int AS randevu,
+          count(*) FILTER (
+            WHERE e.channel = 'meeting'
+              AND e.meta->>'randevu_durumu' = 'katildi'
+          )::int AS katildi,
+          avg({_DUR_E}) FILTER (
+            WHERE e.channel = 'call' AND e.direction = 'outbound'
+              AND {_CEVIRME_E} AND NOT ({_TEMAS_E})
+          )::float AS miss_sn,
+          avg({_DUR_E}) FILTER (
+            WHERE e.channel = 'call' AND e.direction = 'outbound'
+              AND {_TEMAS_E}
+          )::float AS hit_sn
+        FROM events e
+        JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+        WHERE e.org_id = %s
+          AND {_sales_rep_sql()}
+          AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
+          AND e.occurred_at <= now()
+          {extra}
+    """
+    lead_sql = f"""
+        SELECT count(*)::int
+        FROM leads l
+        JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
+        WHERE l.org_id = %s
+          AND {_sales_rep_sql()}
+          AND coalesce(l.assigned_at, l.created_at)
+                >= now() - interval '{WINDOW_DAYS} days'
+          {extra_l}
+    """
+    with connect() as conn:
+        row = conn.execute(sql, (org_id, *params)).fetchone()
+        lead_row = conn.execute(lead_sql, (org_id, *params_l)).fetchone()
+
+    arama_t = int(row[0] or 0) if row else 0
+    ulasilan_t = int(row[1] or 0) if row else 0
+    randevu_t = int(row[2] or 0) if row else 0
+    katildi_t = int(row[3] or 0) if row else 0
+    miss_sn = float(row[4]) if row and row[4] is not None else 0.0
+    hit_sn = float(row[5]) if row and row[5] is not None else 0.0
+    leads_t = int(lead_row[0] or 0) if lead_row else 0
+
+    scale = float(days) * float(n_reps)
+    actual = {
+        "lead": leads_t / scale,
+        "arama": arama_t / scale,
+        "ulasilan": ulasilan_t / scale,
+        "randevu": randevu_t / scale,
+        "toplanti": katildi_t / scale,
+        "crm": ulasilan_t / scale,
+    }
+    ulasma = _ratio(ulasilan_t, arama_t)
+    randevu_orani = _ratio(randevu_t, ulasilan_t)
+    ulasma_f = (ulasma / 100.0) if ulasma is not None else 0.0
+    randevu_f = (randevu_orani / 100.0) if randevu_orani is not None else 0.0
+
+    lead_plan = actual["lead"]
+    arama_plan = lead_plan * arama_per_lead
+    ulasilan_plan = arama_plan * ulasma_f
+    randevu_plan = ulasilan_plan * randevu_f
+    plan = {
+        "lead": lead_plan,
+        "arama": arama_plan,
+        "ulasilan": ulasilan_plan,
+        "randevu": randevu_plan,
+        "toplanti": float(toplanti_gun),
+        "crm": ulasilan_plan,
+    }
+    plan_dk = _minutes_for(
+        arama=plan["arama"],
+        ulasilan=plan["ulasilan"],
+        katildi=plan["toplanti"],
+        miss_sn=miss_sn,
+        hit_sn=hit_sn,
+    )
+    gercek_dk = _minutes_for(
+        arama=actual["arama"],
+        ulasilan=actual["ulasilan"],
+        katildi=actual["toplanti"],
+        miss_sn=miss_sn,
+        hit_sn=hit_sn,
+    )
+    labels = [
+        ("lead", "gelen lead"),
+        ("arama", "arama"),
+        ("ulasilan", "ulaşılan görüşme"),
+        ("randevu", "randevu alınan"),
+        ("toplanti", "gerçekleşen toplantı"),
+        ("crm", "CRM kayıt"),
+    ]
+    rows: list[dict[str, Any]] = []
+    for key, label in labels:
+        p = plan[key]
+        g = actual[key]
+        rows.append(
+            {
+                "iş": label,
+                "planlanan": round(p, 1),
+                "plan dk": round(plan_dk[key], 1),
+                "gerçekleşen": round(g, 1),
+                "gerçek dk": round(gercek_dk[key], 1),
+                "plan gerçekleşme": _ratio(g, p),
+            }
+        )
+    plan_dk_sum = sum(plan_dk.values())
+    gercek_dk_sum = sum(gercek_dk.values())
+    return {
+        "rows": rows,
+        "plan_saat": round(plan_dk_sum / 60.0, 2),
+        "gercek_saat": round(gercek_dk_sum / 60.0, 2),
+        "doluluk": _ratio(gercek_dk_sum, GUN_SAAT * 60.0),
+        "toplam_oran": _ratio(gercek_dk_sum, plan_dk_sum),
+        "miss_sn": miss_sn,
+        "hit_sn": hit_sn,
+        "workdays": days,
+        "n_reps": n_reps,
+    }
 
 
 def talk_duration_by_rep() -> list[dict[str, Any]]:
@@ -522,7 +697,11 @@ def source_take_rate() -> list[dict[str, Any]]:
           END AS src,
           count(*)::int AS leads,
           count(*) FILTER (WHERE {_has_won_sql()})::int AS satis,
-          count(*) FILTER (WHERE {_has_contact_sql()})::int AS contacts
+          count(*) FILTER (WHERE {_has_contact_sql()})::int AS contacts,
+          count(*) FILTER (WHERE {_has_temas_sql()})::int AS reached,
+          count(*) FILTER (
+            WHERE {_has_temas_sql()} AND {_has_contact_sql()}
+          )::int AS reached_c
         {base}
         GROUP BY 1
         ORDER BY 1
@@ -544,9 +723,13 @@ def source_take_rate() -> list[dict[str, Any]]:
             "kaynak": str(src),
             "lead": int(leads),
             "satis": int(satis),
-            "take_rate": _ratio(contacts, leads),
+            "contacts": int(contacts),
+            "reached": int(reached),
+            "reached_c": int(reached_c),
+            "genelde": _ratio(contacts, leads),
+            "ulasilanda": _ratio(reached_c, reached),
         }
-        for src, leads, satis, contacts in rows
+        for src, leads, satis, contacts, reached, reached_c in rows
     ]
     out.sort(key=lambda r: order.get(str(r["kaynak"]), 9))
     return out
@@ -578,13 +761,16 @@ def path_take_rate() -> list[dict[str, Any]]:
                 ELSE 'hic aranmamis'
               END AS yol,
               {_has_won_sql()} AS won,
-              {_has_contact_sql()} AS has_contact
+              {_has_contact_sql()} AS has_contact,
+              {_has_temas_sql()} AS has_temas
             {base}
         )
         SELECT yol,
           count(*)::int AS leads,
           count(*) FILTER (WHERE won)::int AS satis,
-          count(*) FILTER (WHERE has_contact)::int AS contacts
+          count(*) FILTER (WHERE has_contact)::int AS contacts,
+          count(*) FILTER (WHERE has_temas)::int AS reached,
+          count(*) FILTER (WHERE has_temas AND has_contact)::int AS reached_c
         FROM uni
         GROUP BY yol
     """
@@ -609,10 +795,11 @@ def path_take_rate() -> list[dict[str, Any]]:
             "yol": labels.get(str(yol), str(yol)),
             "lead": int(leads),
             "satis": int(satis),
-            "take_rate": _ratio(contacts, leads),
+            "genelde": _ratio(contacts, leads),
+            "ulasilanda": _ratio(reached_c, reached),
             "_ord": order.get(str(yol), 9),
         }
-        for yol, leads, satis, contacts in rows
+        for yol, leads, satis, contacts, reached, reached_c in rows
     ]
     out.sort(key=lambda r: int(r["_ord"]))
     for row in out:
@@ -694,7 +881,7 @@ def first_meeting_week() -> dict[str, datetime | None]:
 
 
 def weekly_series(rep_id: str | None) -> list[dict[str, Any]]:
-    """Son 12 hafta: arama, ulaşma, randevu, katılım, take rate.
+    """Son 12 hafta: arama, ulaşma, randevu, katılım, satışa dönme.
 
     Meeting metrikleri ilk randevudan önceki haftalarda None (boşluk).
     """
@@ -763,7 +950,11 @@ def weekly_series(rep_id: str | None) -> list[dict[str, Any]]:
                     AT TIME ZONE 'Europe/Istanbul'
               ) AS week_start,
               count(*)::int AS leads,
-              count(*) FILTER (WHERE {_has_contact_sql()})::int AS contacts
+              count(*) FILTER (WHERE {_has_contact_sql()})::int AS contacts,
+              count(*) FILTER (WHERE {_has_temas_sql()})::int AS reached,
+              count(*) FILTER (
+                WHERE {_has_temas_sql()} AND {_has_contact_sql()}
+              )::int AS reached_c
             FROM leads l
             JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
             WHERE l.org_id = %s
@@ -783,7 +974,9 @@ def weekly_series(rep_id: str | None) -> list[dict[str, Any]]:
           m.randevu,
           m.katildi,
           lw.leads,
-          lw.contacts
+          lw.contacts,
+          lw.reached,
+          lw.reached_c
         FROM weeks
         LEFT JOIN call_w c ON c.week_start = weeks.week_start
         LEFT JOIN meet_w m ON m.week_start = weeks.week_start
@@ -812,7 +1005,7 @@ def weekly_series(rep_id: str | None) -> list[dict[str, Any]]:
         starts = [v for v in first_meet.values() if v is not None]
         gap_from = min(starts) if starts else None
     out: list[dict[str, Any]] = []
-    for week_start, arama, ulasilan, randevu, katildi, leads, contacts in rows:
+    for week_start, arama, ulasilan, randevu, katildi, leads, contacts, reached, reached_c in rows:
         week = week_start
         arama_n = int(arama) if arama is not None else 0
         ulasilan_n = int(ulasilan) if ulasilan is not None else 0
@@ -839,7 +1032,8 @@ def weekly_series(rep_id: str | None) -> list[dict[str, Any]]:
                 "ulasma_orani": _ratio(ulasilan_n, arama_n),
                 "randevu": randevu_val,
                 "katilim_orani": katilim_val,
-                "take_rate": _ratio(contacts, leads),
+                "take_genel": _ratio(contacts, leads),
+                "take_ulasilanda": _ratio(reached_c, reached),
             }
         )
     return out
@@ -1013,6 +1207,24 @@ def _ratio(num: int | float | None, den: int | float | None) -> float | None:
     if float(den) == 0:
         return None
     return round(100.0 * float(num) / float(den), 1)
+
+
+def fmt_duration(sec: float | int | None) -> str:
+    """Saniye → '7 dk 42 sn' veya '48 sn'."""
+    if sec is None:
+        return "—"
+    try:
+        total = int(round(float(sec)))
+    except (TypeError, ValueError):
+        return "—"
+    if total < 0:
+        total = 0
+    if total < 60:
+        return f"{total} sn"
+    minutes, rest = divmod(total, 60)
+    if rest == 0:
+        return f"{minutes} dk"
+    return f"{minutes} dk {rest} sn"
 
 
 def fmt_pct(value: float | None) -> str:
