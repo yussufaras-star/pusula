@@ -19,7 +19,8 @@ from pusula.panel_ciro import (
     fmt_tl,
 )
 from pusula.panel_data import (
-    WINDOW_DAYS,
+    DateWindow,
+    _bounds,
     connect,
     take_rate,
     weekly_series,
@@ -111,8 +112,9 @@ _TREND_KEYS = (
 )
 
 
-def _ops_90d() -> dict[str, dict[str, Any]]:
+def _ops_90d(window: DateWindow | None = None) -> dict[str, dict[str, Any]]:
     org_id = get_org_id()
+    start_ts, end_ts = _bounds(window)
     sql = f"""
         SELECT r.rep_id, r.full_name,
           count(*) FILTER (
@@ -139,12 +141,15 @@ def _ops_90d() -> dict[str, dict[str, Any]]:
         JOIN reps r ON r.org_id = %s AND r.rep_id = t.rep_id
         LEFT JOIN events e
           ON e.org_id = r.org_id AND e.rep_id = r.rep_id
-         AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
+         AND e.occurred_at >= %s
+         AND e.occurred_at <= %s
          AND e.occurred_at <= now()
         GROUP BY r.rep_id, r.full_name
     """
     with connect() as conn:
-        rows = conn.execute(sql, (list(SALES_TEAM_IDS), org_id)).fetchall()
+        rows = conn.execute(
+            sql, (list(SALES_TEAM_IDS), org_id, start_ts, end_ts)
+        ).fetchall()
     out: dict[str, dict[str, Any]] = {}
     for rep_id, name, arama, ulasilan, randevu, katildi, bos in rows:
         arama_n = int(arama or 0)
@@ -170,9 +175,10 @@ def _ops_90d() -> dict[str, dict[str, Any]]:
 
 def _attach_ciro_and_take(
     by_id: dict[str, dict[str, Any]],
+    window: DateWindow | None = None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, float | None]]:
     ytd = {row["rep_id"]: row for row in ciro_ytd_by_rep("sales")}
-    take_rows, take_team = take_rate()
+    take_rows, take_team = take_rate(window)
     take_by_name = {str(r["temsilci"]): r.get("genel") for r in take_rows}
     for _rep_id, row in by_id.items():
         y = ytd.get(_rep_id)
@@ -256,8 +262,8 @@ def _mean_weeks(rows: list[dict[str, Any]], key: str) -> float | None:
     return sum(vals) / len(vals)
 
 
-def _trend_block(rep_id: str) -> list[str]:
-    weeks = weekly_series(rep_id)
+def _trend_block(rep_id: str, window: DateWindow | None = None) -> list[str]:
+    weeks = weekly_series(rep_id, window)
     ciro_w = ciro_weekly_by_rep(rep_id)
     ciro_by_week = {
         w["hafta"]: w["ciro"] for w in ciro_w if isinstance(w.get("hafta"), datetime)
@@ -472,9 +478,11 @@ def _month_tr(month: int) -> str:
     return names[month - 1]
 
 
-def performance_profiles() -> list[dict[str, Any]]:
+def performance_profiles(
+    window: DateWindow | None = None,
+) -> list[dict[str, Any]]:
     """Satış ekibi kartları. Sıra ekip tanımı sırası, puan yok."""
-    by_id, take_team = _attach_ciro_and_take(_ops_90d())
+    by_id, take_team = _attach_ciro_and_take(_ops_90d(window), window)
     rows = [by_id[rid] for rid in SALES_TEAM_IDS if rid in by_id]
     team = _team_pooled(rows, take_team)
     monthly = _monthly_ops()
@@ -487,7 +495,7 @@ def performance_profiles() -> list[dict[str, Any]]:
                 "temsilci": row["temsilci"],
                 "guclu": strong,
                 "zayif": weak,
-                "egri": _trend_block(row["rep_id"]),
+                "egri": _trend_block(row["rep_id"], window),
                 "sureklilik": _continuity(row["rep_id"], weak_keys, monthly),
                 "kapsam": _coverage(row["rep_id"], str(row["temsilci"])),
             }

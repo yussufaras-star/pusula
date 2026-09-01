@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -25,6 +25,29 @@ WINDOW_DAYS = 90
 WEEK_COUNT = 12
 CONV_START = datetime(2026, 5, 1, tzinfo=_TZ)
 MEVCUT_MUSTERI = "Mevcut Müşteri"
+_MONTHS = (
+    "Ocak",
+    "Şubat",
+    "Mart",
+    "Nisan",
+    "Mayıs",
+    "Haziran",
+    "Temmuz",
+    "Ağustos",
+    "Eylül",
+    "Ekim",
+    "Kasım",
+    "Aralık",
+)
+_WEEKDAYS = (
+    "Pazartesi",
+    "Salı",
+    "Çarşamba",
+    "Perşembe",
+    "Cuma",
+    "Cumartesi",
+    "Pazar",
+)
 
 # İş yükü süre varsayımları — tek yer.
 TOPLANTI_DK = 30.0
@@ -40,9 +63,9 @@ TOPLANTI_DK_VARSAYILAN = TOPLANTI_DK
 _FUNNEL_STATUSES = (
     "1.Arama-Ulaşılamadı",
     "2.Arama-Ulaşılamadı",
-    "3.Arama-Ulaşılamadı",
     "Aging",
 )
+FUNNEL_DROPPED_STATUS = "3.Arama-Ulaşılamadı"
 
 _SOURCE_FORM = "Contact Form"
 _SOURCE_REGISTER = "Register"
@@ -58,6 +81,61 @@ _WON_D = won_stage_sql("d")
 class Rep:
     rep_id: str
     full_name: str
+
+
+@dataclass(frozen=True)
+class DateWindow:
+    """Istanbul takvim günü, her iki uç dahil."""
+
+    start: date
+    end: date
+
+    @property
+    def days(self) -> int:
+        return (self.end - self.start).days
+
+
+def default_window() -> DateWindow:
+    end = datetime.now(_TZ).date()
+    return DateWindow(start=end - timedelta(days=WINDOW_DAYS), end=end)
+
+
+def fmt_day(day: date) -> str:
+    return f"{day.day} {_MONTHS[day.month - 1]} {day.year}, {_WEEKDAYS[day.weekday()]}"
+
+
+def fmt_window(window: DateWindow) -> str:
+    """'1 Haziran - 1 Eylül 2026 (90 gün)' — pencereden üretilir."""
+    start, end = window.start, window.end
+    left = f"{start.day} {_MONTHS[start.month - 1]}"
+    if start.year != end.year:
+        left = f"{left} {start.year}"
+    right = f"{end.day} {_MONTHS[end.month - 1]} {end.year}"
+    return f"{left} - {right} ({window.days} gün)"
+
+
+def _bounds(window: DateWindow | None = None) -> tuple[datetime, datetime]:
+    """[start 00:00, end+1 00:00) Istanbul; bitiş now()'u aşmaz."""
+    w = window or default_window()
+    start_ts = datetime.combine(w.start, time.min, tzinfo=_TZ)
+    end_ts = datetime.combine(w.end + timedelta(days=1), time.min, tzinfo=_TZ)
+    now = datetime.now(_TZ)
+    if end_ts > now:
+        end_ts = now
+    return start_ts, end_ts
+
+
+def _conv_bounds(window: DateWindow | None = None) -> tuple[datetime, datetime]:
+    start_ts, end_ts = _bounds(window)
+    if start_ts < CONV_START:
+        start_ts = CONV_START
+    return start_ts, end_ts
+
+
+def conv_window(window: DateWindow | None = None) -> DateWindow:
+    start_ts, end_ts = _conv_bounds(window)
+    end_day = (end_ts - timedelta(seconds=1)).date()
+    return DateWindow(start=start_ts.date(), end=end_day)
 
 
 def _database_url() -> str:
@@ -124,11 +202,14 @@ def _hour_expr(alias: str = "e") -> str:
     return f"extract(hour FROM {alias}.occurred_at AT TIME ZONE 'Europe/Istanbul')::int"
 
 
-def hourly_table(rep_id: str | None) -> list[dict[str, Any]]:
-    """Saat, arama, ulaşılan, randevu, katıldı — son 90 gün."""
+def hourly_table(
+    rep_id: str | None, window: DateWindow | None = None
+) -> list[dict[str, Any]]:
+    """Saat, arama, ulaşılan, randevu, katıldı — seçilen pencere."""
     org_id = get_org_id()
     extra, params = _rep_filter("e", rep_id)
     hour = _hour_expr("e")
+    start_ts, end_ts = _bounds(window)
     sql = f"""
         WITH hours AS (
             SELECT h FROM generate_series(9, 18) AS h
@@ -143,7 +224,8 @@ def hourly_table(rep_id: str | None) -> list[dict[str, Any]]:
             WHERE e.org_id = %s
               AND {_sales_rep_sql()}
               AND e.channel = 'call' AND e.direction = 'outbound'
-              AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
+              AND e.occurred_at >= %s
+              AND e.occurred_at <= %s
               AND e.occurred_at <= now()
               {extra}
             GROUP BY 1
@@ -162,7 +244,8 @@ def hourly_table(rep_id: str | None) -> list[dict[str, Any]]:
             WHERE e.org_id = %s
               AND {_sales_rep_sql()}
               AND e.channel = 'meeting'
-              AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
+              AND e.occurred_at >= %s
+              AND e.occurred_at <= %s
               AND e.occurred_at <= now()
               {extra}
             GROUP BY 1
@@ -180,7 +263,8 @@ def hourly_table(rep_id: str | None) -> list[dict[str, Any]]:
     """
     with connect() as conn:
         rows = conn.execute(
-            sql, (org_id, *params, org_id, *params)
+            sql,
+            (org_id, start_ts, end_ts, *params, org_id, start_ts, end_ts, *params),
         ).fetchall()
     out: list[dict[str, Any]] = []
     for saat, arama, ulasilan, randevu, katildi in rows:
@@ -198,9 +282,11 @@ def hourly_table(rep_id: str | None) -> list[dict[str, Any]]:
     return out
 
 
-def team_reach_and_join() -> dict[str, float | None]:
-    """Ekip geneli ulaşma ve katılım (90 gün, saatlik tabloyla aynı 09–18)."""
-    rows = hourly_table(None)
+def team_reach_and_join(
+    window: DateWindow | None = None,
+) -> dict[str, float | None]:
+    """Ekip geneli ulaşma ve katılım (saatlik tabloyla aynı 09–18)."""
+    rows = hourly_table(None, window)
     arama = sum(r["arama"] for r in rows)
     ulasilan = sum(r["ulasilan"] for r in rows)
     randevu = sum(r["randevu"] for r in rows)
@@ -215,20 +301,21 @@ def team_reach_and_join() -> dict[str, float | None]:
     }
 
 
-def _hist_weekdays() -> int:
-    """Son 90 gün, bugün hariç, pazartesi–cuma."""
+def _hist_weekdays(before: date | None = None) -> int:
+    """Seçilen günden önceki 90 gün, pazartesi–cuma."""
+    gun = before or datetime.now(_TZ).date()
     with connect() as conn:
         row = conn.execute(
             f"""
             SELECT count(*)::int
             FROM generate_series(
-                (now() AT TIME ZONE 'Europe/Istanbul')::date
-                  - interval '{WINDOW_DAYS} days',
-                (now() AT TIME ZONE 'Europe/Istanbul')::date - interval '1 day',
+                %s::date - interval '{WINDOW_DAYS} days',
+                %s::date - interval '1 day',
                 interval '1 day'
             ) AS d
             WHERE extract(isodow FROM d) < 6
-            """
+            """,
+            (gun, gun),
         ).fetchone()
     return int(row[0]) if row else WINDOW_DAYS
 
@@ -254,18 +341,20 @@ def today_arama_count(rep_id: str | None = None) -> int:
     return int(row[0]) if row else 0
 
 
-def today_blocks(rep_id: str | None) -> dict[str, Any]:
-    """Bugünün dört bloğu + 90 günlük aynı blok ortalaması."""
+def today_blocks(
+    rep_id: str | None, day: date | None = None
+) -> dict[str, Any]:
+    """Seçilen günün dört bloğu + 90 günlük aynı blok ortalaması."""
     org_id = get_org_id()
     extra, params = _rep_filter("e", rep_id)
     hour = _hour_expr("e")
-    day = "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date"
-    today = f"{day} = (now() AT TIME ZONE 'Europe/Istanbul')::date"
+    chosen = day or datetime.now(_TZ).date()
+    day_col = "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date"
+    today = f"{day_col} = p.gun"
     hist = f"""
-        {day} >= (now() AT TIME ZONE 'Europe/Istanbul')::date
-                 - interval '{WINDOW_DAYS} days'
-        AND {day} < (now() AT TIME ZONE 'Europe/Istanbul')::date
-        AND extract(isodow FROM {day}) < 6
+        {day_col} >= p.gun - interval '{WINDOW_DAYS} days'
+        AND {day_col} < p.gun
+        AND extract(isodow FROM {day_col}) < 6
     """
     is_call = "e.channel = 'call' AND e.direction = 'outbound'"
     is_meet = "e.channel = 'meeting'"
@@ -376,16 +465,17 @@ def today_blocks(rep_id: str | None) -> dict[str, Any]:
         SELECT {", ".join(select_parts)}
         FROM events e
         JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+        CROSS JOIN (SELECT %s::date AS gun) p
         WHERE e.org_id = %s
           AND {_sales_rep_sql()}
-          AND e.occurred_at >= (now() AT TIME ZONE 'Europe/Istanbul')::date
-                - interval '{WINDOW_DAYS} days'
+          AND (e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date
+                >= p.gun - interval '{WINDOW_DAYS} days'
           AND e.occurred_at <= now()
           {extra}
     """
-    days = max(_hist_weekdays(), 1)
+    days = max(_hist_weekdays(chosen), 1)
     with connect() as conn:
-        cur = conn.execute(sql, (org_id, *params))
+        cur = conn.execute(sql, (chosen, org_id, *params))
         row = cur.fetchone()
         colnames = [str(col.name) for col in (cur.description or [])]
     packed: dict[str, Any] = {}
@@ -792,8 +882,11 @@ def workload_board(
     }
 
 
-def talk_duration_by_rep() -> list[dict[str, Any]]:
+def talk_duration_by_rep(
+    window: DateWindow | None = None,
+) -> list[dict[str, Any]]:
     org_id = get_org_id()
+    start_ts, end_ts = _bounds(window)
     sql = f"""
         SELECT r.full_name,
           avg({_DUR_E}) FILTER (WHERE {_TEMAS_E})::float AS avg_sec,
@@ -805,13 +898,14 @@ def talk_duration_by_rep() -> list[dict[str, Any]]:
         WHERE e.org_id = %s
           AND {_sales_rep_sql()}
           AND e.channel = 'call' AND e.direction = 'outbound'
-          AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
+          AND e.occurred_at >= %s
+          AND e.occurred_at <= %s
           AND e.occurred_at <= now()
         GROUP BY r.full_name
         ORDER BY r.full_name
     """
     with connect() as conn:
-        rows = conn.execute(sql, (org_id,)).fetchall()
+        rows = conn.execute(sql, (org_id, start_ts, end_ts)).fetchall()
     return [
         {
             "temsilci": str(n),
@@ -830,11 +924,14 @@ def _conversion_lead_sql() -> str:
         WHERE l.org_id = %s
           AND {_sales_rep_sql()}
           AND coalesce(l.assigned_at, l.created_at) >= %s
+          AND coalesce(l.assigned_at, l.created_at) < %s
           AND coalesce(l.status, '') <> %s
     """
 
 
-def sales_cycle() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
+def sales_cycle(
+    window: DateWindow | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, float | None]]:
     """assigned_at → contacts.created_at, gün."""
     org_id = get_org_id()
     conv = f"""
@@ -886,7 +983,7 @@ def sales_cycle() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
           count(*)::int
         FROM paired
     """
-    args = (org_id, CONV_START, MEVCUT_MUSTERI)
+    args = (org_id, *_conv_bounds(window), MEVCUT_MUSTERI)
     with connect() as conn:
         rows = conn.execute(sql, args).fetchall()
         team = conn.execute(team_sql, args).fetchone()
@@ -907,7 +1004,9 @@ def sales_cycle() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
     return by_rep, team_d
 
 
-def take_rate() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
+def take_rate(
+    window: DateWindow | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, float | None]]:
     org_id = get_org_id()
     base = _conversion_lead_sql()
     sql = f"""
@@ -932,7 +1031,7 @@ def take_rate() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
           )::int
         {base}
     """
-    args = (org_id, CONV_START, MEVCUT_MUSTERI)
+    args = (org_id, *_conv_bounds(window), MEVCUT_MUSTERI)
     with connect() as conn:
         rows = conn.execute(sql, args).fetchall()
         team = conn.execute(team_sql, args).fetchone()
@@ -1001,7 +1100,7 @@ def _has_attempt_sql() -> str:
     """
 
 
-def source_take_rate() -> list[dict[str, Any]]:
+def source_take_rate(window: DateWindow | None = None) -> list[dict[str, Any]]:
     org_id = get_org_id()
     base = _conversion_lead_sql()
     sql = f"""
@@ -1022,13 +1121,15 @@ def source_take_rate() -> list[dict[str, Any]]:
         GROUP BY 1
         ORDER BY 1
     """
+    conv_start, conv_end = _conv_bounds(window)
     args = (
         _SOURCE_FORM,
         _SOURCE_FORM,
         _SOURCE_REGISTER,
         _SOURCE_REGISTER,
         org_id,
-        CONV_START,
+        conv_start,
+        conv_end,
         MEVCUT_MUSTERI,
     )
     with connect() as conn:
@@ -1051,7 +1152,7 @@ def source_take_rate() -> list[dict[str, Any]]:
     return out
 
 
-def path_take_rate() -> list[dict[str, Any]]:
+def path_take_rate(window: DateWindow | None = None) -> list[dict[str, Any]]:
     """Satışa giden yol: katıldı / katılmadı / yalnız arama / hiç aranmamış."""
     org_id = get_org_id()
     base = _conversion_lead_sql()
@@ -1104,7 +1205,7 @@ def path_take_rate() -> list[dict[str, Any]]:
     }
     with connect() as conn:
         rows = conn.execute(
-            sql, (org_id, CONV_START, MEVCUT_MUSTERI)
+            sql, (org_id, *_conv_bounds(window), MEVCUT_MUSTERI)
         ).fetchall()
     out = [
         {
@@ -1123,9 +1224,15 @@ def path_take_rate() -> list[dict[str, Any]]:
     return out
 
 
-def funnel(rep_id: str | None, *, named: bool) -> list[dict[str, Any]]:
+def funnel(
+    rep_id: str | None,
+    *,
+    named: bool,
+    window: DateWindow | None = None,
+) -> list[dict[str, Any]]:
     org_id = get_org_id()
     extra, params = _rep_filter("l", rep_id, "owner_rep_id")
+    start_ts, end_ts = _bounds(window)
     statuses = ", ".join("'" + s.replace("'", "''") + "'" for s in _FUNNEL_STATUSES)
     if named:
         sql = f"""
@@ -1135,13 +1242,13 @@ def funnel(rep_id: str | None, *, named: bool) -> list[dict[str, Any]]:
             WHERE l.org_id = %s
               AND {_sales_rep_sql()}
               AND l.status IN ({statuses})
-              AND coalesce(l.assigned_at, l.created_at)
-                    >= now() - interval '{WINDOW_DAYS} days'
+              AND coalesce(l.assigned_at, l.created_at) >= %s
+              AND coalesce(l.assigned_at, l.created_at) < %s
               {extra}
             GROUP BY r.full_name, l.status
         """
         with connect() as conn:
-            rows = conn.execute(sql, (org_id, *params)).fetchall()
+            rows = conn.execute(sql, (org_id, start_ts, end_ts, *params)).fetchall()
         by_rep: dict[str, dict[str, int]] = {}
         for name, status, n in rows:
             by_rep.setdefault(str(name), {s: 0 for s in _FUNNEL_STATUSES})
@@ -1164,14 +1271,39 @@ def funnel(rep_id: str | None, *, named: bool) -> list[dict[str, Any]]:
         WHERE l.org_id = %s
           AND {_sales_rep_sql()}
           AND l.status IN ({statuses})
-          AND coalesce(l.assigned_at, l.created_at)
-                >= now() - interval '{WINDOW_DAYS} days'
+          AND coalesce(l.assigned_at, l.created_at) >= %s
+          AND coalesce(l.assigned_at, l.created_at) < %s
         GROUP BY l.status
     """
     with connect() as conn:
-        rows = conn.execute(sql, (org_id,)).fetchall()
+        rows = conn.execute(sql, (org_id, start_ts, end_ts)).fetchall()
     counts = {str(s): int(n) for s, n in rows}
     return [{"durum": s, "lead": counts.get(s, 0)} for s in _FUNNEL_STATUSES]
+
+
+def funnel_dropped_by_rep(
+    window: DateWindow | None = None,
+) -> list[dict[str, Any]]:
+    """Tablodan düşen 3.Arama-Ulaşılamadı kayıtları — rapor, kolon değil."""
+    org_id = get_org_id()
+    start_ts, end_ts = _bounds(window)
+    sql = f"""
+        SELECT r.full_name, count(*)::int
+        FROM leads l
+        JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
+        WHERE l.org_id = %s
+          AND {_sales_rep_sql()}
+          AND l.status = %s
+          AND coalesce(l.assigned_at, l.created_at) >= %s
+          AND coalesce(l.assigned_at, l.created_at) < %s
+        GROUP BY r.full_name
+        ORDER BY r.full_name
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            sql, (org_id, FUNNEL_DROPPED_STATUS, start_ts, end_ts)
+        ).fetchall()
+    return [{"temsilci": str(name), "lead": int(n)} for name, n in rows]
 
 
 def first_meeting_week() -> dict[str, datetime | None]:
@@ -1196,8 +1328,10 @@ def first_meeting_week() -> dict[str, datetime | None]:
     return {str(n): (w if w is not None else None) for n, w in rows}
 
 
-def weekly_series(rep_id: str | None) -> list[dict[str, Any]]:
-    """Son 12 hafta: arama, ulaşma, randevu, katılım, satışa dönme.
+def weekly_series(
+    rep_id: str | None, window: DateWindow | None = None
+) -> list[dict[str, Any]]:
+    """Penceredeki haftalar: arama, ulaşma, randevu, katılım, satışa dönme.
 
     Meeting metrikleri ilk randevudan önceki haftalarda None (boşluk).
     """
@@ -1205,14 +1339,13 @@ def weekly_series(rep_id: str | None) -> list[dict[str, Any]]:
     extra, params = _rep_filter("e", rep_id)
     extra_l, params_l = _rep_filter("l", rep_id, "owner_rep_id")
     n_reps = max(len(load_reps()), 1)
+    start_ts, end_ts = _bounds(window)
+    conv_start, conv_end = _conv_bounds(window)
     sql = f"""
         WITH weeks AS (
             SELECT generate_series(
-                date_trunc(
-                    'week',
-                    (now() AT TIME ZONE 'Europe/Istanbul')
-                ) - interval '{WEEK_COUNT - 1} weeks',
-                date_trunc('week', (now() AT TIME ZONE 'Europe/Istanbul')),
+                date_trunc('week', %s AT TIME ZONE 'Europe/Istanbul'),
+                date_trunc('week', %s AT TIME ZONE 'Europe/Istanbul'),
                 interval '1 week'
             ) AS week_start
         ),
@@ -1229,9 +1362,8 @@ def weekly_series(rep_id: str | None) -> list[dict[str, Any]]:
               AND {_sales_rep_sql()}
               AND e.channel = 'call' AND e.direction = 'outbound'
               AND e.occurred_at <= now()
-              AND e.occurred_at >= date_trunc(
-                    'week', (now() AT TIME ZONE 'Europe/Istanbul')
-                  ) - interval '{WEEK_COUNT - 1} weeks'
+              AND e.occurred_at >= %s
+              AND e.occurred_at <= %s
               {extra}
             GROUP BY 1
         ),
@@ -1252,9 +1384,8 @@ def weekly_series(rep_id: str | None) -> list[dict[str, Any]]:
               AND {_sales_rep_sql()}
               AND e.channel = 'meeting'
               AND e.occurred_at <= now()
-              AND e.occurred_at >= date_trunc(
-                    'week', (now() AT TIME ZONE 'Europe/Istanbul')
-                  ) - interval '{WEEK_COUNT - 1} weeks'
+              AND e.occurred_at >= %s
+              AND e.occurred_at <= %s
               {extra}
             GROUP BY 1
         ),
@@ -1276,10 +1407,8 @@ def weekly_series(rep_id: str | None) -> list[dict[str, Any]]:
             WHERE l.org_id = %s
               AND {_sales_rep_sql()}
               AND coalesce(l.assigned_at, l.created_at) >= %s
+              AND coalesce(l.assigned_at, l.created_at) < %s
               AND coalesce(l.status, '') <> %s
-              AND coalesce(l.assigned_at, l.created_at) >= date_trunc(
-                    'week', (now() AT TIME ZONE 'Europe/Istanbul')
-                  ) - interval '{WEEK_COUNT - 1} weeks'
               {extra_l}
             GROUP BY 1
         )
@@ -1300,12 +1429,19 @@ def weekly_series(rep_id: str | None) -> list[dict[str, Any]]:
         ORDER BY weeks.week_start
     """
     args = (
+        start_ts,
+        end_ts,
         org_id,
+        start_ts,
+        end_ts,
         *params,
         org_id,
+        start_ts,
+        end_ts,
         *params,
         org_id,
-        CONV_START,
+        conv_start,
+        conv_end,
         MEVCUT_MUSTERI,
         *params_l,
     )
@@ -1355,12 +1491,13 @@ def weekly_series(rep_id: str | None) -> list[dict[str, Any]]:
     return out
 
 
-def weekly_team_series() -> list[dict[str, Any]]:
-    return weekly_series(None)
+def weekly_team_series(window: DateWindow | None = None) -> list[dict[str, Any]]:
+    return weekly_series(None, window)
 
 
-def katilim_by_rep() -> list[dict[str, Any]]:
+def katilim_by_rep(window: DateWindow | None = None) -> list[dict[str, Any]]:
     org_id = get_org_id()
+    start_ts, end_ts = _bounds(window)
     sql = f"""
         SELECT r.full_name,
           count(*) FILTER (
@@ -1374,13 +1511,14 @@ def katilim_by_rep() -> list[dict[str, Any]]:
         WHERE e.org_id = %s
           AND {_sales_rep_sql()}
           AND e.channel = 'meeting'
-          AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
+          AND e.occurred_at >= %s
+          AND e.occurred_at <= %s
           AND e.occurred_at <= now()
         GROUP BY r.full_name
         ORDER BY r.full_name
     """
     with connect() as conn:
-        rows = conn.execute(sql, (org_id,)).fetchall()
+        rows = conn.execute(sql, (org_id, start_ts, end_ts)).fetchall()
     return [
         {
             "temsilci": str(n),
@@ -1392,11 +1530,33 @@ def katilim_by_rep() -> list[dict[str, Any]]:
     ]
 
 
-def rep_snapshot(rep_id: str) -> dict[str, Any]:
-    """Temsilcinin son 90 günü ve önceki 90 günü."""
-    org_id = get_org_id()
+def _workdays_in(window: DateWindow) -> int:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT count(*)::int
+            FROM generate_series(
+                %s::date, %s::date, interval '1 day'
+            ) AS d
+            WHERE extract(isodow FROM d) < 6
+            """,
+            (window.start, window.end),
+        ).fetchone()
+    return int(row[0]) if row else 1
 
-    def _window(start_sql: str, end_sql: str) -> dict[str, Any]:
+
+def rep_snapshot(
+    rep_id: str, window: DateWindow | None = None
+) -> dict[str, Any]:
+    """Temsilcinin seçilen penceresi ve bir önceki eşit uzunluk."""
+    org_id = get_org_id()
+    w = window or default_window()
+    start_ts, end_ts = _bounds(w)
+    span = end_ts - start_ts
+    prev_end = start_ts
+    prev_start = start_ts - span
+
+    def _window(start_at: datetime, end_at: datetime) -> dict[str, Any]:
         sql = f"""
             SELECT
               count(*) FILTER (
@@ -1427,12 +1587,14 @@ def rep_snapshot(rep_id: str) -> dict[str, Any]:
             FROM events e
             WHERE e.org_id = %s
               AND e.rep_id = %s
-              AND e.occurred_at >= {start_sql}
-              AND e.occurred_at < {end_sql}
+              AND e.occurred_at >= %s
+              AND e.occurred_at < %s
               AND e.occurred_at <= now()
         """
         with connect() as conn:
-            row = conn.execute(sql, (org_id, rep_id)).fetchone()
+            row = conn.execute(
+                sql, (org_id, rep_id, start_at, end_at)
+            ).fetchone()
         arama = int(row[0] or 0) if row else 0
         ulasilan = int(row[1] or 0) if row else 0
         randevu = int(row[2] or 0) if row else 0
@@ -1449,31 +1611,32 @@ def rep_snapshot(rep_id: str) -> dict[str, Any]:
             "medyan_sn": float(row[5]) if row and row[5] is not None else None,
         }
 
-    current = _window("now() - interval '90 days'", "now() + interval '1 day'")
-    previous = _window("now() - interval '180 days'", "now() - interval '90 days'")
+    current = _window(start_ts, end_ts)
+    previous = _window(prev_start, prev_end)
     with connect() as conn:
         leads_now = conn.execute(
             """
             SELECT count(*)::int
             FROM leads
             WHERE org_id = %s AND owner_rep_id = %s
-              AND coalesce(assigned_at, created_at) >= now() - interval '90 days'
+              AND coalesce(assigned_at, created_at) >= %s
+              AND coalesce(assigned_at, created_at) < %s
             """,
-            (org_id, rep_id),
+            (org_id, rep_id, start_ts, end_ts),
         ).fetchone()
         leads_prev = conn.execute(
             """
             SELECT count(*)::int
             FROM leads
             WHERE org_id = %s AND owner_rep_id = %s
-              AND coalesce(assigned_at, created_at) >= now() - interval '180 days'
-              AND coalesce(assigned_at, created_at) < now() - interval '90 days'
+              AND coalesce(assigned_at, created_at) >= %s
+              AND coalesce(assigned_at, created_at) < %s
             """,
-            (org_id, rep_id),
+            (org_id, rep_id, prev_start, prev_end),
         ).fetchone()
     current["lead"] = int(leads_now[0] or 0) if leads_now else 0
     previous["lead"] = int(leads_prev[0] or 0) if leads_prev else 0
-    days = max(_workdays(), 1)
+    days = max(_workdays_in(w), 1)
     for bucket in (current, previous):
         bucket["arama_gun"] = round(bucket["arama"] / days, 1)
         bucket["ulasilan_gun"] = round(bucket["ulasilan"] / days, 1)
@@ -1483,9 +1646,10 @@ def rep_snapshot(rep_id: str) -> dict[str, Any]:
     return {"current": current, "previous": previous}
 
 
-def source_temas_gap() -> float | None:
+def source_temas_gap(window: DateWindow | None = None) -> float | None:
     """Contact Form vs Register temas oranı farkı (puan)."""
     org_id = get_org_id()
+    start_ts, end_ts = _bounds(window)
     sql = f"""
         SELECT
           round(100.0 * count(*) FILTER (
@@ -1499,7 +1663,8 @@ def source_temas_gap() -> float | None:
         JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
         WHERE l.org_id = %s
           AND {_sales_rep_sql()}
-          AND coalesce(l.assigned_at, l.created_at) >= now() - interval '{WINDOW_DAYS} days'
+          AND coalesce(l.assigned_at, l.created_at) >= %s
+          AND coalesce(l.assigned_at, l.created_at) < %s
     """
     with connect() as conn:
         row = conn.execute(
@@ -1510,6 +1675,8 @@ def source_temas_gap() -> float | None:
                 _SOURCE_REGISTER,
                 _SOURCE_REGISTER,
                 org_id,
+                start_ts,
+                end_ts,
             ),
         ).fetchone()
     if not row or row[0] is None:

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -32,6 +32,7 @@ from pusula.panel_auth import (
     resolve_user,
 )
 from pusula.panel_ciro import (
+    CIRO_START,
     SALES_TEAM_IDS,
     ciro_monthly_by_rep,
     ciro_rep_monthly,
@@ -44,14 +45,21 @@ from pusula.panel_data import (
     CRM_DK_PER_GORUSME,
     DEFAULT_ARAMA_PER_LEAD,
     DEFAULT_TOPLANTI_GUN,
+    FUNNEL_DROPPED_STATUS,
     OLU_ZAMAN_SN,
     TOPLANTI_DK,
     WINDOW_DAYS,
+    DateWindow,
     arrow,
+    conv_window,
+    default_window,
+    fmt_day,
     fmt_duration,
     fmt_num,
     fmt_pct,
+    fmt_window,
     funnel,
+    funnel_dropped_by_rep,
     hourly_table,
     latest_event_created_at,
     load_rep_by_email,
@@ -105,6 +113,10 @@ HELP_TAKE_ULASILANDA = (
 HELP_DONGU = (
     "Lead'in temsilciye atanmasindan satisa donmesine kadar "
     "gecen gun sayisi. Yalniz satisa donenler hesaba katilir."
+)
+HELP_KAYIT = (
+    "Bu deger kac kayittan hesaplandi. Kayit sayisi dusukse "
+    "sonuc daha az guvenilir."
 )
 HELP_TIPIK = (
     "Tipik — siralandiginda tam ortadaki deger. Ortalamadan farki, "
@@ -177,7 +189,7 @@ COL_HELP: dict[str, str] = {
     "ortalama gün": HELP_DONGU,
     "tipik gün": HELP_DONGU,
     "genelde": HELP_TAKE_GENEL,
-    "ulaşılarda": HELP_TAKE_ULASILANDA,
+    "ulaşılanda": HELP_TAKE_ULASILANDA,
     "kaynak": HELP_SOURCE,
     "yol": HELP_YOL,
     "PLANLANAN": HELP_ISYUKU,
@@ -188,10 +200,10 @@ COL_HELP: dict[str, str] = {
         "Plan gerçekleşme oranı — gerçekleşen / planlanan. "
         "Her satır ve toplam süre için ayrı hesaplanır."
     ),
+    "kayıt sayısı": HELP_KAYIT,
     "durum": HELP_HUNI,
     "1.Arama-Ulaşılamadı": HELP_HUNI,
     "2.Arama-Ulaşılamadı": HELP_HUNI,
-    "3.Arama-Ulaşılamadı": HELP_HUNI,
     "Aging": HELP_HUNI,
     "ciro": HELP_CIRO,
     "satış başına ortalama": HELP_CIRO_ORT,
@@ -296,7 +308,7 @@ def _render_header(user: AuthUser) -> None:
     left, right = st.columns([6, 1])
     with left:
         st.title("Pusula")
-        st.caption(f"son {WINDOW_DAYS} gün · dönüşüm 1 Mayıs 2026 sonrası")
+        st.caption("dönüşüm 1 Mayıs 2026 sonrası")
     with right:
         st.caption(user.email)
         if st.button("Çıkış", use_container_width=True):
@@ -310,13 +322,15 @@ def _reps() -> list[tuple[str, str]]:
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _hourly(rep_id: str | None) -> list[dict[str, Any]]:
-    return hourly_table(rep_id)
+def _hourly(rep_id: str | None, start: str, end: str) -> list[dict[str, Any]]:
+    return hourly_table(rep_id, DateWindow(date.fromisoformat(start), date.fromisoformat(end)))
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _team_dip() -> dict[str, float | None]:
-    return team_reach_and_join()
+def _team_dip(start: str, end: str) -> dict[str, float | None]:
+    return team_reach_and_join(
+        DateWindow(date.fromisoformat(start), date.fromisoformat(end))
+    )
 
 
 @st.cache_data(ttl=CACHE_TTL)
@@ -327,53 +341,76 @@ def _board(
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _talk() -> list[dict[str, Any]]:
-    return talk_duration_by_rep()
+def _talk(start: str, end: str) -> list[dict[str, Any]]:
+    return talk_duration_by_rep(
+        DateWindow(date.fromisoformat(start), date.fromisoformat(end))
+    )
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _cycle() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
-    return sales_cycle()
+def _cycle(start: str, end: str) -> tuple[list[dict[str, Any]], dict[str, float | None]]:
+    return sales_cycle(DateWindow(date.fromisoformat(start), date.fromisoformat(end)))
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _take() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
-    return take_rate()
+def _take(start: str, end: str) -> tuple[list[dict[str, Any]], dict[str, float | None]]:
+    return take_rate(DateWindow(date.fromisoformat(start), date.fromisoformat(end)))
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _source() -> list[dict[str, Any]]:
-    return source_take_rate()
+def _source(start: str, end: str) -> list[dict[str, Any]]:
+    return source_take_rate(
+        DateWindow(date.fromisoformat(start), date.fromisoformat(end))
+    )
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _path() -> list[dict[str, Any]]:
-    return path_take_rate()
+def _path(start: str, end: str) -> list[dict[str, Any]]:
+    return path_take_rate(
+        DateWindow(date.fromisoformat(start), date.fromisoformat(end))
+    )
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _funnel(rep_id: str | None, named: bool) -> list[dict[str, Any]]:
-    return funnel(rep_id, named=named)
+def _funnel(rep_id: str | None, named: bool, start: str, end: str) -> list[dict[str, Any]]:
+    return funnel(
+        rep_id,
+        named=named,
+        window=DateWindow(date.fromisoformat(start), date.fromisoformat(end)),
+    )
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _weekly(rep_id: str | None) -> list[dict[str, Any]]:
-    return weekly_series(rep_id)
+def _funnel_dropped(start: str, end: str) -> list[dict[str, Any]]:
+    return funnel_dropped_by_rep(
+        DateWindow(date.fromisoformat(start), date.fromisoformat(end))
+    )
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _weekly_team() -> list[dict[str, Any]]:
-    return weekly_team_series()
+def _weekly(rep_id: str | None, start: str, end: str) -> list[dict[str, Any]]:
+    return weekly_series(
+        rep_id, DateWindow(date.fromisoformat(start), date.fromisoformat(end))
+    )
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _rep_snap(rep_id: str) -> dict[str, Any]:
-    return rep_snapshot(rep_id)
+def _weekly_team(start: str, end: str) -> list[dict[str, Any]]:
+    return weekly_team_series(
+        DateWindow(date.fromisoformat(start), date.fromisoformat(end))
+    )
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _today_blocks(rep_id: str | None) -> dict[str, Any]:
-    return today_blocks(rep_id)
+def _rep_snap(rep_id: str, start: str, end: str) -> dict[str, Any]:
+    return rep_snapshot(
+        rep_id, DateWindow(date.fromisoformat(start), date.fromisoformat(end))
+    )
+
+
+@st.cache_data(ttl=CACHE_TTL)
+def _today_blocks(rep_id: str | None, day: str) -> dict[str, Any]:
+    return today_blocks(rep_id, date.fromisoformat(day))
 
 
 @st.cache_data(ttl=CACHE_TTL)
@@ -407,8 +444,10 @@ def _ciro_one(rep_id: str) -> list[dict[str, Any]]:
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _profiles() -> list[dict[str, Any]]:
-    return performance_profiles()
+def _profiles(start: str, end: str) -> list[dict[str, Any]]:
+    return performance_profiles(
+        DateWindow(date.fromisoformat(start), date.fromisoformat(end))
+    )
 
 
 def _df(rows: list[dict[str, Any]]) -> pd.DataFrame:
@@ -433,8 +472,87 @@ def _table(frame: pd.DataFrame) -> None:
     )
 
 
-def _heading(title: str, help_text: str | None = None) -> None:
+def _heading(
+    title: str,
+    help_text: str | None = None,
+    window: DateWindow | None = None,
+) -> None:
     st.subheader(title, help=help_text)
+    if window is not None:
+        st.caption(fmt_window(window))
+
+
+def _keys(window: DateWindow) -> tuple[str, str]:
+    return window.start.isoformat(), window.end.isoformat()
+
+
+def _as_date(value: Any) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    raise TypeError("tarih bekleniyor")
+
+
+def _ciro_window() -> DateWindow:
+    today = datetime.now(_TZ).date()
+    return DateWindow(CIRO_START.date(), today)
+
+
+def _render_period_controls() -> tuple[DateWindow, date]:
+    today = datetime.now(_TZ).date()
+    mode = st.radio(
+        "Tarih aralığı",
+        ("son 30 gün", "son 60 gün", "son 90 gün", "serbest aralık"),
+        index=2,
+        horizontal=True,
+        key="period_mode",
+    )
+    if mode == "serbest aralık":
+        picked = st.date_input(
+            "Aralık",
+            value=(today - timedelta(days=WINDOW_DAYS), today),
+            max_value=today,
+            key="period_custom",
+        )
+        if isinstance(picked, (tuple, list)) and len(picked) == 2:
+            start, end = _as_date(picked[0]), _as_date(picked[1])
+            if start > end:
+                start, end = end, start
+            window = DateWindow(start, end)
+        else:
+            window = default_window()
+    else:
+        span = {"son 30 gün": 30, "son 60 gün": 60, "son 90 gün": 90}[mode]
+        window = DateWindow(today - timedelta(days=span), today)
+    raw_day = st.date_input(
+        "Gün (bloklar)",
+        value=today,
+        max_value=today,
+        key="block_day",
+    )
+    if isinstance(raw_day, (tuple, list)):
+        block_day = _as_date(raw_day[0])
+    else:
+        block_day = _as_date(raw_day)
+    return window, block_day
+
+
+def _funnel_drop_report(window: DateWindow) -> None:
+    start, end = _keys(window)
+    dropped = _funnel_dropped(start, end)
+    total = sum(int(r["lead"]) for r in dropped)
+    print(f"Huni kolon dusen status: {FUNNEL_DROPPED_STATUS}")
+    if not dropped:
+        print("temsilci kirilimi: 0 lead")
+    else:
+        for row in dropped:
+            print(f"  {row['temsilci']}: {row['lead']}")
+        print(f"toplam: {total}")
+    st.caption(
+        f"{FUNNEL_DROPPED_STATUS} kolon olarak yok. "
+        f"{total} lead bu statusde; tabloya tasinmadi, gorunmez."
+    )
 
 
 def _metric_row(items: list[dict[str, Any]]) -> None:
@@ -653,9 +771,9 @@ def _render_block_card(block: dict[str, Any]) -> None:
             _block_metric_row([_sure_column(today, avg90)])
 
 
-def _render_bugun(rep_id: str | None, *, blok_disi: bool) -> None:
-    data = _today_blocks(rep_id)
-    _heading("Bugün", HELP_BUGUN)
+def _render_bugun(rep_id: str | None, day: date, *, blok_disi: bool) -> None:
+    data = _today_blocks(rep_id, day.isoformat())
+    _heading(f"Bugün - {fmt_day(day)}", HELP_BUGUN)
     planned: list[dict[str, Any]] = []
     extra: dict[str, Any] | None = None
     for block in data.get("blocks") or []:
@@ -820,7 +938,7 @@ def _deal_caption() -> None:
 
 
 def _render_ciro_yonetici(rep_id: str | None) -> None:
-    _heading("Ciro", HELP_CIRO)
+    _heading("Ciro", HELP_CIRO, _ciro_window())
     st.markdown("2026 başından bugüne")
     sales_id = rep_id if rep_id in SALES_TEAM_IDS else None
     ytd = _ciro_ytd("sales")
@@ -868,7 +986,7 @@ def _render_ciro_yonetici(rep_id: str | None) -> None:
 
 
 def _render_ciro_temsilci(rep_id: str) -> None:
-    _heading("Ciro", HELP_CIRO)
+    _heading("Ciro", HELP_CIRO, _ciro_window())
     ytd = [r for r in _ciro_ytd("sales") if r["rep_id"] == rep_id]
     _ciro_ytd_table(ytd)
     monthly = _ciro_one(rep_id)
@@ -882,10 +1000,11 @@ def _render_ciro_temsilci(rep_id: str) -> None:
     _deal_caption()
 
 
-def _render_profil() -> None:
-    st.subheader("Performans profili")
+def _render_profil(window: DateWindow) -> None:
+    _heading("Performans profili", window=window)
     st.info(PROFILE_WARNING)
-    cards = _profiles()
+    start, end = _keys(window)
+    cards = _profiles(start, end)
     for card in cards:
         with st.container(border=True):
             st.markdown(f"**{card['temsilci']}**")
@@ -915,7 +1034,7 @@ def _render_profil() -> None:
             st.caption(" · ".join(card.get("kapsam") or []))
 
 
-def render_yonetici() -> None:
+def render_yonetici(window: DateWindow, block_day: date) -> None:
     reps = _reps()
     options = [("tumu", "tümü")] + reps
     labels = [lab for _, lab in options]
@@ -926,11 +1045,13 @@ def render_yonetici() -> None:
             rep_id = None if rid == "tumu" else rid
             break
 
-    _render_bugun(rep_id, blok_disi=True)
+    start, end = _keys(window)
+    conv = conv_window(window)
+    _render_bugun(rep_id, block_day, blok_disi=True)
 
     st.divider()
-    st.subheader("Saatlik")
-    hourly = _hourly(rep_id)
+    _heading("Saatlik", window=window)
+    hourly = _hourly(rep_id, start, end)
     hframe = _df(hourly)
     show = hframe.copy()
     show["ulaşma %"] = show["ulasma_orani"].map(fmt_pct)
@@ -945,7 +1066,7 @@ def render_yonetici() -> None:
             }
         )
     )
-    dip = _team_dip()
+    dip = _team_dip(start, end)
     with st.container(border=True):
         _stat_row(
             [
@@ -962,7 +1083,7 @@ def render_yonetici() -> None:
             ]
         )
 
-    _heading("Günlük iş yükü (kişi başı)", HELP_ISYUKU)
+    _heading("Günlük iş yükü (kişi başı)", HELP_ISYUKU, default_window())
     p1, p2 = st.columns(2)
     arama_per_lead = p1.number_input(
         "lead başına arama (plan)",
@@ -1015,8 +1136,8 @@ def render_yonetici() -> None:
         f"ölü zaman {fmt_duration(OLU_ZAMAN_SN)}/arama · {int(board.get('workdays') or 0)} iş günü"
     )
 
-    _heading("Görüşme süresi", HELP_SURE)
-    talk = _df(_talk())
+    _heading("Görüşme süresi", HELP_SURE, window)
+    talk = _df(_talk(start, end))
     if not talk.empty:
         talk_show = pd.DataFrame(
             {
@@ -1030,8 +1151,8 @@ def render_yonetici() -> None:
     else:
         st.caption("veri yetersiz")
 
-    _heading("Satış döngüsü (gün)", HELP_DONGU)
-    cycle_rep, cycle_team = _cycle()
+    _heading("Satış döngüsü (gün)", HELP_DONGU, conv)
+    cycle_rep, cycle_team = _cycle(start, end)
     with st.container(border=True):
         _stat_row(
             [
@@ -1046,8 +1167,9 @@ def render_yonetici() -> None:
                     "help": HELP_TIPIK,
                 },
                 {
-                    "label": "n",
+                    "label": "kayıt sayısı",
                     "value": str(cycle_team.get("n") or 0),
+                    "help": HELP_KAYIT,
                 },
             ]
         )
@@ -1057,12 +1179,16 @@ def render_yonetici() -> None:
         cyc["medyan_gun"] = cyc["medyan_gun"].map(lambda v: fmt_num(v, 1))
     _table(
         cyc.rename(
-            columns={"ortalama_gun": "ortalama gün", "medyan_gun": "tipik gün"}
+            columns={
+                "ortalama_gun": "ortalama gün",
+                "medyan_gun": "tipik gün",
+                "n": "kayıt sayısı",
+            }
         )
     )
 
-    _heading("Satışa dönme oranı", HELP_TAKE_GENEL)
-    take_rep, take_team = _take()
+    _heading("Satışa dönme oranı", HELP_TAKE_GENEL, conv)
+    take_rep, take_team = _take(start, end)
     with st.container(border=True):
         _stat_row(
             [
@@ -1072,7 +1198,7 @@ def render_yonetici() -> None:
                     "help": HELP_TAKE_GENEL,
                 },
                 {
-                    "label": "Ulaşılarda satışa dönme oranı",
+                    "label": "Ulaşılanda satışa dönme oranı",
                     "value": fmt_pct(take_team.get("ulasilanda")),
                     "help": HELP_TAKE_ULASILANDA,
                 },
@@ -1080,37 +1206,38 @@ def render_yonetici() -> None:
         )
     tframe = _df(take_rep)
     tframe["genelde"] = tframe["genel"].map(fmt_pct)
-    tframe["ulaşılarda"] = tframe["ulasilanda"].map(fmt_pct)
-    _table(tframe[["temsilci", "leads", "genelde", "ulaşılarda"]])
+    tframe["ulaşılanda"] = tframe["ulasilanda"].map(fmt_pct)
+    _table(tframe[["temsilci", "leads", "genelde", "ulaşılanda"]])
 
-    _heading("Satış kaynağı", HELP_SOURCE)
-    src = _df(_source())
+    _heading("Satış kaynağı", HELP_SOURCE, conv)
+    src = _df(_source(start, end))
     src["genelde"] = src["genelde"].map(fmt_pct)
-    src["ulaşılarda"] = src["ulasilanda"].map(fmt_pct)
+    src["ulaşılanda"] = src["ulasilanda"].map(fmt_pct)
     st.markdown("Lead source", help=HELP_SOURCE)
-    _table(src[["kaynak", "lead", "satis", "genelde", "ulaşılarda"]])
-    path = _df(_path())
+    _table(src[["kaynak", "lead", "satis", "genelde", "ulaşılanda"]])
+    path = _df(_path(start, end))
     path["genelde"] = path["genelde"].map(fmt_pct)
-    path["ulaşılarda"] = path["ulasilanda"].map(fmt_pct)
+    path["ulaşılanda"] = path["ulasilanda"].map(fmt_pct)
     st.markdown("Satışa giden yol", help=HELP_YOL)
-    _table(path[["yol", "lead", "satis", "genelde", "ulaşılarda"]])
+    _table(path[["yol", "lead", "satis", "genelde", "ulaşılanda"]])
 
-    _heading("Huni", HELP_HUNI)
-    fun = _funnel(rep_id, True)
+    _heading("Huni", HELP_HUNI, window)
+    fun = _funnel(rep_id, True, start, end)
     _table(_df(fun))
+    _funnel_drop_report(window)
 
     st.divider()
     _render_ciro_yonetici(rep_id)
     st.divider()
-    _render_profil()
+    _render_profil(window)
     st.divider()
 
-    st.subheader("Haftalık gelişim (12 hafta)")
-    team_w = _weekly_team()
+    _heading("Haftalık gelişim", window=window)
+    team_w = _weekly_team(start, end)
     if rep_id is None:
         _render_weekly_charts(team_w, None, kisi_basi=True)
     else:
-        rep_w = _weekly(rep_id)
+        rep_w = _weekly(rep_id, start, end)
         _render_weekly_charts(team_w, rep_w, kisi_basi=True)
 
 
@@ -1146,7 +1273,10 @@ def _render_weekly_charts(
         st.markdown(title, help=CHART_HELP.get(key))
         _line_chart(merged, key, title, is_pct=is_pct)
         src = rep_rows if rep_rows is not None else team_rows
-        st.caption(f"son hafta vs 12 haftalık ortalama: {_week_delta(src, key)}")
+        n_weeks = len(src)
+        st.caption(
+            f"son hafta vs {n_weeks} haftalık ortalama: {_week_delta(src, key)}"
+        )
     if take:
         _render_donusum_weekly(rep_rows if rep_rows is not None else team_rows)
 
@@ -1156,7 +1286,7 @@ def _render_donusum_weekly(rows: list[dict[str, Any]]) -> None:
     parts: list[pd.DataFrame] = []
     for key, label in (
         ("take_genel", "genelde"),
-        ("take_ulasilanda", "ulaşılarda"),
+        ("take_ulasilanda", "ulaşılanda"),
     ):
         if frame.empty or key not in frame.columns:
             continue
@@ -1169,17 +1299,20 @@ def _render_donusum_weekly(rows: list[dict[str, Any]]) -> None:
     merged = pd.concat(parts, ignore_index=True)
     st.markdown("satışa dönme oranı", help=HELP_TAKE_GENEL)
     _line_chart(merged, "oran", "satışa dönme oranı", is_pct=True)
+    n_weeks = len(rows)
     st.caption(
-        f"genelde son hafta vs 12 haftalık ortalama: "
+        f"genelde son hafta vs {n_weeks} haftalık ortalama: "
         f"{_week_delta(rows, 'take_genel')}"
     )
     st.caption(
-        f"ulaşılarda son hafta vs 12 haftalık ortalama: "
+        f"ulaşılanda son hafta vs {n_weeks} haftalık ortalama: "
         f"{_week_delta(rows, 'take_ulasilanda')}"
     )
 
 
-def render_temsilci(locked_rep_id: str | None = None) -> None:
+def render_temsilci(
+    window: DateWindow, block_day: date, locked_rep_id: str | None = None
+) -> None:
     reps = _reps()
     if not reps:
         st.write("aktif satış temsilcisi yok")
@@ -1194,15 +1327,18 @@ def render_temsilci(locked_rep_id: str | None = None) -> None:
         names = {name: rid for rid, name in reps}
         choice = st.selectbox("Temsilci", list(names), key="temsilci_sel")
         rep_id = names[choice]
-    snap = _rep_snap(rep_id)
+    start, end = _keys(window)
+    snap = _rep_snap(rep_id, start, end)
     cur = snap["current"]
     prev = snap["previous"]
 
-    _render_bugun(rep_id, blok_disi=False)
+    _render_bugun(rep_id, block_day, blok_disi=False)
     st.divider()
     with st.container(border=True):
         st.markdown("**Günlük özet**")
-        st.caption(f"son {WINDOW_DAYS} gün, önceki {WINDOW_DAYS} günle kıyas")
+        st.caption(
+            f"{fmt_window(window)}, önceki {window.days} günle kıyas"
+        )
         _metric_row(
             [
                 {
@@ -1303,8 +1439,8 @@ def render_temsilci(locked_rep_id: str | None = None) -> None:
         )
         st.caption(f"CRM kayıt tahmini {CRM_DK_PER_GORUSME} dk/görüşme")
 
-    _heading("Saatlik arama ve ulaşma", HELP_ULASMA)
-    hourly = _hourly(rep_id)
+    _heading("Saatlik arama ve ulaşma", HELP_ULASMA, window)
+    hourly = _hourly(rep_id, start, end)
     hframe = _df(hourly)
     show = hframe[["saat", "arama", "ulasilan", "ulasma_orani"]].copy()
     show["ulaşma %"] = show["ulasma_orani"].map(fmt_pct)
@@ -1318,13 +1454,14 @@ def render_temsilci(locked_rep_id: str | None = None) -> None:
     _render_ciro_temsilci(rep_id)
     st.divider()
 
-    st.subheader("Haftalık gelişim (12 hafta)")
-    rows = _weekly(rep_id)
+    _heading("Haftalık gelişim", window=window)
+    rows = _weekly(rep_id, start, end)
     frame = _df(rows)
     if frame.empty:
         st.caption("veri yetersiz")
         return
     frame["seri"] = "kendisi"
+    n_weeks = len(rows)
     for key, title, is_pct in (
         ("arama_ham", "arama", False),
         ("ulasma_orani", "ulaşma oranı", True),
@@ -1334,21 +1471,25 @@ def render_temsilci(locked_rep_id: str | None = None) -> None:
         st.markdown(title, help=CHART_HELP.get(key))
         _line_chart(frame[["hafta", key, "seri"]], key, title, is_pct=is_pct)
         src_key = key
-        st.caption(f"son hafta vs 12 haftalık ortalama: {_week_delta(rows, src_key)}")
+        st.caption(
+            f"son hafta vs {n_weeks} haftalık ortalama: {_week_delta(rows, src_key)}"
+        )
 
 
-def render_ekip() -> None:
+def render_ekip(window: DateWindow, block_day: date) -> None:
     st.caption("isim yok. operasyon geneli.")
-    _render_bugun(None, blok_disi=False)
+    start, end = _keys(window)
+    conv = conv_window(window)
+    _render_bugun(None, block_day, blok_disi=False)
     st.divider()
-    _heading("Toplantı etkisi", HELP_TOPLANTI)
-    path = _df(_path())
+    _heading("Toplantı etkisi", HELP_TOPLANTI, conv)
+    path = _df(_path(start, end))
     path["genelde"] = path["genelde"].map(fmt_pct)
-    path["ulaşılarda"] = path["ulasilanda"].map(fmt_pct)
-    _table(path[["yol", "lead", "satis", "genelde", "ulaşılarda"]])
+    path["ulaşılanda"] = path["ulasilanda"].map(fmt_pct)
+    _table(path[["yol", "lead", "satis", "genelde", "ulaşılanda"]])
 
-    _heading("Saatlik katılım oranı", HELP_KATILIM)
-    hourly = _hourly(None)
+    _heading("Saatlik katılım oranı", HELP_KATILIM, window)
+    hourly = _hourly(None, start, end)
     hframe = _df(hourly)
     kat = hframe[["saat", "randevu", "katildi", "katilim_orani"]].copy()
     kat["katılım %"] = kat["katilim_orani"].map(fmt_pct)
@@ -1358,7 +1499,7 @@ def render_ekip() -> None:
         )
     )
 
-    _heading("Saatlik ulaşma oranı", HELP_ULASMA)
+    _heading("Saatlik ulaşma oranı", HELP_ULASMA, window)
     ulas = hframe[["saat", "arama", "ulasilan", "ulasma_orani"]].copy()
     ulas["ulaşma %"] = ulas["ulasma_orani"].map(fmt_pct)
     _table(
@@ -1367,8 +1508,9 @@ def render_ekip() -> None:
         )
     )
 
-    _heading("Huni", HELP_HUNI)
-    _table(_df(_funnel(None, False)))
+    _heading("Huni", HELP_HUNI, window)
+    _table(_df(_funnel(None, False, start, end)))
+    _funnel_drop_report(window)
 
 
 def main() -> None:
@@ -1382,16 +1524,17 @@ def main() -> None:
     with st.container():
         _render_header(user)
         _render_status_bar()
+        window, block_day = _render_period_controls()
         if user.role == "admin":
             tab_y, tab_t, tab_e = st.tabs(["Yönetici", "Temsilci", "Ekip"])
             with tab_y:
-                render_yonetici()
+                render_yonetici(window, block_day)
             with tab_t:
-                render_temsilci()
+                render_temsilci(window, block_day)
             with tab_e:
-                render_ekip()
+                render_ekip(window, block_day)
         else:
-            render_temsilci(locked_rep_id=user.rep_id)
+            render_temsilci(window, block_day, locked_rep_id=user.rep_id)
         st.caption(f"Veriler son guncelleme: {_fmt_event_ts(_latest_event())}")
 
 
