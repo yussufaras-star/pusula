@@ -31,6 +31,15 @@ from pusula.panel_auth import (
     password_matches,
     resolve_user,
 )
+from pusula.panel_ciro import (
+    SALES_TEAM_IDS,
+    ciro_monthly_by_rep,
+    ciro_rep_monthly,
+    ciro_team_monthly,
+    ciro_ytd_by_rep,
+    fmt_tl,
+    latest_deal_created_at,
+)
 from pusula.panel_data import (
     CRM_DK_PER_GORUSME,
     DEFAULT_ARAMA_PER_LEAD,
@@ -60,6 +69,7 @@ from pusula.panel_data import (
     weekly_team_series,
     workload_board,
 )
+from pusula.panel_profile import PROFILE_WARNING, performance_profiles
 
 CACHE_TTL = 15 * 60
 _TZ = ZoneInfo("Europe/Istanbul")
@@ -136,6 +146,12 @@ HELP_BUGUN = (
     "Bugunun bloklari. Ok, son 90 gunun ayni blok gunluk "
     "ortalamasina gore."
 )
+HELP_CIRO = (
+    "Kapandi Kazanildi asamasindaki anlasmalarin toplam "
+    "tutari. Ilk kez satin alan ve tekrar satin alan ayrimi "
+    "yapilmaz, hepsi sayilir."
+)
+HELP_CIRO_ORT = "Toplam ciro / satis adedi."
 
 COL_HELP: dict[str, str] = {
     "arama": HELP_ARAMA,
@@ -167,6 +183,9 @@ COL_HELP: dict[str, str] = {
     "2.Arama-Ulaşılamadı": HELP_HUNI,
     "3.Arama-Ulaşılamadı": HELP_HUNI,
     "Aging": HELP_HUNI,
+    "ciro": HELP_CIRO,
+    "satış başına ortalama": HELP_CIRO_ORT,
+    "ortalama tutar": HELP_CIRO_ORT,
 }
 
 CHART_HELP: dict[str, str] = {
@@ -352,6 +371,36 @@ def _latest_event() -> datetime | None:
     return latest_event_created_at()
 
 
+@st.cache_data(ttl=CACHE_TTL)
+def _latest_deal() -> datetime | None:
+    return latest_deal_created_at()
+
+
+@st.cache_data(ttl=CACHE_TTL)
+def _ciro_ytd(kind: str) -> list[dict[str, Any]]:
+    return ciro_ytd_by_rep(kind)  # type: ignore[arg-type]
+
+
+@st.cache_data(ttl=CACHE_TTL)
+def _ciro_monthly(kind: str, rep_id: str | None) -> list[dict[str, Any]]:
+    return ciro_monthly_by_rep(kind, rep_id=rep_id)  # type: ignore[arg-type]
+
+
+@st.cache_data(ttl=CACHE_TTL)
+def _ciro_team_months() -> list[dict[str, Any]]:
+    return ciro_team_monthly()
+
+
+@st.cache_data(ttl=CACHE_TTL)
+def _ciro_one(rep_id: str) -> list[dict[str, Any]]:
+    return ciro_rep_monthly(rep_id)
+
+
+@st.cache_data(ttl=CACHE_TTL)
+def _profiles() -> list[dict[str, Any]]:
+    return performance_profiles()
+
+
 def _df(rows: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
@@ -495,6 +544,8 @@ def _line_chart(
     title: str,
     *,
     is_pct: bool = False,
+    x_col: str = "hafta",
+    x_title: str | None = None,
 ) -> None:
     """NaN = boşluk (sıfır değil)."""
     import altair as alt
@@ -504,14 +555,15 @@ def _line_chart(
         st.caption("veri yetersiz")
         return
     y_enc = alt.Y(y_col, title=title, type="quantitative")
+    x_label = x_title if x_title is not None else x_col
     chart = (
         alt.Chart(data)
         .mark_line(point=True, invalid="break-paths-show-domains")
         .encode(
-            x=alt.X("hafta:T", title="hafta"),
+            x=alt.X(f"{x_col}:T", title=x_label),
             y=y_enc,
             color=alt.Color("seri:N", title=""),
-            tooltip=["hafta:T", "seri:N", y_col],
+            tooltip=[f"{x_col}:T", "seri:N", y_col],
         )
         .properties(height=240)
     )
@@ -542,6 +594,145 @@ def _compare(
     else:
         shown = fmt_num(cur)
     st.metric(label, shown, arrow(cur, prev), help=help_text)
+
+
+def _ciro_ytd_table(rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        st.caption("veri yetersiz")
+        return
+    show = pd.DataFrame(
+        {
+            "temsilci": [r["temsilci"] for r in rows],
+            "satış": [r["satis"] for r in rows],
+            "ciro": [fmt_tl(r["ciro"]) for r in rows],
+            "satış başına ortalama": [fmt_tl(r["ortalama"]) for r in rows],
+        }
+    )
+    _table(show)
+
+
+def _ciro_month_table(rows: list[dict[str, Any]], *, named: bool) -> None:
+    if not rows:
+        st.caption("veri yetersiz")
+        return
+    data: dict[str, list[Any]] = {
+        "ay": [r["ay_etiket"] for r in rows],
+        "satış": [r["satis"] for r in rows],
+        "ciro": [fmt_tl(r["ciro"]) for r in rows],
+        "satış başına ortalama": [fmt_tl(r["ortalama"]) for r in rows],
+    }
+    if named:
+        data = {
+            "ay": data["ay"],
+            "temsilci": [r["temsilci"] for r in rows],
+            "satış": data["satış"],
+            "ciro": data["ciro"],
+            "satış başına ortalama": data["satış başına ortalama"],
+        }
+    _table(pd.DataFrame(data))
+
+
+def _deal_caption() -> None:
+    st.caption(
+        f"Deals son kayıt: {_fmt_event_ts(_latest_deal())}. "
+        "Ingest gecikirse son ay eksik görünebilir."
+    )
+
+
+def _render_ciro_yonetici(rep_id: str | None) -> None:
+    _heading("Ciro", HELP_CIRO)
+    st.markdown("2026 başından bugüne")
+    sales_id = rep_id if rep_id in SALES_TEAM_IDS else None
+    ytd = _ciro_ytd("sales")
+    if sales_id:
+        ytd = [r for r in ytd if r["rep_id"] == sales_id]
+    _ciro_ytd_table(ytd)
+    monthly = _ciro_monthly("sales", sales_id)
+    st.markdown("Aylık", help=HELP_CIRO_ORT)
+    _ciro_month_table(monthly, named=sales_id is None)
+
+    team_m = _ciro_team_months()
+    team_df = _df(team_m)
+    if not team_df.empty:
+        t = team_df[["ay", "ciro"]].copy()
+        t["seri"] = "satış ekibi"
+        st.markdown("Aylık toplam ciro (satış ekibi)", help=HELP_CIRO)
+        _line_chart(t, "ciro", "ciro", x_col="ay", x_title="ay")
+
+    if sales_id:
+        one = _ciro_one(sales_id)
+        parts: list[pd.DataFrame] = []
+        if one:
+            r = _df(one)[["ay", "ciro"]].copy()
+            r["seri"] = "seçilen"
+            parts.append(r)
+        if not team_df.empty:
+            o = team_df[["ay", "kisi_basi"]].copy()
+            o = o.rename(columns={"kisi_basi": "ciro"})
+            o["seri"] = "operasyon"
+            parts.append(o)
+        if parts:
+            st.markdown("Aylık ciro (seçilen ve operasyon ortalaması)", help=HELP_CIRO)
+            _line_chart(
+                pd.concat(parts, ignore_index=True),
+                "ciro",
+                "ciro",
+                x_col="ay",
+                x_title="ay",
+            )
+
+    st.markdown("Satış sonrası ekip", help=HELP_CIRO)
+    _ciro_ytd_table(_ciro_ytd("after_sales"))
+    _ciro_month_table(_ciro_monthly("after_sales", None), named=True)
+    _deal_caption()
+
+
+def _render_ciro_temsilci(rep_id: str) -> None:
+    _heading("Ciro", HELP_CIRO)
+    ytd = [r for r in _ciro_ytd("sales") if r["rep_id"] == rep_id]
+    _ciro_ytd_table(ytd)
+    monthly = _ciro_one(rep_id)
+    st.markdown("Aylık", help=HELP_CIRO_ORT)
+    _ciro_month_table(monthly, named=False)
+    if monthly:
+        frame = _df(monthly)[["ay", "ciro"]].copy()
+        frame["seri"] = "kendisi"
+        st.markdown("Aylık ciro", help=HELP_CIRO)
+        _line_chart(frame, "ciro", "ciro", x_col="ay", x_title="ay")
+    _deal_caption()
+
+
+def _render_profil() -> None:
+    st.subheader("Performans profili")
+    st.info(PROFILE_WARNING)
+    cards = _profiles()
+    for card in cards:
+        with st.container(border=True):
+            st.markdown(f"**{card['temsilci']}**")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("Güçlü yönler")
+                items = card.get("guclu") or []
+                if items:
+                    for line in items:
+                        st.write(line)
+                else:
+                    st.caption("eşik üstü metrik yok")
+            with c2:
+                st.markdown("Zayıf yönler")
+                items = card.get("zayif") or []
+                if items:
+                    for line in items:
+                        st.write(line)
+                else:
+                    st.caption("eşik altı metrik yok")
+            st.markdown("Eğri yönü")
+            for line in card.get("egri") or []:
+                st.write(line)
+            st.markdown("Süreklilik")
+            for line in card.get("sureklilik") or []:
+                st.write(line)
+            st.caption(" · ".join(card.get("kapsam") or []))
 
 
 def render_yonetici() -> None:
@@ -701,6 +892,9 @@ def render_yonetici() -> None:
     _heading("Huni", HELP_HUNI)
     fun = _funnel(rep_id, True)
     _table(_df(fun))
+
+    _render_ciro_yonetici(rep_id)
+    _render_profil()
 
     st.subheader("Haftalık gelişim (12 hafta)")
     team_w = _weekly_team()
@@ -896,6 +1090,8 @@ def render_temsilci(locked_rep_id: str | None = None) -> None:
             columns={"ulasilan": "ulaşılan"}
         )
     )
+
+    _render_ciro_temsilci(rep_id)
 
     st.subheader("Haftalık gelişim (12 hafta)")
     rows = _weekly(rep_id)
