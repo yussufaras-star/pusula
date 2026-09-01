@@ -1,7 +1,7 @@
 """Pusula operasyon paneli — Streamlit.
 
 Üç katman: yönetici, temsilci, ekip ekranı (isimsiz).
-Kimlik doğrulama yok; iç kullanım. Salt okuma.
+Giriş: st.session_state + st.secrets[passwords]. Salt okuma.
 """
 
 from __future__ import annotations
@@ -22,6 +22,15 @@ load_dotenv()
 import pandas as pd
 import streamlit as st
 
+from pusula.panel_auth import (
+    ADMIN_EMAIL,
+    AuthUser,
+    LOGIN_ERROR,
+    lookup_secret_password,
+    normalize_login_email,
+    password_matches,
+    resolve_user,
+)
 from pusula.panel_data import (
     CRM_DK_PER_GORUSME,
     DEFAULT_ARAMA_PER_LEAD,
@@ -36,6 +45,7 @@ from pusula.panel_data import (
     funnel,
     hourly_table,
     latest_event_created_at,
+    load_rep_by_email,
     load_reps,
     mean,
     path_take_rate,
@@ -174,6 +184,95 @@ def _require_env() -> None:
     if not (os.environ.get("DATABASE_URL_POOLED") or os.environ.get("DATABASE_URL")):
         st.error("DATABASE_URL_POOLED / DATABASE_URL yok")
         st.stop()
+
+
+def _apply_secrets() -> None:
+    """st.secrets'teki havuz URL'sini ortam değişkenine taşır.
+
+    Yerel .env doluysa üzerine yazılmaz. Placeholder (...) yok sayılır.
+    """
+    try:
+        pooled = st.secrets.get("DATABASE_URL_POOLED")
+    except Exception:
+        return
+    if pooled is None:
+        return
+    text = str(pooled).strip()
+    if not text or text == "...":
+        return
+    if not os.environ.get("DATABASE_URL_POOLED"):
+        os.environ["DATABASE_URL_POOLED"] = text
+
+
+def _passwords() -> dict[str, str]:
+    try:
+        raw = st.secrets.get("passwords")
+    except Exception:
+        return {}
+    if not raw:
+        return {}
+    return {str(k): str(v) for k, v in dict(raw).items()}
+
+
+def _session_user() -> AuthUser | None:
+    email = st.session_state.get("auth_email")
+    role = st.session_state.get("auth_role")
+    if not email or role not in ("admin", "rep"):
+        return None
+    if role == "rep" and not st.session_state.get("auth_rep_id"):
+        return None
+    return AuthUser(
+        email=str(email),
+        role=role,
+        rep_id=st.session_state.get("auth_rep_id"),
+        full_name=st.session_state.get("auth_name"),
+    )
+
+
+def _store_user(user: AuthUser) -> None:
+    st.session_state["auth_email"] = user.email
+    st.session_state["auth_role"] = user.role
+    st.session_state["auth_rep_id"] = user.rep_id
+    st.session_state["auth_name"] = user.full_name
+
+
+def _render_login() -> None:
+    st.title("Pusula")
+    if not _passwords():
+        st.error("giriş yapılandırması yok")
+    with st.form("login"):
+        email = st.text_input("Kullanıcı adı")
+        password = st.text_input("Şifre", type="password")
+        submitted = st.form_submit_button("Giriş")
+    if not submitted:
+        return
+    passwords = _passwords()
+    stored = lookup_secret_password(passwords, email)
+    if stored is None or not password_matches(password, stored):
+        st.error(LOGIN_ERROR)
+        return
+    rep = None
+    if normalize_login_email(email) != ADMIN_EMAIL:
+        _require_env()
+        rep = load_rep_by_email(email)
+    user = resolve_user(email, password, passwords, rep)
+    if user is None:
+        st.error(LOGIN_ERROR)
+        return
+    _store_user(user)
+    st.rerun()
+
+
+def _render_header(user: AuthUser) -> None:
+    left, right = st.columns([6, 1])
+    with left:
+        st.title("Pusula")
+        st.caption(f"son {WINDOW_DAYS} gün · dönüşüm 1 Mayıs 2026 sonrası")
+    with right:
+        st.caption(user.email)
+        if st.button("Çıkış", use_container_width=True):
+            st.session_state.clear()
+            st.rerun()
 
 
 @st.cache_data(ttl=CACHE_TTL)
@@ -677,14 +776,21 @@ def _render_donusum_weekly(rows: list[dict[str, Any]]) -> None:
     )
 
 
-def render_temsilci() -> None:
+def render_temsilci(locked_rep_id: str | None = None) -> None:
     reps = _reps()
     if not reps:
         st.write("aktif satış temsilcisi yok")
         return
-    names = {name: rid for rid, name in reps}
-    choice = st.selectbox("Temsilci", list(names), key="temsilci_sel")
-    rep_id = names[choice]
+    if locked_rep_id is not None:
+        names = {rid: name for rid, name in reps}
+        if locked_rep_id not in names:
+            st.write("aktif satış temsilcisi yok")
+            return
+        rep_id = locked_rep_id
+    else:
+        names = {name: rid for rid, name in reps}
+        choice = st.selectbox("Temsilci", list(names), key="temsilci_sel")
+        rep_id = names[choice]
     snap = _rep_snap(rep_id)
     cur = snap["current"]
     prev = snap["previous"]
@@ -844,16 +950,23 @@ def render_ekip() -> None:
 
 def main() -> None:
     st.set_page_config(page_title="Pusula panel", layout="wide")
+    _apply_secrets()
+    user = _session_user()
+    if user is None:
+        _render_login()
+        return
     _require_env()
-    st.title("Pusula")
-    st.caption(f"son {WINDOW_DAYS} gün · dönüşüm 1 Mayıs 2026 sonrası")
-    tab_y, tab_t, tab_e = st.tabs(["Yönetici", "Temsilci", "Ekip"])
-    with tab_y:
-        render_yonetici()
-    with tab_t:
-        render_temsilci()
-    with tab_e:
-        render_ekip()
+    _render_header(user)
+    if user.role == "admin":
+        tab_y, tab_t, tab_e = st.tabs(["Yönetici", "Temsilci", "Ekip"])
+        with tab_y:
+            render_yonetici()
+        with tab_t:
+            render_temsilci()
+        with tab_e:
+            render_ekip()
+    else:
+        render_temsilci(locked_rep_id=user.rep_id)
     st.caption(f"Veriler son guncelleme: {_fmt_event_ts(_latest_event())}")
 
 
