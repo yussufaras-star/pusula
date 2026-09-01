@@ -1,4 +1,5 @@
 # Pusula bağımlılıkları. anthropic ve fastapi ilgili modüller yazılınca eklenecek.
+# pandas ve altair streamlit 1.48 ile gelir; panel onları doğrudan import eder.
 psycopg[binary]==3.3.4
 psycopg-pool==3.3.1
 pydantic==2.13.4

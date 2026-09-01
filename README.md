@@ -82,10 +82,34 @@ cp .env.example .env
 psql "$DATABASE_URL" -f pusula/db/schema.sql
 ```
 
-4. Operasyon paneli (iç kullanım, kimlik doğrulama yok):
+4. Operasyon paneli:
+
+Yerel sır dosyasını örnekten kopyala (git'e girmez). Şifreler
+`st.secrets` içinde tutulur; kullanıcı adı `reps.email` değeridir.
 
 ```bash
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+# secrets.toml içine DATABASE_URL_POOLED (port 6543) ve [passwords] yaz
 streamlit run app/panel.py
 ```
 
-Bağlantı `DATABASE_URL_POOLED` (yoksa `DATABASE_URL`). Sorgu önbelleği 15 dakika.
+Giriş noktası `app/panel.py`. Bağlantı `DATABASE_URL_POOLED` (yoksa
+`DATABASE_URL`). Sorgu önbelleği 15 dakika. Temsilci yalnız kendi
+sekmesini görür; yönetici (`yusuf.aras@rexven.com`) üç sekmeyi de.
+
+## Streamlit Cloud
+
+Panelin temsilcilere açık adresi Cloud üzerinden yayınlanır. IP sabit
+olmadığı için Postgres bağlantısı havuz portu 6543 olmalıdır.
+
+1. Bu repoyu GitHub'a bağla. Cloud uygulamasında **Main file path**
+   olarak `app/panel.py` seç; Python 3.11.
+2. Advanced settings → Secrets. `.streamlit/secrets.toml.example`
+   yapısını doldur:
+   - `DATABASE_URL_POOLED` — Supabase transaction pooler URL'si
+     (`...pooler.supabase.com:6543/...`). Doğrudan `5432` kullanma.
+   - `[passwords]` — her temsilcinin `reps.email` adresi ve şifresi.
+     Yönetici için `yusuf.aras@rexven.com` anahtarını da ekle.
+3. Deploy. Şifreleri koda veya GitHub'a yazma; yalnız Cloud Secrets
+   (veya git dışı yerel `secrets.toml`) içinde tut.
+

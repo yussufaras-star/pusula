@@ -98,6 +98,28 @@ def load_reps() -> list[Rep]:
     return [Rep(str(r[0]), str(r[1])) for r in rows]
 
 
+def load_rep_by_email(email: str) -> Rep | None:
+    """Aktif satis temsilcisini e-posta ile bulur. Yoksa None."""
+    normalized = email.strip().lower()
+    if not normalized:
+        return None
+    org_id = get_org_id()
+    with connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT rep_id, full_name
+            FROM reps r
+            WHERE r.org_id = %s
+              AND lower(trim(r.email)) = %s
+              AND {_sales_rep_sql()}
+            """,
+            (org_id, normalized),
+        ).fetchone()
+    if row is None:
+        return None
+    return Rep(str(row[0]), str(row[1]))
+
+
 def _hour_expr(alias: str = "e") -> str:
     return f"extract(hour FROM {alias}.occurred_at AT TIME ZONE 'Europe/Istanbul')::int"
 
