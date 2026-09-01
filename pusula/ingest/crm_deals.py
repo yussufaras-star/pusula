@@ -58,6 +58,9 @@ def sync_deals(*, since: datetime, dry_run: bool = False) -> dict[str, int]:
         "unreliable_cycle": 0,
         "no_thread": 0,
         "errors": 0,
+        "new": 0,
+        "already": 0,
+        "amount_empty": 0,
     }
     org_id = get_org_id()
     since_local = to_istanbul(since)
@@ -81,7 +84,9 @@ def sync_deals(*, since: datetime, dry_run: bool = False) -> dict[str, int]:
         return stats
 
     if dry_run:
-        stats["written"] = len(records)
+        extra = _dry_run_counts(records)
+        stats.update(extra)
+        stats["written"] = 0
         return stats
 
     with client.transaction() as conn:
@@ -164,6 +169,12 @@ def sync_deals(*, since: datetime, dry_run: bool = False) -> dict[str, int]:
                 stats["errors"] += 1
 
         if upserts:
+            existing = _existing_deal_ids([str(row[1]) for row in upserts], conn)
+            stats["already"] = len(existing)
+            stats["new"] = sum(
+                1 for row in upserts if str(row[1]) not in existing
+            )
+            stats["amount_empty"] = sum(1 for row in upserts if row[6] is None)
             with conn.cursor() as cur:
                 cur.executemany(
                     """
@@ -198,9 +209,48 @@ def sync_deals(*, since: datetime, dry_run: bool = False) -> dict[str, int]:
                     """,
                     upserts,
                 )
-            stats["written"] = len(upserts)
+                rowcount = cur.rowcount
+            stats["written"] = (
+                int(rowcount) if rowcount is not None and rowcount >= 0
+                else len(upserts)
+            )
 
     return stats
+
+
+def _dry_run_counts(records: list[dict[str, Any]]) -> dict[str, int]:
+    """Yazmadan: yeni / mevcut / amount boş. Amount = Zoho Amount."""
+    ids: list[str] = []
+    amount_empty = 0
+    for record in records:
+        deal_id = _as_str(record.get("id"))
+        if deal_id:
+            ids.append(deal_id)
+        if _parse_amount(record.get("Amount")) is None:
+            amount_empty += 1
+    unique_ids = list(dict.fromkeys(ids))
+    existing: set[str] = set()
+    if unique_ids:
+        with client.transaction() as conn:
+            existing = _existing_deal_ids(unique_ids, conn)
+    return {
+        "already": len(existing),
+        "new": sum(1 for did in unique_ids if did not in existing),
+        "amount_empty": amount_empty,
+    }
+
+
+def _existing_deal_ids(deal_ids: list[str], conn: Any) -> set[str]:
+    if not deal_ids:
+        return set()
+    rows = conn.execute(
+        """
+        SELECT deal_id FROM deals
+        WHERE org_id = %s AND deal_id = ANY(%s)
+        """,
+        (get_org_id(), deal_ids),
+    ).fetchall()
+    return {str(row[0]) for row in rows if row and row[0]}
 
 
 def _is_migration_lead(cycle_start: datetime) -> bool:

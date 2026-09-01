@@ -1,6 +1,6 @@
 # Günlük ingest — 08:00 Europe/Istanbul = 05:00 UTC (TR UTC+3, DST yok).
 # Her kaynak ayrı job: timeout paylaşılmaz. Sıra: calls → leads →
-# contacts → bookings. nudges aynı concurrency grubunu bekler.
+# contacts → bookings → deals. nudges aynı concurrency grubunu bekler.
 name: ingest
 
 on:
@@ -87,3 +87,19 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Sync bookings
         run: python scripts/run_ingest.py --source zoho_bookings
+
+  sync-deals:
+    needs: sync-bookings
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Sync deals
+        run: python scripts/ingest_sales_cycle.py --deals-only --lookback-days 14

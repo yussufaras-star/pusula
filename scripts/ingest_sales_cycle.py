@@ -62,7 +62,7 @@ def main() -> int:
     parser.add_argument(
         "--lookback-days",
         type=int,
-        help="Contacts Created_Time için bugünden geriye gün (cron)",
+        help="Contacts Created_Time veya --deals-only Deals penceresi (cron)",
     )
     args = parser.parse_args()
     _load_env()
@@ -109,10 +109,25 @@ def main() -> int:
         )
 
     if run_deals:
-        print(f"=== Deals (Created_Time >= {since.isoformat()}) ===")
-        dstats = sync_deals(since=since, dry_run=args.dry_run)
+        deals_since = since
+        if args.deals_only and args.lookback_days is not None:
+            if args.lookback_days < 1:
+                print("--lookback-days en az 1 olmalı")
+                return 1
+            deals_since = datetime.now(ZoneInfo("Europe/Istanbul")) - timedelta(
+                days=args.lookback_days
+            )
+            deals_since = deals_since.replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+        print(
+            f"=== Deals (Created_Time|Modified_Time >= {deals_since.isoformat()}) ==="
+        )
+        dstats = sync_deals(since=deals_since, dry_run=args.dry_run)
         print(
             f"fetched={dstats['fetched']} written={dstats['written']} "
+            f"new={dstats.get('new', 0)} already={dstats.get('already', 0)} "
+            f"amount_empty={dstats.get('amount_empty', 0)} "
             f"threadli={dstats['with_thread']} dongulu={dstats['with_cycle']} "
             f"zincir_kopuk={dstats['chain_broken']} "
             f"guvenilmez={dstats['unreliable_cycle']} "
