@@ -271,6 +271,20 @@ def today_blocks(rep_id: str | None) -> dict[str, Any]:
     is_meet = "e.channel = 'meeting'"
     planned = hour_in_planned_sql(hour)
 
+    def _append_sure(prefix: str, window_sql: str, slot_sql: str) -> None:
+        # Sure yalniz ulasilan gorusme; temas tanimi temas.py.
+        cond = f"{window_sql} AND {slot_sql} AND {is_call} AND {_TEMAS_E}"
+        select_parts.append(
+            f"sum({_DUR_E}) FILTER (WHERE {cond}) AS {prefix}_sure_toplam"
+        )
+        select_parts.append(
+            f"avg({_DUR_E}) FILTER (WHERE {cond}) AS {prefix}_sure_ort"
+        )
+        select_parts.append(
+            f"percentile_cont(0.5) WITHIN GROUP (ORDER BY {_DUR_E}) "
+            f"FILTER (WHERE {cond}) AS {prefix}_sure_tipik"
+        )
+
     select_parts: list[str] = []
     for block in PLANNED_BLOCKS:
         rng = f"{hour} >= {block.start_hour} AND {hour} < {block.end_hour}"
@@ -291,6 +305,8 @@ def today_blocks(rep_id: str | None) -> dict[str, Any]:
                 f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_call}"
                 f" AND {_TEMAS_E})::int AS h_{block.key}_ulasilan"
             )
+            _append_sure(f"t_{block.key}", today, rng)
+            _append_sure(f"h_{block.key}", hist, rng)
         else:
             select_parts.append(
                 f"count(*) FILTER (WHERE {today} AND {rng} AND {is_meet})"
@@ -354,6 +370,8 @@ def today_blocks(rep_id: str | None) -> dict[str, Any]:
             f"::int AS h_disi_katildi",
         ]
     )
+    _append_sure("t_disi", today, disi)
+    _append_sure("h_disi", hist, disi)
     sql = f"""
         SELECT {", ".join(select_parts)}
         FROM events e
@@ -370,13 +388,36 @@ def today_blocks(rep_id: str | None) -> dict[str, Any]:
         cur = conn.execute(sql, (org_id, *params))
         row = cur.fetchone()
         colnames = [str(col.name) for col in (cur.description or [])]
-    packed = {
-        name: int((row[i] if row else 0) or 0)
-        for i, name in enumerate(colnames)
-    }
+    packed: dict[str, Any] = {}
+    for i, name in enumerate(colnames):
+        raw = row[i] if row else None
+        if name.endswith(("_sure_toplam", "_sure_ort", "_sure_tipik")):
+            packed[name] = float(raw) if raw is not None else None
+        else:
+            packed[name] = int(raw or 0)
 
-    def _avg(total: int) -> float:
-        return round(total / float(days), 1)
+    def _avg(total: int | float) -> float:
+        return round(float(total) / float(days), 1)
+
+    def _sure_pair(
+        prefix: str, ulasilan: int, *, daily_total: bool
+    ) -> dict[str, float | None]:
+        if ulasilan == 0:
+            return {
+                "sure_toplam": None,
+                "sure_ort": None,
+                "sure_tipik": None,
+            }
+        toplam = packed.get(f"{prefix}_sure_toplam")
+        if daily_total and toplam is not None:
+            toplam = _avg(toplam)
+        ort = packed.get(f"{prefix}_sure_ort")
+        tipik = packed.get(f"{prefix}_sure_tipik")
+        return {
+            "sure_toplam": float(toplam) if toplam is not None else None,
+            "sure_ort": float(ort) if ort is not None else None,
+            "sure_tipik": float(tipik) if tipik is not None else None,
+        }
 
     blocks: list[dict[str, Any]] = []
     for block in PLANNED_BLOCKS:
@@ -394,11 +435,13 @@ def today_blocks(rep_id: str | None) -> dict[str, Any]:
                         "arama": t_a,
                         "ulasilan": t_u,
                         "ulasma_orani": _ratio(t_u, t_a),
+                        **_sure_pair(f"t_{block.key}", t_u, daily_total=False),
                     },
                     "avg90": {
                         "arama": _avg(h_a),
                         "ulasilan": _avg(h_u),
                         "ulasma_orani": _ratio(h_u, h_a),
+                        **_sure_pair(f"h_{block.key}", h_u, daily_total=True),
                     },
                 }
             )
@@ -450,6 +493,7 @@ def today_blocks(rep_id: str | None) -> dict[str, Any]:
                 "ulasma_orani": _ratio(t_du, t_da),
                 "randevu": t_dr,
                 "katildi": t_dk,
+                **_sure_pair("t_disi", t_du, daily_total=False),
             },
             "avg90": {
                 "arama": _avg(h_da),
@@ -457,6 +501,7 @@ def today_blocks(rep_id: str | None) -> dict[str, Any]:
                 "ulasma_orani": _ratio(h_du, h_da),
                 "randevu": _avg(h_dr),
                 "katildi": _avg(h_dk),
+                **_sure_pair("h_disi", h_du, daily_total=True),
             },
         }
     )

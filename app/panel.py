@@ -114,6 +114,16 @@ HELP_SURE = (
     "Telefonun acildigi gorusmelerin ortalama suresi. Tipik de "
     "gosterilir cunku birkac uzun gorusme ortalamayi yukari cekebilir."
 )
+HELP_BLOK_TOPLAM = (
+    "Bu bloktaki ulasilan gorusmelerin sureleri toplami. "
+    "Sure yalniz telefonun acildigi gorusmelerden hesaplanir; "
+    "ulasilamayan aramalar katilmaz."
+)
+HELP_BLOK_SURE = (
+    "Bu bloktaki ulasilan gorusmelerin ortalama ve tipik suresi. "
+    "Sure yalniz telefonun acildigi gorusmelerden hesaplanir; "
+    "ulasilamayan aramalar katilmaz."
+)
 HELP_ISYUKU = (
     "Kisi basi gunluk ortalama. Son 90 gunun pazar disi is "
     "gunlerine bolunmustur."
@@ -439,6 +449,8 @@ def _metric_row(items: list[dict[str, Any]]) -> None:
                 pct=bool(item.get("pct", False)),
                 duration=bool(item.get("duration", False)),
                 help_text=item.get("help_text"),
+                empty_label=item.get("empty_label"),
+                display=item.get("display"),
             )
 
 
@@ -501,6 +513,7 @@ def _render_bugun(rep_id: str | None, *, blok_disi: bool) -> None:
         with st.container(border=True):
             st.markdown(f"**{block.get('label')}**")
             if kind == "call":
+                sure_items = _sure_metric_items(today, avg90)
                 _metric_row(
                     [
                         {
@@ -522,8 +535,10 @@ def _render_bugun(rep_id: str | None, *, blok_disi: bool) -> None:
                             "pct": True,
                             "help_text": HELP_ULASMA,
                         },
+                        sure_items[0],
                     ]
                 )
+                _metric_row([sure_items[1]])
             elif kind == "meeting":
                 _metric_row(
                     [
@@ -554,6 +569,7 @@ def _render_bugun(rep_id: str | None, *, blok_disi: bool) -> None:
                     ]
                 )
             else:
+                sure_items = _sure_metric_items(today, avg90)
                 _metric_row(
                     [
                         {
@@ -582,6 +598,7 @@ def _render_bugun(rep_id: str | None, *, blok_disi: bool) -> None:
                         },
                     ]
                 )
+                _metric_row(sure_items)
 
 
 def _line_chart(
@@ -624,6 +641,40 @@ def _week_delta(rows: list[dict[str, Any]], key: str) -> str:
     return arrow(last_f, avg12)
 
 
+def _fmt_ortalama_tipik(
+    avg_sec: float | None, tipik_sec: float | None
+) -> str | None:
+    if avg_sec is None and tipik_sec is None:
+        return None
+    return (
+        f"ortalama {fmt_duration(avg_sec)}, tipik {fmt_duration(tipik_sec)}"
+    )
+
+
+def _sure_metric_items(
+    today: dict[str, Any], avg90: dict[str, Any]
+) -> list[dict[str, Any]]:
+    pair = _fmt_ortalama_tipik(today.get("sure_ort"), today.get("sure_tipik"))
+    return [
+        {
+            "label": "toplam görüşme süresi",
+            "cur": today.get("sure_toplam"),
+            "prev": avg90.get("sure_toplam"),
+            "duration": True,
+            "empty_label": "veri yetersiz",
+            "help_text": HELP_BLOK_TOPLAM,
+        },
+        {
+            "label": "görüşme süresi",
+            "cur": today.get("sure_ort"),
+            "prev": avg90.get("sure_ort"),
+            "display": pair,
+            "empty_label": "veri yetersiz",
+            "help_text": HELP_BLOK_SURE,
+        },
+    ]
+
+
 def _compare(
     label: str,
     cur: float | None,
@@ -632,8 +683,15 @@ def _compare(
     pct: bool = False,
     duration: bool = False,
     help_text: str | None = None,
+    empty_label: str | None = None,
+    display: str | None = None,
 ) -> None:
-    if duration:
+    if empty_label is not None and cur is None:
+        st.metric(label, empty_label, empty_label, help=help_text)
+        return
+    if display is not None:
+        shown = display
+    elif duration:
         shown = fmt_duration(cur)
     elif pct:
         shown = fmt_pct(cur)
@@ -1205,6 +1263,8 @@ def render_temsilci(locked_rep_id: str | None = None) -> None:
 
 def render_ekip() -> None:
     st.caption("isim yok. operasyon geneli.")
+    _render_bugun(None, blok_disi=False)
+    st.divider()
     _heading("Toplantı etkisi", HELP_TOPLANTI)
     path = _df(_path())
     path["genelde"] = path["genelde"].map(fmt_pct)
