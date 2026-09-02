@@ -25,7 +25,7 @@ from pusula.panel_data import (
     take_rate,
     weekly_series,
 )
-from pusula.temas import is_cevirme_sql, is_temas_sql
+from pusula.temas import is_cevirme_sql, is_donus_sql, is_temas_sql
 
 _TZ = ZoneInfo("Europe/Istanbul")
 REL_THRESHOLD = 0.20
@@ -40,6 +40,7 @@ _PORTFOLIO_NOTES: dict[str, str] = {
 
 _CEVIRME = is_cevirme_sql("e")
 _TEMAS = is_temas_sql("e")
+_DONUS = is_donus_sql("e")
 
 MetricDir = Literal["yukseliyor", "sabit", "dusuyor", "veri yetersiz"]
 
@@ -82,7 +83,7 @@ def _fmt_metric(key: str, value: float | None) -> str:
 
 def _label(key: str) -> str:
     return {
-        "arama": "Arama",
+        "arama": "Giden arama",
         "ulasma_orani": "Ulaşma oranı",
         "randevu": "Randevu",
         "katilim_orani": "Toplantı katılım oranı",
@@ -124,7 +125,8 @@ def _ops_90d(window: DateWindow | None = None) -> dict[str, dict[str, Any]]:
           count(*) FILTER (
             WHERE e.channel = 'call' AND e.direction = 'outbound'
               AND {_TEMAS}
-          )::int AS ulasilan,
+          )::int AS ulasilan_giden,
+          count(*) FILTER (WHERE {_DONUS})::int AS donus,
           count(*) FILTER (
             WHERE e.channel = 'meeting'
               AND e.meta->>'randevu_durumu' IN ('katildi', 'katilmadi')
@@ -151,9 +153,9 @@ def _ops_90d(window: DateWindow | None = None) -> dict[str, dict[str, Any]]:
             sql, (list(SALES_TEAM_IDS), org_id, start_ts, end_ts)
         ).fetchall()
     out: dict[str, dict[str, Any]] = {}
-    for rep_id, name, arama, ulasilan, randevu, katildi, bos in rows:
+    for rep_id, name, arama, ulasilan_giden, donus, randevu, katildi, bos in rows:
         arama_n = int(arama or 0)
-        ulasilan_n = int(ulasilan or 0)
+        ulasilan_n = int(ulasilan_giden or 0) + int(donus or 0)
         randevu_n = int(randevu or 0)
         katildi_n = int(katildi or 0)
         bos_n = int(bos or 0)
@@ -317,7 +319,8 @@ def _monthly_ops() -> dict[str, dict[datetime, dict[str, Any]]]:
           count(*) FILTER (
             WHERE e.channel = 'call' AND e.direction = 'outbound'
               AND {_TEMAS}
-          )::int AS ulasilan,
+          )::int AS ulasilan_giden,
+          count(*) FILTER (WHERE {_DONUS})::int AS donus,
           count(*) FILTER (
             WHERE e.channel = 'meeting'
               AND e.meta->>'randevu_durumu' IN ('katildi', 'katilmadi')
@@ -345,7 +348,7 @@ def _monthly_ops() -> dict[str, dict[datetime, dict[str, Any]]]:
     with connect() as conn:
         rows = conn.execute(sql, (list(SALES_TEAM_IDS), org_id)).fetchall()
     by_rep: dict[str, dict[datetime, dict[str, Any]]] = {}
-    for rep_id, month, arama, ulasilan, randevu, katildi, bos in rows:
+    for rep_id, month, arama, ulasilan_giden, donus, randevu, katildi, bos in rows:
         month_dt = month if isinstance(month, datetime) else None
         if month_dt is None:
             continue
@@ -354,7 +357,7 @@ def _monthly_ops() -> dict[str, dict[datetime, dict[str, Any]]]:
         bos_n = int(bos or 0)
         by_rep.setdefault(str(rep_id), {})[month_dt] = {
             "arama": float(arama_n),
-            "ulasma_orani": _ratio(int(ulasilan or 0), arama_n),
+            "ulasma_orani": _ratio(int(ulasilan_giden or 0) + int(donus or 0), arama_n),
             "randevu": float(randevu_n),
             "katilim_orani": _ratio(int(katildi or 0), randevu_n),
             "sonuc_girme_orani": _ratio(randevu_n, randevu_n + bos_n),

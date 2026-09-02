@@ -9,6 +9,11 @@ temas_mi(event) / is_temas_sql: görüşme açıldı mı.
 cevirme_mi / is_cevirme_sql: call_status = connected (temas olmasa da).
 Temsilcinin çevirmesi faaliyet, açılması sonuç.
 
+Dönüş araması: inbound, duration_sec > 0, aynı thread'de önceki
+RETURN_CALL_LOOKBACK_DAYS gün içinde outbound kayıt var.
+Gelen arama: aynı inbound koşulu, dönüş olmayanlar.
+Süre sıfır inbound cevapsızdır, sayıma girmez.
+
 Lead ilerleme kovası pusula.lead_reach'tedir.
 """
 
@@ -27,6 +32,9 @@ _TZ = ZoneInfo("Europe/Istanbul")
 NOT_TEMAS_KEYS = frozenset({"no_answer", "invalid_number"})
 NOT_TEMAS_RAW = frozenset({"Yanıt yok/Meşgul"})
 PLANNED_STATUSES = frozenset({"overdue", "scheduled"})
+
+# Dönüş penceresi — tek yer. SQL ve Python buradan okur.
+RETURN_CALL_LOOKBACK_DAYS = 2
 
 # Süre eşiğinden (10 sn) bu tanıma çevrilen dosya/yer sayısı.
 # weekly_report TEMAS_MIN_SEC: 13, send_nudges süre filtresi: 3,
@@ -213,3 +221,50 @@ def is_attempt_sql(alias: str = "e") -> str:
 def is_countable_call_sql(alias: str = "e") -> str:
     """Deneme ile aynı (planlanmış hariç)."""
     return is_attempt_sql(alias)
+
+
+def is_answered_inbound_sql(alias: str = "e") -> str:
+    """Süreli inbound. Süre sıfır cevapsızdır."""
+    dur = duration_sec(alias)
+    return f"""
+        {alias}.channel = 'call'
+        AND {alias}.direction = 'inbound'
+        AND {is_not_planned_sql(alias)}
+        AND {is_not_future_sql(alias)}
+        AND coalesce({dur}, 0) > 0
+    """
+
+
+def has_prior_outbound_sql(alias: str = "e") -> str:
+    """Aynı thread'de önceki RETURN_CALL_LOOKBACK_DAYS gün içinde giden kayıt."""
+    out_alias = f"{alias}_out"
+    return f"""
+        EXISTS (
+            SELECT 1
+            FROM events {out_alias}
+            WHERE {out_alias}.org_id = {alias}.org_id
+              AND {out_alias}.thread_id IS NOT NULL
+              AND {out_alias}.thread_id = {alias}.thread_id
+              AND {out_alias}.channel = 'call'
+              AND {out_alias}.direction = 'outbound'
+              AND {out_alias}.occurred_at < {alias}.occurred_at
+              AND {out_alias}.occurred_at >= {alias}.occurred_at
+                    - interval '{RETURN_CALL_LOOKBACK_DAYS} days'
+        )
+    """
+
+
+def is_donus_sql(alias: str = "e") -> str:
+    """SQL karşılığı dönüş araması."""
+    return f"""
+        {is_answered_inbound_sql(alias)}
+        AND {has_prior_outbound_sql(alias)}
+    """
+
+
+def is_gelen_sql(alias: str = "e") -> str:
+    """SQL karşılığı gelen arama (dönüş olmayan süreli inbound)."""
+    return f"""
+        {is_answered_inbound_sql(alias)}
+        AND NOT ({has_prior_outbound_sql(alias)})
+    """

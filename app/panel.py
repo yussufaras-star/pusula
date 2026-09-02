@@ -78,22 +78,38 @@ from pusula.panel_data import (
     workload_board,
 )
 from pusula.panel_profile import PROFILE_WARNING, performance_profiles
+from pusula.temas import RETURN_CALL_LOOKBACK_DAYS
 
 CACHE_TTL = 15 * 60
 _TZ = ZoneInfo("Europe/Istanbul")
 
 # Tanım balonları — metin birebir.
 HELP_ULASMA = (
-    "Yapilan aramalarin kacinda karsi taraf telefonu acti. "
-    "Sonucu 'Yanit yok/Mesgul' veya 'Gecersiz numara' olanlar "
-    "ulasilamamis sayilir; sure esigi yoktur. Planlanmis ama "
-    "yapilmamis aramalar sayilmaz."
+    "Giden aramalardan kacinda karsi taraf telefonu acti. "
+    "Pay: acilan giden gorusme + donus aramasi. Payda: giden "
+    "arama. Sonucu 'Yanit yok/Mesgul' veya 'Gecersiz numara' "
+    "olan gidenler ulasilamamis sayilir; sure esigi yoktur. "
+    "Planlanmis ama yapilmamis aramalar sayilmaz."
 )
 HELP_ARAMA = (
-    "Yapilan arama sayisi. Karsi taraf acmasa bile sayilir. "
+    "Giden arama sayisi. Karsi taraf acmasa bile sayilir. "
     "Planlanmis ama henuz yapilmamis aramalar haric."
 )
-HELP_ULASILAN = "Telefonun acildigi arama sayisi."
+HELP_ULASILAN = (
+    "Telefonun acildigi giden gorusme ile donus aramasinin toplami. "
+    "Ulasma oraninin payi."
+)
+HELP_DONUS = (
+    f"Musterinin geri aramasidir. Yonu gelen, suresi sifirdan buyuk "
+    f"ve ayni hatta onceki {RETURN_CALL_LOOKBACK_DAYS} gun icinde "
+    "giden arama kaydi vardir. Suresi sifir olanlar cevapsizdir, "
+    "sayilmaz. Ulasma oraninin payina eklenir; paydaya eklenmez."
+)
+HELP_GELEN = (
+    "Yonu gelen, suresi sifirdan buyuk, donus aramasi olmayan "
+    "cagri. Suresi sifir olanlar cevapsizdir, sayilmaz. "
+    "Ulasma oranina katilmaz."
+)
 HELP_RANDEVU = (
     "Zoho Bookings uzerinden alinan randevu sayisi. "
     "Iptal edilenler dahildir."
@@ -177,7 +193,14 @@ HELP_CIRO_ORT = "Toplam ciro / satis adedi."
 
 COL_HELP: dict[str, str] = {
     "arama": HELP_ARAMA,
+    "giden arama": HELP_ARAMA,
     "arama/gün": HELP_ARAMA,
+    "giden arama/gün": HELP_ARAMA,
+    "giden arama / gün": HELP_ARAMA,
+    "dönüş araması": HELP_DONUS,
+    "dönüş araması/gün": HELP_DONUS,
+    "gelen arama": HELP_GELEN,
+    "gelen arama/gün": HELP_GELEN,
     "ulaşılan": HELP_ULASILAN,
     "ulaşılan/gün": HELP_ULASILAN,
     "ulaşma %": HELP_ULASMA,
@@ -213,6 +236,8 @@ COL_HELP: dict[str, str] = {
 CHART_HELP: dict[str, str] = {
     "arama": HELP_ARAMA,
     "arama_ham": HELP_ARAMA,
+    "donus": HELP_DONUS,
+    "gelen": HELP_GELEN,
     "ulasma_orani": HELP_ULASMA,
     "randevu": HELP_RANDEVU,
     "katilim_orani": HELP_KATILIM,
@@ -626,8 +651,9 @@ def _block_metric(item: dict[str, Any]) -> None:
 
 
 def _block_metric_row(items: list[dict[str, Any]]) -> None:
-    cols = st.columns(4, gap="small")
-    for col, item in zip(cols, items[:4]):
+    n = max(len(items), 1)
+    cols = st.columns(n, gap="small")
+    for col, item in zip(cols, items):
         with col:
             _block_metric(item)
 
@@ -680,7 +706,7 @@ def _render_block_card(block: dict[str, Any]) -> None:
             _block_metric_row(
                 [
                     {
-                        "label": "arama",
+                        "label": "giden arama",
                         "cur": today.get("arama"),
                         "prev": avg90.get("arama"),
                         "help_text": HELP_ARAMA,
@@ -699,6 +725,22 @@ def _render_block_card(block: dict[str, Any]) -> None:
                         "help_text": HELP_ULASMA,
                     },
                     _sure_column(today, avg90),
+                ]
+            )
+            _block_metric_row(
+                [
+                    {
+                        "label": "dönüş araması",
+                        "cur": today.get("donus"),
+                        "prev": avg90.get("donus"),
+                        "help_text": HELP_DONUS,
+                    },
+                    {
+                        "label": "gelen arama",
+                        "cur": today.get("gelen"),
+                        "prev": avg90.get("gelen"),
+                        "help_text": HELP_GELEN,
+                    },
                 ]
             )
         elif kind == "meeting":
@@ -730,11 +772,27 @@ def _render_block_card(block: dict[str, Any]) -> None:
                     },
                 ]
             )
+            _block_metric_row(
+                [
+                    {
+                        "label": "dönüş araması",
+                        "cur": today.get("donus"),
+                        "prev": avg90.get("donus"),
+                        "help_text": HELP_DONUS,
+                    },
+                    {
+                        "label": "gelen arama",
+                        "cur": today.get("gelen"),
+                        "prev": avg90.get("gelen"),
+                        "help_text": HELP_GELEN,
+                    },
+                ]
+            )
         else:
             _block_metric_row(
                 [
                     {
-                        "label": "arama",
+                        "label": "giden arama",
                         "cur": today.get("arama"),
                         "prev": avg90.get("arama"),
                         "help_text": HELP_ARAMA,
@@ -759,7 +817,23 @@ def _render_block_card(block: dict[str, Any]) -> None:
                     },
                 ]
             )
-            _block_metric_row([_sure_column(today, avg90)])
+            _block_metric_row(
+                [
+                    {
+                        "label": "dönüş araması",
+                        "cur": today.get("donus"),
+                        "prev": avg90.get("donus"),
+                        "help_text": HELP_DONUS,
+                    },
+                    {
+                        "label": "gelen arama",
+                        "cur": today.get("gelen"),
+                        "prev": avg90.get("gelen"),
+                        "help_text": HELP_GELEN,
+                    },
+                    _sure_column(today, avg90),
+                ]
+            )
 
 
 def _render_bugun(rep_id: str | None, day: date, *, blok_disi: bool) -> None:
@@ -1049,9 +1123,22 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
     show["katılım %"] = show["katilim_orani"].map(fmt_pct)
     _table(
         show[
-            ["saat", "arama", "ulasilan", "ulaşma %", "randevu", "katildi", "katılım %"]
+            [
+                "saat",
+                "arama",
+                "donus",
+                "gelen",
+                "ulasilan",
+                "ulaşma %",
+                "randevu",
+                "katildi",
+                "katılım %",
+            ]
         ].rename(
             columns={
+                "arama": "giden arama",
+                "donus": "dönüş araması",
+                "gelen": "gelen arama",
                 "ulasilan": "ulaşılan",
                 "katildi": "katıldı",
             }
@@ -1070,6 +1157,16 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
                     "label": "ekip katılım oranı",
                     "value": fmt_pct(dip.get("katilim_orani")),
                     "help": HELP_KATILIM,
+                },
+                {
+                    "label": "ekip dönüş araması",
+                    "value": fmt_num(dip.get("donus")),
+                    "help": HELP_DONUS,
+                },
+                {
+                    "label": "ekip gelen arama",
+                    "value": fmt_num(dip.get("gelen")),
+                    "help": HELP_GELEN,
                 },
             ]
         )
@@ -1240,7 +1337,7 @@ def _render_weekly_charts(
     take: bool = True,
 ) -> None:
     specs: list[tuple[str, str, bool]] = [
-        ("arama", "arama (kişi başı)" if kisi_basi else "arama", False),
+        ("arama", "giden arama (kişi başı)" if kisi_basi else "giden arama", False),
         ("ulasma_orani", "ulaşma oranı", True),
         ("randevu", "randevu", False),
         ("katilim_orani", "katılım oranı", True),
@@ -1340,7 +1437,7 @@ def render_temsilci(
                     "help_text": HELP_ULASMA,
                 },
                 {
-                    "label": "arama / gün",
+                    "label": "giden arama / gün",
                     "cur": cur.get("arama_gun"),
                     "prev": prev.get("arama_gun"),
                     "help_text": HELP_ARAMA,
@@ -1357,6 +1454,34 @@ def render_temsilci(
                     "prev": prev.get("ortalama_sn"),
                     "duration": True,
                     "help_text": HELP_SURE,
+                },
+            ]
+        )
+        _metric_row(
+            [
+                {
+                    "label": "dönüş araması / gün",
+                    "cur": cur.get("donus_gun"),
+                    "prev": prev.get("donus_gun"),
+                    "help_text": HELP_DONUS,
+                },
+                {
+                    "label": "gelen arama / gün",
+                    "cur": cur.get("gelen_gun"),
+                    "prev": prev.get("gelen_gun"),
+                    "help_text": HELP_GELEN,
+                },
+                {
+                    "label": "dönüş araması",
+                    "cur": cur.get("donus"),
+                    "prev": prev.get("donus"),
+                    "help_text": HELP_DONUS,
+                },
+                {
+                    "label": "gelen arama",
+                    "cur": cur.get("gelen"),
+                    "prev": prev.get("gelen"),
+                    "help_text": HELP_GELEN,
                 },
             ]
         )
@@ -1430,14 +1555,19 @@ def render_temsilci(
         )
         st.caption(f"CRM kayıt tahmini {CRM_DK_PER_GORUSME} dk/görüşme")
 
-    _heading("Saatlik arama ve ulaşma", HELP_ULASMA, window)
+    _heading("Saatlik giden arama ve ulaşma", HELP_ULASMA, window)
     hourly = _hourly(rep_id, start, end)
     hframe = _df(hourly)
-    show = hframe[["saat", "arama", "ulasilan", "ulasma_orani"]].copy()
+    show = hframe[["saat", "arama", "donus", "gelen", "ulasilan", "ulasma_orani"]].copy()
     show["ulaşma %"] = show["ulasma_orani"].map(fmt_pct)
     _table(
-        show[["saat", "arama", "ulasilan", "ulaşma %"]].rename(
-            columns={"ulasilan": "ulaşılan"}
+        show[["saat", "arama", "donus", "gelen", "ulasilan", "ulaşma %"]].rename(
+            columns={
+                "arama": "giden arama",
+                "donus": "dönüş araması",
+                "gelen": "gelen arama",
+                "ulasilan": "ulaşılan",
+            }
         )
     )
 
@@ -1454,7 +1584,7 @@ def render_temsilci(
     frame["seri"] = "kendisi"
     n_weeks = len(rows)
     for key, title, is_pct in (
-        ("arama_ham", "arama", False),
+        ("arama_ham", "giden arama", False),
         ("ulasma_orani", "ulaşma oranı", True),
         ("randevu", "randevu", False),
         ("katilim_orani", "katılım oranı", True),
@@ -1491,11 +1621,16 @@ def render_ekip(window: DateWindow, block_day: date) -> None:
     )
 
     _heading("Saatlik ulaşma oranı", HELP_ULASMA, window)
-    ulas = hframe[["saat", "arama", "ulasilan", "ulasma_orani"]].copy()
+    ulas = hframe[["saat", "arama", "donus", "gelen", "ulasilan", "ulasma_orani"]].copy()
     ulas["ulaşma %"] = ulas["ulasma_orani"].map(fmt_pct)
     _table(
-        ulas[["saat", "arama", "ulasilan", "ulaşma %"]].rename(
-            columns={"ulasilan": "ulaşılan"}
+        ulas[["saat", "arama", "donus", "gelen", "ulasilan", "ulaşma %"]].rename(
+            columns={
+                "arama": "giden arama",
+                "donus": "dönüş araması",
+                "gelen": "gelen arama",
+                "ulasilan": "ulaşılan",
+            }
         )
     )
 

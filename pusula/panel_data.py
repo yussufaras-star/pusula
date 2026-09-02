@@ -18,7 +18,14 @@ from psycopg.rows import dict_row
 from pusula.blocks import BLOK_DISI, PLANNED_BLOCKS, hour_in_planned_sql
 from pusula.config import get_org_id
 from pusula.sifir_satis import WON_STAGE, won_stage_sql
-from pusula.temas import duration_sec, is_attempt_sql, is_cevirme_sql, is_temas_sql
+from pusula.temas import (
+    duration_sec,
+    is_attempt_sql,
+    is_cevirme_sql,
+    is_donus_sql,
+    is_gelen_sql,
+    is_temas_sql,
+)
 
 _TZ = ZoneInfo("Europe/Istanbul")
 WINDOW_DAYS = 90
@@ -73,8 +80,15 @@ _SOURCE_REGISTER = "Register"
 _TEMAS_E = is_temas_sql("e")
 _CEVIRME_E = is_cevirme_sql("e")
 _ATTEMPT_E = is_attempt_sql("e")
+_DONUS_E = is_donus_sql("e")
+_GELEN_E = is_gelen_sql("e")
 _DUR_E = duration_sec("e")
 _WON_D = won_stage_sql("d")
+
+
+def _reach_pay(ulasilan_giden: int, donus: int) -> int:
+    """Ulaşma payı: giden temas + dönüş. Payda giden arama kalır."""
+    return int(ulasilan_giden) + int(donus)
 
 
 @dataclass(frozen=True)
@@ -205,7 +219,7 @@ def _hour_expr(alias: str = "e") -> str:
 def hourly_table(
     rep_id: str | None, window: DateWindow | None = None
 ) -> list[dict[str, Any]]:
-    """Saat, arama, ulaşılan, randevu, katıldı — seçilen pencere."""
+    """Saat, giden arama, ulaşılan, dönüş, gelen, randevu, katıldı."""
     org_id = get_org_id()
     extra, params = _rep_filter("e", rep_id)
     hour = _hour_expr("e")
@@ -217,13 +231,19 @@ def hourly_table(
         calls AS (
             SELECT
               {hour} AS saat,
-              count(*) FILTER (WHERE {_CEVIRME_E})::int AS arama,
-              count(*) FILTER (WHERE {_TEMAS_E})::int AS ulasilan
+              count(*) FILTER (
+                WHERE e.direction = 'outbound' AND {_CEVIRME_E}
+              )::int AS arama,
+              count(*) FILTER (
+                WHERE e.direction = 'outbound' AND {_TEMAS_E}
+              )::int AS ulasilan_giden,
+              count(*) FILTER (WHERE {_DONUS_E})::int AS donus,
+              count(*) FILTER (WHERE {_GELEN_E})::int AS gelen
             FROM events e
             JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
             WHERE e.org_id = %s
               AND {_sales_rep_sql()}
-              AND e.channel = 'call' AND e.direction = 'outbound'
+              AND e.channel = 'call'
               AND e.occurred_at >= %s
               AND e.occurred_at <= %s
               AND e.occurred_at <= now()
@@ -253,7 +273,9 @@ def hourly_table(
         SELECT
           hours.h AS saat,
           coalesce(c.arama, 0) AS arama,
-          coalesce(c.ulasilan, 0) AS ulasilan,
+          coalesce(c.ulasilan_giden, 0) AS ulasilan_giden,
+          coalesce(c.donus, 0) AS donus,
+          coalesce(c.gelen, 0) AS gelen,
           coalesce(m.randevu, 0) AS randevu,
           coalesce(m.katildi, 0) AS katildi
         FROM hours
@@ -267,13 +289,18 @@ def hourly_table(
             (org_id, start_ts, end_ts, *params, org_id, start_ts, end_ts, *params),
         ).fetchall()
     out: list[dict[str, Any]] = []
-    for saat, arama, ulasilan, randevu, katildi in rows:
+    for saat, arama, ulasilan_giden, donus, gelen, randevu, katildi in rows:
+        arama_n = int(arama)
+        donus_n = int(donus)
+        ulasilan_n = _reach_pay(int(ulasilan_giden), donus_n)
         out.append(
             {
                 "saat": f"{int(saat):02d}:00",
-                "arama": int(arama),
-                "ulasilan": int(ulasilan),
-                "ulasma_orani": _ratio(ulasilan, arama),
+                "arama": arama_n,
+                "donus": donus_n,
+                "gelen": int(gelen),
+                "ulasilan": ulasilan_n,
+                "ulasma_orani": _ratio(ulasilan_n, arama_n),
                 "randevu": int(randevu),
                 "katildi": int(katildi),
                 "katilim_orani": _ratio(katildi, randevu),
@@ -289,6 +316,8 @@ def team_reach_and_join(
     rows = hourly_table(None, window)
     arama = sum(r["arama"] for r in rows)
     ulasilan = sum(r["ulasilan"] for r in rows)
+    donus = sum(r["donus"] for r in rows)
+    gelen = sum(r["gelen"] for r in rows)
     randevu = sum(r["randevu"] for r in rows)
     katildi = sum(r["katildi"] for r in rows)
     return {
@@ -296,6 +325,8 @@ def team_reach_and_join(
         "katilim_orani": _ratio(katildi, randevu),
         "arama": arama,
         "ulasilan": ulasilan,
+        "donus": donus,
+        "gelen": gelen,
         "randevu": randevu,
         "katildi": katildi,
     }
@@ -387,12 +418,28 @@ def today_blocks(
                 f" AND {_TEMAS_E})::int AS t_{block.key}_ulasilan"
             )
             select_parts.append(
+                f"count(*) FILTER (WHERE {today} AND {rng}"
+                f" AND {_DONUS_E})::int AS t_{block.key}_donus"
+            )
+            select_parts.append(
+                f"count(*) FILTER (WHERE {today} AND {rng}"
+                f" AND {_GELEN_E})::int AS t_{block.key}_gelen"
+            )
+            select_parts.append(
                 f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_call}"
                 f" AND {_CEVIRME_E})::int AS h_{block.key}_arama"
             )
             select_parts.append(
                 f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_call}"
                 f" AND {_TEMAS_E})::int AS h_{block.key}_ulasilan"
+            )
+            select_parts.append(
+                f"count(*) FILTER (WHERE {hist} AND {rng}"
+                f" AND {_DONUS_E})::int AS h_{block.key}_donus"
+            )
+            select_parts.append(
+                f"count(*) FILTER (WHERE {hist} AND {rng}"
+                f" AND {_GELEN_E})::int AS h_{block.key}_gelen"
             )
             _append_sure(f"t_{block.key}", today, rng)
             _append_sure(f"h_{block.key}", hist, rng)
@@ -417,6 +464,14 @@ def today_blocks(
                 f"::int AS t_{block.key}_sonuc"
             )
             select_parts.append(
+                f"count(*) FILTER (WHERE {today} AND {rng}"
+                f" AND {_DONUS_E})::int AS t_{block.key}_donus"
+            )
+            select_parts.append(
+                f"count(*) FILTER (WHERE {today} AND {rng}"
+                f" AND {_GELEN_E})::int AS t_{block.key}_gelen"
+            )
+            select_parts.append(
                 f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_meet})"
                 f"::int AS h_{block.key}_randevu"
             )
@@ -435,6 +490,14 @@ def today_blocks(
                 f" AND e.meta->>'randevu_durumu' = 'sonuc_girilmedi')"
                 f"::int AS h_{block.key}_sonuc"
             )
+            select_parts.append(
+                f"count(*) FILTER (WHERE {hist} AND {rng}"
+                f" AND {_DONUS_E})::int AS h_{block.key}_donus"
+            )
+            select_parts.append(
+                f"count(*) FILTER (WHERE {hist} AND {rng}"
+                f" AND {_GELEN_E})::int AS h_{block.key}_gelen"
+            )
 
     disi = f"NOT {planned}"
     select_parts.extend(
@@ -443,6 +506,10 @@ def today_blocks(
             f" AND {_CEVIRME_E})::int AS t_disi_arama",
             f"count(*) FILTER (WHERE {today} AND {disi} AND {is_call}"
             f" AND {_TEMAS_E})::int AS t_disi_ulasilan",
+            f"count(*) FILTER (WHERE {today} AND {disi}"
+            f" AND {_DONUS_E})::int AS t_disi_donus",
+            f"count(*) FILTER (WHERE {today} AND {disi}"
+            f" AND {_GELEN_E})::int AS t_disi_gelen",
             f"count(*) FILTER (WHERE {today} AND {disi} AND {is_meet})"
             f"::int AS t_disi_randevu",
             f"count(*) FILTER (WHERE {today} AND {disi} AND {is_meet}"
@@ -452,6 +519,10 @@ def today_blocks(
             f" AND {_CEVIRME_E})::int AS h_disi_arama",
             f"count(*) FILTER (WHERE {hist} AND {disi} AND {is_call}"
             f" AND {_TEMAS_E})::int AS h_disi_ulasilan",
+            f"count(*) FILTER (WHERE {hist} AND {disi}"
+            f" AND {_DONUS_E})::int AS h_disi_donus",
+            f"count(*) FILTER (WHERE {hist} AND {disi}"
+            f" AND {_GELEN_E})::int AS h_disi_gelen",
             f"count(*) FILTER (WHERE {hist} AND {disi} AND {is_meet})"
             f"::int AS h_disi_randevu",
             f"count(*) FILTER (WHERE {hist} AND {disi} AND {is_meet}"
@@ -514,8 +585,14 @@ def today_blocks(
         if block.kind == "call":
             t_a = packed[f"t_{block.key}_arama"]
             t_u = packed[f"t_{block.key}_ulasilan"]
+            t_d = packed[f"t_{block.key}_donus"]
+            t_g = packed[f"t_{block.key}_gelen"]
             h_a = packed[f"h_{block.key}_arama"]
             h_u = packed[f"h_{block.key}_ulasilan"]
+            h_d = packed[f"h_{block.key}_donus"]
+            h_g = packed[f"h_{block.key}_gelen"]
+            t_pay = _reach_pay(t_u, t_d)
+            h_pay = _reach_pay(h_u, h_d)
             blocks.append(
                 {
                     "key": block.key,
@@ -523,14 +600,18 @@ def today_blocks(
                     "kind": block.kind,
                     "today": {
                         "arama": t_a,
-                        "ulasilan": t_u,
-                        "ulasma_orani": _ratio(t_u, t_a),
+                        "donus": t_d,
+                        "gelen": t_g,
+                        "ulasilan": t_pay,
+                        "ulasma_orani": _ratio(t_pay, t_a),
                         **_sure_pair(f"t_{block.key}", t_u, daily_total=False),
                     },
                     "avg90": {
                         "arama": _avg(h_a),
-                        "ulasilan": _avg(h_u),
-                        "ulasma_orani": _ratio(h_u, h_a),
+                        "donus": _avg(h_d),
+                        "gelen": _avg(h_g),
+                        "ulasilan": _avg(h_pay),
+                        "ulasma_orani": _ratio(h_pay, h_a),
                         **_sure_pair(f"h_{block.key}", h_u, daily_total=True),
                     },
                 }
@@ -540,10 +621,14 @@ def today_blocks(
             t_k = packed[f"t_{block.key}_katildi"]
             t_m = packed[f"t_{block.key}_katilmadi"]
             t_s = packed[f"t_{block.key}_sonuc"]
+            t_d = packed[f"t_{block.key}_donus"]
+            t_g = packed[f"t_{block.key}_gelen"]
             h_r = packed[f"h_{block.key}_randevu"]
             h_k = packed[f"h_{block.key}_katildi"]
             h_m = packed[f"h_{block.key}_katilmadi"]
             h_s = packed[f"h_{block.key}_sonuc"]
+            h_d = packed[f"h_{block.key}_donus"]
+            h_g = packed[f"h_{block.key}_gelen"]
             blocks.append(
                 {
                     "key": block.key,
@@ -554,24 +639,34 @@ def today_blocks(
                         "katildi": t_k,
                         "katilmadi": t_m,
                         "sonuc_girilmedi": t_s,
+                        "donus": t_d,
+                        "gelen": t_g,
                     },
                     "avg90": {
                         "randevu": _avg(h_r),
                         "katildi": _avg(h_k),
                         "katilmadi": _avg(h_m),
                         "sonuc_girilmedi": _avg(h_s),
+                        "donus": _avg(h_d),
+                        "gelen": _avg(h_g),
                     },
                 }
             )
 
     t_da = packed["t_disi_arama"]
     t_du = packed["t_disi_ulasilan"]
+    t_dd = packed["t_disi_donus"]
+    t_dg = packed["t_disi_gelen"]
     t_dr = packed["t_disi_randevu"]
     t_dk = packed["t_disi_katildi"]
     h_da = packed["h_disi_arama"]
     h_du = packed["h_disi_ulasilan"]
+    h_dd = packed["h_disi_donus"]
+    h_dg = packed["h_disi_gelen"]
     h_dr = packed["h_disi_randevu"]
     h_dk = packed["h_disi_katildi"]
+    t_disi_pay = _reach_pay(t_du, t_dd)
+    h_disi_pay = _reach_pay(h_du, h_dd)
     blocks.append(
         {
             "key": BLOK_DISI.key,
@@ -579,16 +674,20 @@ def today_blocks(
             "kind": BLOK_DISI.kind,
             "today": {
                 "arama": t_da,
-                "ulasilan": t_du,
-                "ulasma_orani": _ratio(t_du, t_da),
+                "donus": t_dd,
+                "gelen": t_dg,
+                "ulasilan": t_disi_pay,
+                "ulasma_orani": _ratio(t_disi_pay, t_da),
                 "randevu": t_dr,
                 "katildi": t_dk,
                 **_sure_pair("t_disi", t_du, daily_total=False),
             },
             "avg90": {
                 "arama": _avg(h_da),
-                "ulasilan": _avg(h_du),
-                "ulasma_orani": _ratio(h_du, h_da),
+                "donus": _avg(h_dd),
+                "gelen": _avg(h_dg),
+                "ulasilan": _avg(h_disi_pay),
+                "ulasma_orani": _ratio(h_disi_pay, h_da),
                 "randevu": _avg(h_dr),
                 "katildi": _avg(h_dk),
                 **_sure_pair("h_disi", h_du, daily_total=True),
@@ -1354,13 +1453,19 @@ def weekly_series(
               date_trunc(
                 'week', e.occurred_at AT TIME ZONE 'Europe/Istanbul'
               ) AS week_start,
-              count(*) FILTER (WHERE {_CEVIRME_E})::int AS arama,
-              count(*) FILTER (WHERE {_TEMAS_E})::int AS ulasilan
+              count(*) FILTER (
+                WHERE e.direction = 'outbound' AND {_CEVIRME_E}
+              )::int AS arama,
+              count(*) FILTER (
+                WHERE e.direction = 'outbound' AND {_TEMAS_E}
+              )::int AS ulasilan_giden,
+              count(*) FILTER (WHERE {_DONUS_E})::int AS donus,
+              count(*) FILTER (WHERE {_GELEN_E})::int AS gelen
             FROM events e
             JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
             WHERE e.org_id = %s
               AND {_sales_rep_sql()}
-              AND e.channel = 'call' AND e.direction = 'outbound'
+              AND e.channel = 'call'
               AND e.occurred_at <= now()
               AND e.occurred_at >= %s
               AND e.occurred_at <= %s
@@ -1415,7 +1520,9 @@ def weekly_series(
         SELECT
           weeks.week_start,
           c.arama,
-          c.ulasilan,
+          c.ulasilan_giden,
+          c.donus,
+          c.gelen,
           m.randevu,
           m.katildi,
           lw.leads,
@@ -1457,10 +1564,15 @@ def weekly_series(
         starts = [v for v in first_meet.values() if v is not None]
         gap_from = min(starts) if starts else None
     out: list[dict[str, Any]] = []
-    for week_start, arama, ulasilan, randevu, katildi, leads, contacts, reached, reached_c in rows:
+    for week_start, arama, ulasilan_giden, donus, gelen, randevu, katildi, leads, contacts, reached, reached_c in rows:
         week = week_start
         arama_n = int(arama) if arama is not None else 0
-        ulasilan_n = int(ulasilan) if ulasilan is not None else 0
+        donus_n = int(donus) if donus is not None else 0
+        gelen_n = int(gelen) if gelen is not None else 0
+        ulasilan_n = _reach_pay(
+            int(ulasilan_giden) if ulasilan_giden is not None else 0,
+            donus_n,
+        )
         randevu_n = int(randevu) if randevu is not None else None
         katildi_n = int(katildi) if katildi is not None else None
         meeting_gap = bool(
@@ -1481,6 +1593,8 @@ def weekly_series(
                 "hafta": week,
                 "arama": kisi_basi,
                 "arama_ham": arama_n,
+                "donus": donus_n / n_reps if not rep_id else float(donus_n),
+                "gelen": gelen_n / n_reps if not rep_id else float(gelen_n),
                 "ulasma_orani": _ratio(ulasilan_n, arama_n),
                 "randevu": randevu_val,
                 "katilim_orani": katilim_val,
@@ -1566,7 +1680,9 @@ def rep_snapshot(
               count(*) FILTER (
                 WHERE e.channel = 'call' AND e.direction = 'outbound'
                   AND {_TEMAS_E}
-              )::int AS ulasilan,
+              )::int AS ulasilan_giden,
+              count(*) FILTER (WHERE {_DONUS_E})::int AS donus,
+              count(*) FILTER (WHERE {_GELEN_E})::int AS gelen,
               count(*) FILTER (
                 WHERE e.channel = 'meeting'
                   AND e.meta->>'randevu_durumu' IN ('katildi', 'katilmadi')
@@ -1596,19 +1712,24 @@ def rep_snapshot(
                 sql, (org_id, rep_id, start_at, end_at)
             ).fetchone()
         arama = int(row[0] or 0) if row else 0
-        ulasilan = int(row[1] or 0) if row else 0
-        randevu = int(row[2] or 0) if row else 0
-        katildi = int(row[3] or 0) if row else 0
+        ulasilan_giden = int(row[1] or 0) if row else 0
+        donus = int(row[2] or 0) if row else 0
+        gelen = int(row[3] or 0) if row else 0
+        randevu = int(row[4] or 0) if row else 0
+        katildi = int(row[5] or 0) if row else 0
+        ulasilan = _reach_pay(ulasilan_giden, donus)
         return {
             "arama": arama,
+            "donus": donus,
+            "gelen": gelen,
             "ulasilan": ulasilan,
             "ulasma_orani": _ratio(ulasilan, arama),
             "randevu": randevu,
             "katildi": katildi,
             "katilim_orani": _ratio(katildi, randevu),
-            "temas_randevu_orani": _ratio(randevu, ulasilan),
-            "ortalama_sn": float(row[4]) if row and row[4] is not None else None,
-            "medyan_sn": float(row[5]) if row and row[5] is not None else None,
+            "temas_randevu_orani": _ratio(randevu, ulasilan_giden),
+            "ortalama_sn": float(row[6]) if row and row[6] is not None else None,
+            "medyan_sn": float(row[7]) if row and row[7] is not None else None,
         }
 
     current = _window(start_ts, end_ts)
@@ -1639,6 +1760,8 @@ def rep_snapshot(
     days = max(_workdays_in(w), 1)
     for bucket in (current, previous):
         bucket["arama_gun"] = round(bucket["arama"] / days, 1)
+        bucket["donus_gun"] = round(bucket["donus"] / days, 1)
+        bucket["gelen_gun"] = round(bucket["gelen"] / days, 1)
         bucket["ulasilan_gun"] = round(bucket["ulasilan"] / days, 1)
         bucket["randevu_gun"] = round(bucket["randevu"] / days, 1)
         bucket["toplanti_gun"] = round(bucket["katildi"] / days, 1)
