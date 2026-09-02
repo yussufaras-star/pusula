@@ -798,17 +798,33 @@ def _render_block_card(block: dict[str, Any]) -> None:
             _block_metric_row(
                 [
                     {
+                        "label": "giden arama",
+                        "cur": int(today.get("arama") or 0),
+                        "prev": avg90.get("arama"),
+                        "help_text": HELP_ARAMA,
+                    },
+                    {
+                        "label": "ulaşılan görüşme",
+                        "cur": int(today.get("ulasilan") or 0),
+                        "prev": avg90.get("ulasilan"),
+                        "help_text": HELP_ULASILAN,
+                    },
+                    {
                         "label": "randevu",
-                        "cur": today.get("randevu"),
+                        "cur": int(today.get("randevu") or 0),
                         "prev": avg90.get("randevu"),
                         "help_text": HELP_RANDEVU,
                     },
                     {
                         "label": "katıldı",
-                        "cur": today.get("katildi"),
+                        "cur": int(today.get("katildi") or 0),
                         "prev": avg90.get("katildi"),
                         "help_text": HELP_KATILIM,
                     },
+                ]
+            )
+            _block_metric_row(
+                [
                     {
                         "label": "katılmadı",
                         "cur": today.get("katilmadi"),
@@ -820,22 +836,6 @@ def _render_block_card(block: dict[str, Any]) -> None:
                         "cur": today.get("sonuc_girilmedi"),
                         "prev": avg90.get("sonuc_girilmedi"),
                         "help_text": HELP_KATILIM,
-                    },
-                ]
-            )
-            _block_metric_row(
-                [
-                    {
-                        "label": "giden arama",
-                        "cur": today.get("arama"),
-                        "prev": avg90.get("arama"),
-                        "help_text": HELP_ARAMA,
-                    },
-                    {
-                        "label": "ulaşılan görüşme",
-                        "cur": today.get("ulasilan"),
-                        "prev": avg90.get("ulasilan"),
-                        "help_text": HELP_ULASILAN,
                     },
                     {
                         "label": "dönüş araması",
