@@ -62,6 +62,7 @@ from pusula.panel_data import (
     funnel_dropped_by_rep,
     hourly_table,
     latest_event_created_at,
+    lead_reach_breakdown,
     load_rep_by_email,
     load_reps,
     mean,
@@ -89,6 +90,18 @@ HELP_ULASMA = (
     "yapilan benzersiz lead. Pay: en az bir giden gorusme (sure > 0) "
     "veya en az bir donus alinan benzersiz lead. Ayni lead bir kez "
     "sayilir. Donusler dahildir."
+)
+HELP_ARANAN_LEAD = (
+    "Donemde en az bir giden arama yapilan benzersiz lead."
+)
+HELP_GIDEN_TEMAS = (
+    "En az bir giden temas (sure > 0 gorusme) kurulan benzersiz lead."
+)
+HELP_DONUSLE_GELEN = (
+    "Giden aramayla ulasilamamis ama sonrasinda kendisi donmus lead'ler."
+)
+HELP_BENZERSIZ_ULASILAN = (
+    "Giden temas ile donusle gelenin toplami. Ayni lead bir kez sayilir."
 )
 HELP_ARAMA = (
     "Giden arama sayisi. Karsi taraf acmasa bile sayilir. "
@@ -203,6 +216,11 @@ COL_HELP: dict[str, str] = {
     "ulaşılan": HELP_ULASILAN,
     "ulaşılan/gün": HELP_ULASILAN,
     "ulaşma %": HELP_ULASMA,
+    "oran": HELP_ULASMA,
+    "aranan lead": HELP_ARANAN_LEAD,
+    "giden temas": HELP_GIDEN_TEMAS,
+    "dönüşle gelen": HELP_DONUSLE_GELEN,
+    "benzersiz ulaşılan": HELP_BENZERSIZ_ULASILAN,
     "randevu": HELP_RANDEVU,
     "randevu/gün": HELP_RANDEVU,
     "katılım %": HELP_KATILIM,
@@ -358,6 +376,17 @@ def _team_dip(start: str, end: str) -> dict[str, float | None]:
 
 
 @st.cache_data(ttl=CACHE_TTL)
+def _reach_break(
+    start: str, end: str, rep_id: str | None, by_rep: bool
+) -> list[dict[str, Any]]:
+    return lead_reach_breakdown(
+        DateWindow(date.fromisoformat(start), date.fromisoformat(end)),
+        rep_id=rep_id,
+        by_rep=by_rep,
+    )
+
+
+@st.cache_data(ttl=CACHE_TTL)
 def _board(
     rep_id: str | None, arama_per_lead: float, toplanti_gun: float
 ) -> dict[str, Any]:
@@ -508,6 +537,23 @@ def _heading(
 
 def _keys(window: DateWindow) -> tuple[str, str]:
     return window.start.isoformat(), window.end.isoformat()
+
+
+def _show_reach_break(rows: list[dict[str, Any]], *, named: bool) -> None:
+    """Ulaşma oranı kırılım tablosu. named=False isimsiz toplam."""
+    if not rows:
+        st.caption("veri yetersiz")
+        return
+    frame = _df(rows)
+    show = pd.DataFrame()
+    if named:
+        show["temsilci"] = frame["temsilci"]
+    show["aranan lead"] = frame["aranan"]
+    show["giden temas"] = frame["giden_temas"]
+    show["dönüşle gelen"] = frame["donusle_gelen"]
+    show["benzersiz ulaşılan"] = frame["ulasilan"]
+    show["oran"] = frame["oran"].map(fmt_pct)
+    _table(show)
 
 
 def _as_date(value: Any) -> date:
@@ -1170,6 +1216,9 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
             ]
         )
 
+    _heading("Ulaşma oranı", HELP_ULASMA, window)
+    _show_reach_break(_reach_break(start, end, None, True), named=True)
+
     _heading("Günlük iş yükü (kişi başı)", HELP_ISYUKU, default_window())
     p1, p2 = st.columns(2)
     arama_per_lead = p1.number_input(
@@ -1554,6 +1603,9 @@ def render_temsilci(
         )
         st.caption(f"CRM kayıt tahmini {CRM_DK_PER_GORUSME} dk/görüşme")
 
+    _heading("Ulaşma oranı", HELP_ULASMA, window)
+    _show_reach_break(_reach_break(start, end, rep_id, False), named=False)
+
     _heading("Saatlik giden arama ve ulaşma", HELP_ULASMA, window)
     hourly = _hourly(rep_id, start, end)
     hframe = _df(hourly)
@@ -1602,6 +1654,8 @@ def render_ekip(window: DateWindow, block_day: date) -> None:
     conv = conv_window(window)
     _render_bugun(None, block_day, blok_disi=False)
     st.divider()
+    _heading("Ulaşma oranı", HELP_ULASMA, window)
+    _show_reach_break(_reach_break(start, end, None, False), named=False)
     _heading("Toplantı etkisi", HELP_TOPLANTI, conv)
     path = _df(_path(start, end))
     path["genelde"] = path["genelde"].map(fmt_pct)

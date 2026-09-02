@@ -20,6 +20,8 @@ Ulaşma oranı (lead bazlı):
   pay — en az bir giden görüşme (outbound duration_sec > 0)
     veya en az bir dönüş alınan benzersiz thread_id
   kesişim bir kez sayılır. is_temas_sql değişmez.
+  Kırılım: giden temas + dönüşle gelen = benzersiz ulaşılan.
+  Dönüşle gelen: dönemde dönüşü var, giden görüşmesi yok.
 
 Lead ilerleme kovası pusula.lead_reach'tedir.
 """
@@ -348,4 +350,27 @@ def distinct_reached_leads_sql(
               AND {is_lead_reached_sql(alias)}
               {extra_sql}
         )
+    """
+
+
+def lead_reach_thread_flags_sql(alias: str = "e") -> str:
+    """Thread kırılımı: aranan, giden temas, dönüş. GROUP BY thread_id."""
+    return f"""
+        bool_or({is_giden_arama_sql(alias)}) AS attempted,
+        bool_or({is_giden_gorusme_sql(alias)}) AS giden_temas,
+        bool_or({is_donus_sql(alias)}) AS has_donus
+    """
+
+
+def lead_reach_split_agg_sql(alias: str = "t") -> str:
+    """attempted / giden_temas / donusle_gelen / ulasilan. Toplanabilir."""
+    return f"""
+        count(*) FILTER (WHERE {alias}.attempted)::int AS aranan,
+        count(*) FILTER (WHERE {alias}.giden_temas)::int AS giden_temas,
+        count(*) FILTER (
+            WHERE {alias}.has_donus AND NOT {alias}.giden_temas
+        )::int AS donusle_gelen,
+        count(*) FILTER (
+            WHERE {alias}.giden_temas OR {alias}.has_donus
+        )::int AS ulasilan
     """

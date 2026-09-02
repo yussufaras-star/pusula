@@ -27,6 +27,8 @@ from pusula.temas import (
     is_donus_sql,
     is_gelen_sql,
     is_temas_sql,
+    lead_reach_split_agg_sql,
+    lead_reach_thread_flags_sql,
 )
 
 _TZ = ZoneInfo("Europe/Istanbul")
@@ -368,6 +370,133 @@ def _lead_reach_counts(
     with connect() as conn:
         row = conn.execute(sql, (org_id, start_ts, end_ts, *params)).fetchone()
     return (int(row[0] or 0) if row else 0, int(row[1] or 0) if row else 0)
+
+
+def _reach_break_row(
+    temsilci: str | None,
+    aranan: int,
+    giden_temas: int,
+    donusle_gelen: int,
+    ulasilan: int,
+) -> dict[str, Any]:
+    return {
+        "temsilci": temsilci,
+        "aranan": int(aranan),
+        "giden_temas": int(giden_temas),
+        "donusle_gelen": int(donusle_gelen),
+        "ulasilan": int(ulasilan),
+        "oran": _ratio(ulasilan, aranan),
+    }
+
+
+def _reach_break_from_events(
+    window: DateWindow | None,
+    *,
+    rep_id: str | None,
+    by_rep: bool,
+) -> list[tuple[Any, ...]]:
+    """Thread bayraklarını temsilci veya ekip düzeyinde toplar."""
+    org_id = get_org_id()
+    extra, params = _rep_filter("e", None if by_rep else rep_id)
+    start_ts, end_ts = _bounds(window)
+    flags = lead_reach_thread_flags_sql("e")
+    agg = lead_reach_split_agg_sql("t")
+    if by_rep:
+        sql = f"""
+            WITH flags AS (
+                SELECT e.rep_id, r.full_name, e.thread_id,
+                  {flags}
+                FROM events e
+                JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+                WHERE e.org_id = %s
+                  AND {_sales_rep_sql()}
+                  AND e.channel = 'call'
+                  AND e.occurred_at >= %s
+                  AND e.occurred_at <= %s
+                  AND e.occurred_at <= now()
+                  AND e.thread_id IS NOT NULL
+                  {extra}
+                GROUP BY e.rep_id, r.full_name, e.thread_id
+            )
+            SELECT t.full_name, {agg}
+            FROM flags t
+            GROUP BY t.full_name
+            ORDER BY t.full_name
+        """
+    else:
+        sql = f"""
+            WITH flags AS (
+                SELECT e.thread_id,
+                  {flags}
+                FROM events e
+                JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+                WHERE e.org_id = %s
+                  AND {_sales_rep_sql()}
+                  AND e.channel = 'call'
+                  AND e.occurred_at >= %s
+                  AND e.occurred_at <= %s
+                  AND e.occurred_at <= now()
+                  AND e.thread_id IS NOT NULL
+                  {extra}
+                GROUP BY e.thread_id
+            )
+            SELECT {agg}
+            FROM flags t
+        """
+    with connect() as conn:
+        return list(conn.execute(sql, (org_id, start_ts, end_ts, *params)).fetchall())
+
+
+def lead_reach_breakdown(
+    window: DateWindow | None = None,
+    *,
+    rep_id: str | None = None,
+    by_rep: bool = False,
+) -> list[dict[str, Any]]:
+    """Ulaşma kırılımı: aranan, giden temas, dönüşle gelen, ulaşılan.
+
+    by_rep: temsilci satırları + ekip (ekip benzersiz thread, toplam değil).
+    rep_id ve by_rep yok: isimsiz ekip satırı.
+    """
+    if by_rep:
+        raw = _reach_break_from_events(window, rep_id=None, by_rep=True)
+        by_name = {
+            str(name): _reach_break_row(
+                str(name), int(a or 0), int(g or 0), int(d or 0), int(u or 0)
+            )
+            for name, a, g, d, u in raw
+        }
+        out: list[dict[str, Any]] = []
+        for rep in load_reps():
+            out.append(
+                by_name.get(
+                    rep.full_name,
+                    _reach_break_row(rep.full_name, 0, 0, 0, 0),
+                )
+            )
+        team = _reach_break_from_events(window, rep_id=None, by_rep=False)
+        if team:
+            a, g, d, u = team[0]
+            out.append(
+                _reach_break_row("ekip", int(a or 0), int(g or 0), int(d or 0), int(u or 0))
+            )
+        else:
+            out.append(_reach_break_row("ekip", 0, 0, 0, 0))
+        return out
+
+    raw = _reach_break_from_events(window, rep_id=rep_id, by_rep=False)
+    if not raw:
+        name = None
+        if rep_id:
+            names = {r.rep_id: r.full_name for r in load_reps()}
+            name = names.get(rep_id)
+        return [_reach_break_row(name, 0, 0, 0, 0)]
+    a, g, d, u = raw[0]
+    name = None
+    if rep_id:
+        names = {r.rep_id: r.full_name for r in load_reps()}
+        name = names.get(rep_id)
+    return [_reach_break_row(name, int(a or 0), int(g or 0), int(d or 0), int(u or 0))]
 
 
 def _hist_weekdays(before: date | None = None) -> int:
