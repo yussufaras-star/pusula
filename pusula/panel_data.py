@@ -575,112 +575,94 @@ def today_blocks(
     select_parts: list[str] = []
     for block in PLANNED_BLOCKS:
         rng = f"{hour} >= {block.start_hour} AND {hour} < {block.end_hour}"
-        if block.kind == "call":
-            select_parts.append(
-                f"count(*) FILTER (WHERE {today} AND {rng} AND {is_call}"
-                f" AND {_CEVIRME_E})::int AS t_{block.key}_arama"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {today} AND {rng} AND {is_call}"
-                f" AND {_TEMAS_E})::int AS t_{block.key}_ulasilan"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {today} AND {rng}"
-                f" AND {_DONUS_E})::int AS t_{block.key}_donus"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {today} AND {rng}"
-                f" AND {_GELEN_E})::int AS t_{block.key}_gelen"
-            )
-            select_parts.append(
-                f"{distinct_attempted_leads_sql('e', extra=f'{today} AND {rng}')}"
-                f"::int AS t_{block.key}_lead_payda"
-            )
-            select_parts.append(
-                f"{distinct_reached_leads_sql('e', extra=f'{today} AND {rng}')}"
-                f"::int AS t_{block.key}_lead_pay"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_call}"
-                f" AND {_CEVIRME_E})::int AS h_{block.key}_arama"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_call}"
-                f" AND {_TEMAS_E})::int AS h_{block.key}_ulasilan"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {hist} AND {rng}"
-                f" AND {_DONUS_E})::int AS h_{block.key}_donus"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {hist} AND {rng}"
-                f" AND {_GELEN_E})::int AS h_{block.key}_gelen"
-            )
-            select_parts.append(
-                f"{distinct_attempted_leads_sql('e', day_expr=_DAY_IST, extra=f'{hist} AND {rng}')}"
-                f"::int AS h_{block.key}_lead_payda"
-            )
-            select_parts.append(
-                f"{distinct_reached_leads_sql('e', day_expr=_DAY_IST, extra=f'{hist} AND {rng}')}"
-                f"::int AS h_{block.key}_lead_pay"
-            )
-            _append_sure(f"t_{block.key}", today, rng)
-            _append_sure(f"h_{block.key}", hist, rng)
-        else:
-            select_parts.append(
-                f"count(*) FILTER (WHERE {today} AND {rng} AND {is_meet})"
-                f"::int AS t_{block.key}_randevu"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {today} AND {rng} AND {is_meet}"
-                f" AND e.meta->>'randevu_durumu' = 'katildi')"
-                f"::int AS t_{block.key}_katildi"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {today} AND {rng} AND {is_meet}"
-                f" AND e.meta->>'randevu_durumu' = 'katilmadi')"
-                f"::int AS t_{block.key}_katilmadi"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {today} AND {rng} AND {is_meet}"
-                f" AND e.meta->>'randevu_durumu' = 'sonuc_girilmedi')"
-                f"::int AS t_{block.key}_sonuc"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {today} AND {rng}"
-                f" AND {_DONUS_E})::int AS t_{block.key}_donus"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {today} AND {rng}"
-                f" AND {_GELEN_E})::int AS t_{block.key}_gelen"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_meet})"
-                f"::int AS h_{block.key}_randevu"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_meet}"
-                f" AND e.meta->>'randevu_durumu' = 'katildi')"
-                f"::int AS h_{block.key}_katildi"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_meet}"
-                f" AND e.meta->>'randevu_durumu' = 'katilmadi')"
-                f"::int AS h_{block.key}_katilmadi"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_meet}"
-                f" AND e.meta->>'randevu_durumu' = 'sonuc_girilmedi')"
-                f"::int AS h_{block.key}_sonuc"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {hist} AND {rng}"
-                f" AND {_DONUS_E})::int AS h_{block.key}_donus"
-            )
-            select_parts.append(
-                f"count(*) FILTER (WHERE {hist} AND {rng}"
-                f" AND {_GELEN_E})::int AS h_{block.key}_gelen"
-            )
+        select_parts.append(
+            f"count(*) FILTER (WHERE {today} AND {rng} AND {is_call}"
+            f" AND {_CEVIRME_E})::int AS t_{block.key}_arama"
+        )
+        select_parts.append(
+            f"count(*) FILTER (WHERE {today} AND {rng} AND {is_call}"
+            f" AND {_TEMAS_E})::int AS t_{block.key}_ulasilan"
+        )
+        select_parts.append(
+            f"count(*) FILTER (WHERE {today} AND {rng}"
+            f" AND {_DONUS_E})::int AS t_{block.key}_donus"
+        )
+        select_parts.append(
+            f"count(*) FILTER (WHERE {today} AND {rng}"
+            f" AND {_GELEN_E})::int AS t_{block.key}_gelen"
+        )
+        select_parts.append(
+            f"{distinct_attempted_leads_sql('e', extra=f'{today} AND {rng}')}"
+            f"::int AS t_{block.key}_lead_payda"
+        )
+        select_parts.append(
+            f"{distinct_reached_leads_sql('e', extra=f'{today} AND {rng}')}"
+            f"::int AS t_{block.key}_lead_pay"
+        )
+        select_parts.append(
+            f"count(*) FILTER (WHERE {today} AND {rng} AND {is_meet})"
+            f"::int AS t_{block.key}_randevu"
+        )
+        select_parts.append(
+            f"count(*) FILTER (WHERE {today} AND {rng} AND {is_meet}"
+            f" AND e.meta->>'randevu_durumu' = 'katildi')"
+            f"::int AS t_{block.key}_katildi"
+        )
+        select_parts.append(
+            f"count(*) FILTER (WHERE {today} AND {rng} AND {is_meet}"
+            f" AND e.meta->>'randevu_durumu' = 'katilmadi')"
+            f"::int AS t_{block.key}_katilmadi"
+        )
+        select_parts.append(
+            f"count(*) FILTER (WHERE {today} AND {rng} AND {is_meet}"
+            f" AND e.meta->>'randevu_durumu' = 'sonuc_girilmedi')"
+            f"::int AS t_{block.key}_sonuc"
+        )
+        select_parts.append(
+            f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_call}"
+            f" AND {_CEVIRME_E})::int AS h_{block.key}_arama"
+        )
+        select_parts.append(
+            f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_call}"
+            f" AND {_TEMAS_E})::int AS h_{block.key}_ulasilan"
+        )
+        select_parts.append(
+            f"count(*) FILTER (WHERE {hist} AND {rng}"
+            f" AND {_DONUS_E})::int AS h_{block.key}_donus"
+        )
+        select_parts.append(
+            f"count(*) FILTER (WHERE {hist} AND {rng}"
+            f" AND {_GELEN_E})::int AS h_{block.key}_gelen"
+        )
+        select_parts.append(
+            f"{distinct_attempted_leads_sql('e', day_expr=_DAY_IST, extra=f'{hist} AND {rng}')}"
+            f"::int AS h_{block.key}_lead_payda"
+        )
+        select_parts.append(
+            f"{distinct_reached_leads_sql('e', day_expr=_DAY_IST, extra=f'{hist} AND {rng}')}"
+            f"::int AS h_{block.key}_lead_pay"
+        )
+        select_parts.append(
+            f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_meet})"
+            f"::int AS h_{block.key}_randevu"
+        )
+        select_parts.append(
+            f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_meet}"
+            f" AND e.meta->>'randevu_durumu' = 'katildi')"
+            f"::int AS h_{block.key}_katildi"
+        )
+        select_parts.append(
+            f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_meet}"
+            f" AND e.meta->>'randevu_durumu' = 'katilmadi')"
+            f"::int AS h_{block.key}_katilmadi"
+        )
+        select_parts.append(
+            f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_meet}"
+            f" AND e.meta->>'randevu_durumu' = 'sonuc_girilmedi')"
+            f"::int AS h_{block.key}_sonuc"
+        )
+        _append_sure(f"t_{block.key}", today, rng)
+        _append_sure(f"h_{block.key}", hist, rng)
 
     disi = f"NOT {planned}"
     select_parts.extend(
@@ -773,80 +755,59 @@ def today_blocks(
 
     blocks: list[dict[str, Any]] = []
     for block in PLANNED_BLOCKS:
-        if block.kind == "call":
-            t_a = packed[f"t_{block.key}_arama"]
-            t_u = packed[f"t_{block.key}_ulasilan"]
-            t_d = packed[f"t_{block.key}_donus"]
-            t_g = packed[f"t_{block.key}_gelen"]
-            t_lp = packed[f"t_{block.key}_lead_pay"]
-            t_ld = packed[f"t_{block.key}_lead_payda"]
-            h_a = packed[f"h_{block.key}_arama"]
-            h_u = packed[f"h_{block.key}_ulasilan"]
-            h_d = packed[f"h_{block.key}_donus"]
-            h_g = packed[f"h_{block.key}_gelen"]
-            h_lp = packed[f"h_{block.key}_lead_pay"]
-            h_ld = packed[f"h_{block.key}_lead_payda"]
-            t_pay = _reach_pay(t_u, t_d)
-            h_pay = _reach_pay(h_u, h_d)
-            blocks.append(
-                {
-                    "key": block.key,
-                    "label": block.label,
-                    "kind": block.kind,
-                    "today": {
-                        "arama": t_a,
-                        "donus": t_d,
-                        "gelen": t_g,
-                        "ulasilan": t_pay,
-                        "ulasma_orani": _ratio(t_lp, t_ld),
-                        **_sure_pair(f"t_{block.key}", t_u, daily_total=False),
-                    },
-                    "avg90": {
-                        "arama": _avg(h_a),
-                        "donus": _avg(h_d),
-                        "gelen": _avg(h_g),
-                        "ulasilan": _avg(h_pay),
-                        "ulasma_orani": _ratio(h_lp, h_ld),
-                        **_sure_pair(f"h_{block.key}", h_u, daily_total=True),
-                    },
-                }
-            )
-        else:
-            t_r = packed[f"t_{block.key}_randevu"]
-            t_k = packed[f"t_{block.key}_katildi"]
-            t_m = packed[f"t_{block.key}_katilmadi"]
-            t_s = packed[f"t_{block.key}_sonuc"]
-            t_d = packed[f"t_{block.key}_donus"]
-            t_g = packed[f"t_{block.key}_gelen"]
-            h_r = packed[f"h_{block.key}_randevu"]
-            h_k = packed[f"h_{block.key}_katildi"]
-            h_m = packed[f"h_{block.key}_katilmadi"]
-            h_s = packed[f"h_{block.key}_sonuc"]
-            h_d = packed[f"h_{block.key}_donus"]
-            h_g = packed[f"h_{block.key}_gelen"]
-            blocks.append(
-                {
-                    "key": block.key,
-                    "label": block.label,
-                    "kind": block.kind,
-                    "today": {
-                        "randevu": t_r,
-                        "katildi": t_k,
-                        "katilmadi": t_m,
-                        "sonuc_girilmedi": t_s,
-                        "donus": t_d,
-                        "gelen": t_g,
-                    },
-                    "avg90": {
-                        "randevu": _avg(h_r),
-                        "katildi": _avg(h_k),
-                        "katilmadi": _avg(h_m),
-                        "sonuc_girilmedi": _avg(h_s),
-                        "donus": _avg(h_d),
-                        "gelen": _avg(h_g),
-                    },
-                }
-            )
+        t_a = packed[f"t_{block.key}_arama"]
+        t_u = packed[f"t_{block.key}_ulasilan"]
+        t_d = packed[f"t_{block.key}_donus"]
+        t_g = packed[f"t_{block.key}_gelen"]
+        t_lp = packed[f"t_{block.key}_lead_pay"]
+        t_ld = packed[f"t_{block.key}_lead_payda"]
+        t_r = packed[f"t_{block.key}_randevu"]
+        t_k = packed[f"t_{block.key}_katildi"]
+        t_m = packed[f"t_{block.key}_katilmadi"]
+        t_s = packed[f"t_{block.key}_sonuc"]
+        h_a = packed[f"h_{block.key}_arama"]
+        h_u = packed[f"h_{block.key}_ulasilan"]
+        h_d = packed[f"h_{block.key}_donus"]
+        h_g = packed[f"h_{block.key}_gelen"]
+        h_lp = packed[f"h_{block.key}_lead_pay"]
+        h_ld = packed[f"h_{block.key}_lead_payda"]
+        h_r = packed[f"h_{block.key}_randevu"]
+        h_k = packed[f"h_{block.key}_katildi"]
+        h_m = packed[f"h_{block.key}_katilmadi"]
+        h_s = packed[f"h_{block.key}_sonuc"]
+        t_pay = _reach_pay(t_u, t_d)
+        h_pay = _reach_pay(h_u, h_d)
+        blocks.append(
+            {
+                "key": block.key,
+                "label": block.label,
+                "kind": block.kind,
+                "today": {
+                    "arama": t_a,
+                    "donus": t_d,
+                    "gelen": t_g,
+                    "ulasilan": t_pay,
+                    "ulasma_orani": _ratio(t_lp, t_ld),
+                    "randevu": t_r,
+                    "katildi": t_k,
+                    "katilmadi": t_m,
+                    "sonuc_girilmedi": t_s,
+                    **_sure_pair(f"t_{block.key}", t_u, daily_total=False),
+                },
+                "avg90": {
+                    "arama": _avg(h_a),
+                    "donus": _avg(h_d),
+                    "gelen": _avg(h_g),
+                    "ulasilan": _avg(h_pay),
+                    "ulasma_orani": _ratio(h_lp, h_ld),
+                    "randevu": _avg(h_r),
+                    "katildi": _avg(h_k),
+                    "katilmadi": _avg(h_m),
+                    "sonuc_girilmedi": _avg(h_s),
+                    **_sure_pair(f"h_{block.key}", h_u, daily_total=True),
+                },
+            }
+        )
 
     t_da = packed["t_disi_arama"]
     t_du = packed["t_disi_ulasilan"]

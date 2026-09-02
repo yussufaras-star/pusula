@@ -696,9 +696,9 @@ def _block_metric(item: dict[str, Any]) -> None:
 
 
 def _block_metric_row(items: list[dict[str, Any]]) -> None:
-    n = max(len(items), 1)
-    cols = st.columns(n, gap="small")
-    for col, item in zip(cols, items):
+    """Her blok kartında aynı 4 kolon; eksik slot boş kalır."""
+    cols = st.columns(4, gap="small")
+    for col, item in zip(cols, items[:4]):
         with col:
             _block_metric(item)
 
@@ -786,6 +786,12 @@ def _render_block_card(block: dict[str, Any]) -> None:
                         "prev": avg90.get("gelen"),
                         "help_text": HELP_GELEN,
                     },
+                    {
+                        "label": "randevu",
+                        "cur": today.get("randevu"),
+                        "prev": avg90.get("randevu"),
+                        "help_text": HELP_RANDEVU,
+                    },
                 ]
             )
         elif kind == "meeting":
@@ -819,6 +825,18 @@ def _render_block_card(block: dict[str, Any]) -> None:
             )
             _block_metric_row(
                 [
+                    {
+                        "label": "giden arama",
+                        "cur": today.get("arama"),
+                        "prev": avg90.get("arama"),
+                        "help_text": HELP_ARAMA,
+                    },
+                    {
+                        "label": "ulaşılan görüşme",
+                        "cur": today.get("ulasilan"),
+                        "prev": avg90.get("ulasilan"),
+                        "help_text": HELP_ULASILAN,
+                    },
                     {
                         "label": "dönüş araması",
                         "cur": today.get("donus"),
