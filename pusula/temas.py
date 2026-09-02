@@ -14,6 +14,13 @@ RETURN_CALL_LOOKBACK_DAYS gün içinde outbound kayıt var.
 Gelen arama: aynı inbound koşulu, dönüş olmayanlar.
 Süre sıfır inbound cevapsızdır, sayıma girmez.
 
+Ulaşma oranı (lead bazlı):
+  payda — dönemde en az bir giden arama (connected) yapılan
+    benzersiz thread_id
+  pay — en az bir giden görüşme (outbound duration_sec > 0)
+    veya en az bir dönüş alınan benzersiz thread_id
+  kesişim bir kez sayılır. is_temas_sql değişmez.
+
 Lead ilerleme kovası pusula.lead_reach'tedir.
 """
 
@@ -267,4 +274,78 @@ def is_gelen_sql(alias: str = "e") -> str:
     return f"""
         {is_answered_inbound_sql(alias)}
         AND NOT ({has_prior_outbound_sql(alias)})
+    """
+
+
+def is_giden_arama_sql(alias: str = "e") -> str:
+    """Giden faaliyet: outbound connected. Ulaşma paydası adayı."""
+    return f"""
+        {alias}.channel = 'call'
+        AND {alias}.direction = 'outbound'
+        AND {is_cevirme_sql(alias)}
+    """
+
+
+def is_giden_gorusme_sql(alias: str = "e") -> str:
+    """Giden görüşme açıldı: outbound, süre > 0. Planlanmış değil.
+
+    is_temas_sql call_result'a bakar; lead bazlı pay süreye bakar.
+    """
+    dur = duration_sec(alias)
+    return f"""
+        {alias}.channel = 'call'
+        AND {alias}.direction = 'outbound'
+        AND {is_not_planned_sql(alias)}
+        AND {is_not_future_sql(alias)}
+        AND coalesce({dur}, 0) > 0
+    """
+
+
+def is_lead_reached_sql(alias: str = "e") -> str:
+    """Lead'e ulaşıldı: giden görüşme veya dönüş olayı."""
+    return f"""
+        (
+            {is_giden_gorusme_sql(alias)}
+            OR {is_donus_sql(alias)}
+        )
+    """
+
+
+def distinct_attempted_leads_sql(
+    alias: str = "e",
+    *,
+    day_expr: str | None = None,
+    extra: str = "",
+) -> str:
+    """Ulaşma paydası: benzersiz thread (veya gün+thread)."""
+    key = f"{alias}.thread_id"
+    if day_expr:
+        key = f"({day_expr}, {alias}.thread_id)"
+    extra_sql = f" AND ({extra})" if extra else ""
+    return f"""
+        count(DISTINCT {key}) FILTER (
+            WHERE {alias}.thread_id IS NOT NULL
+              AND {is_giden_arama_sql(alias)}
+              {extra_sql}
+        )
+    """
+
+
+def distinct_reached_leads_sql(
+    alias: str = "e",
+    *,
+    day_expr: str | None = None,
+    extra: str = "",
+) -> str:
+    """Ulaşma payı: benzersiz thread (veya gün+thread)."""
+    key = f"{alias}.thread_id"
+    if day_expr:
+        key = f"({day_expr}, {alias}.thread_id)"
+    extra_sql = f" AND ({extra})" if extra else ""
+    return f"""
+        count(DISTINCT {key}) FILTER (
+            WHERE {alias}.thread_id IS NOT NULL
+              AND {is_lead_reached_sql(alias)}
+              {extra_sql}
+        )
     """

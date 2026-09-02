@@ -25,7 +25,13 @@ from pusula.panel_data import (
     take_rate,
     weekly_series,
 )
-from pusula.temas import is_cevirme_sql, is_donus_sql, is_temas_sql
+from pusula.temas import (
+    distinct_attempted_leads_sql,
+    distinct_reached_leads_sql,
+    is_cevirme_sql,
+    is_donus_sql,
+    is_temas_sql,
+)
 
 _TZ = ZoneInfo("Europe/Istanbul")
 REL_THRESHOLD = 0.20
@@ -41,6 +47,8 @@ _PORTFOLIO_NOTES: dict[str, str] = {
 _CEVIRME = is_cevirme_sql("e")
 _TEMAS = is_temas_sql("e")
 _DONUS = is_donus_sql("e")
+_LEAD_PAYDA = distinct_attempted_leads_sql("e")
+_LEAD_PAY = distinct_reached_leads_sql("e")
 
 MetricDir = Literal["yukseliyor", "sabit", "dusuyor", "veri yetersiz"]
 
@@ -127,6 +135,8 @@ def _ops_90d(window: DateWindow | None = None) -> dict[str, dict[str, Any]]:
               AND {_TEMAS}
           )::int AS ulasilan_giden,
           count(*) FILTER (WHERE {_DONUS})::int AS donus,
+          {_LEAD_PAYDA}::int AS lead_payda,
+          {_LEAD_PAY}::int AS lead_pay,
           count(*) FILTER (
             WHERE e.channel = 'meeting'
               AND e.meta->>'randevu_durumu' IN ('katildi', 'katilmadi')
@@ -153,9 +163,11 @@ def _ops_90d(window: DateWindow | None = None) -> dict[str, dict[str, Any]]:
             sql, (list(SALES_TEAM_IDS), org_id, start_ts, end_ts)
         ).fetchall()
     out: dict[str, dict[str, Any]] = {}
-    for rep_id, name, arama, ulasilan_giden, donus, randevu, katildi, bos in rows:
+    for rep_id, name, arama, ulasilan_giden, donus, lead_payda, lead_pay, randevu, katildi, bos in rows:
         arama_n = int(arama or 0)
         ulasilan_n = int(ulasilan_giden or 0) + int(donus or 0)
+        payda_n = int(lead_payda or 0)
+        pay_n = int(lead_pay or 0)
         randevu_n = int(randevu or 0)
         katildi_n = int(katildi or 0)
         bos_n = int(bos or 0)
@@ -165,7 +177,9 @@ def _ops_90d(window: DateWindow | None = None) -> dict[str, dict[str, Any]]:
             "temsilci": str(name),
             "arama": float(arama_n),
             "ulasilan": float(ulasilan_n),
-            "ulasma_orani": _ratio(ulasilan_n, arama_n),
+            "lead_payda": float(payda_n),
+            "lead_pay": float(pay_n),
+            "ulasma_orani": _ratio(pay_n, payda_n),
             "randevu": float(randevu_n),
             "katildi": float(katildi_n),
             "sonuc_bos": float(bos_n),
@@ -195,14 +209,15 @@ def _team_pooled(
     """Oranlar havuzlanır (pay/payda), sayılar kişi başı ortalama."""
     n = max(len(rows), 1)
     arama = sum(float(r.get("arama") or 0) for r in rows)
-    ulasilan = sum(float(r.get("ulasilan") or 0) for r in rows)
+    lead_pay = sum(float(r.get("lead_pay") or 0) for r in rows)
+    lead_payda = sum(float(r.get("lead_payda") or 0) for r in rows)
     randevu = sum(float(r.get("randevu") or 0) for r in rows)
     katildi = sum(float(r.get("katildi") or 0) for r in rows)
     bos = sum(float(r.get("sonuc_bos") or 0) for r in rows)
     ciro = sum(float(r.get("ciro") or 0) for r in rows)
     return {
         "arama": arama / n,
-        "ulasma_orani": _ratio(ulasilan, arama),
+        "ulasma_orani": _ratio(lead_pay, lead_payda),
         "randevu": randevu / n,
         "katilim_orani": _ratio(katildi, randevu),
         "sonuc_girme_orani": _ratio(randevu, randevu + bos),
@@ -321,6 +336,8 @@ def _monthly_ops() -> dict[str, dict[datetime, dict[str, Any]]]:
               AND {_TEMAS}
           )::int AS ulasilan_giden,
           count(*) FILTER (WHERE {_DONUS})::int AS donus,
+          {_LEAD_PAYDA}::int AS lead_payda,
+          {_LEAD_PAY}::int AS lead_pay,
           count(*) FILTER (
             WHERE e.channel = 'meeting'
               AND e.meta->>'randevu_durumu' IN ('katildi', 'katilmadi')
@@ -348,7 +365,7 @@ def _monthly_ops() -> dict[str, dict[datetime, dict[str, Any]]]:
     with connect() as conn:
         rows = conn.execute(sql, (list(SALES_TEAM_IDS), org_id)).fetchall()
     by_rep: dict[str, dict[datetime, dict[str, Any]]] = {}
-    for rep_id, month, arama, ulasilan_giden, donus, randevu, katildi, bos in rows:
+    for rep_id, month, arama, ulasilan_giden, donus, lead_payda, lead_pay, randevu, katildi, bos in rows:
         month_dt = month if isinstance(month, datetime) else None
         if month_dt is None:
             continue
@@ -357,7 +374,7 @@ def _monthly_ops() -> dict[str, dict[datetime, dict[str, Any]]]:
         bos_n = int(bos or 0)
         by_rep.setdefault(str(rep_id), {})[month_dt] = {
             "arama": float(arama_n),
-            "ulasma_orani": _ratio(int(ulasilan_giden or 0) + int(donus or 0), arama_n),
+            "ulasma_orani": _ratio(int(lead_pay or 0), int(lead_payda or 0)),
             "randevu": float(randevu_n),
             "katilim_orani": _ratio(int(katildi or 0), randevu_n),
             "sonuc_girme_orani": _ratio(randevu_n, randevu_n + bos_n),

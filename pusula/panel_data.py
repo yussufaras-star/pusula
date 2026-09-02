@@ -19,6 +19,8 @@ from pusula.blocks import BLOK_DISI, PLANNED_BLOCKS, hour_in_planned_sql
 from pusula.config import get_org_id
 from pusula.sifir_satis import WON_STAGE, won_stage_sql
 from pusula.temas import (
+    distinct_attempted_leads_sql,
+    distinct_reached_leads_sql,
     duration_sec,
     is_attempt_sql,
     is_cevirme_sql,
@@ -84,6 +86,9 @@ _DONUS_E = is_donus_sql("e")
 _GELEN_E = is_gelen_sql("e")
 _DUR_E = duration_sec("e")
 _WON_D = won_stage_sql("d")
+_LEAD_PAYDA_E = distinct_attempted_leads_sql("e")
+_LEAD_PAY_E = distinct_reached_leads_sql("e")
+_DAY_IST = "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date"
 
 
 def _reach_pay(ulasilan_giden: int, donus: int) -> int:
@@ -238,7 +243,9 @@ def hourly_table(
                 WHERE e.direction = 'outbound' AND {_TEMAS_E}
               )::int AS ulasilan_giden,
               count(*) FILTER (WHERE {_DONUS_E})::int AS donus,
-              count(*) FILTER (WHERE {_GELEN_E})::int AS gelen
+              count(*) FILTER (WHERE {_GELEN_E})::int AS gelen,
+              {_LEAD_PAYDA_E}::int AS lead_payda,
+              {_LEAD_PAY_E}::int AS lead_pay
             FROM events e
             JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
             WHERE e.org_id = %s
@@ -276,6 +283,8 @@ def hourly_table(
           coalesce(c.ulasilan_giden, 0) AS ulasilan_giden,
           coalesce(c.donus, 0) AS donus,
           coalesce(c.gelen, 0) AS gelen,
+          coalesce(c.lead_payda, 0) AS lead_payda,
+          coalesce(c.lead_pay, 0) AS lead_pay,
           coalesce(m.randevu, 0) AS randevu,
           coalesce(m.katildi, 0) AS katildi
         FROM hours
@@ -289,7 +298,7 @@ def hourly_table(
             (org_id, start_ts, end_ts, *params, org_id, start_ts, end_ts, *params),
         ).fetchall()
     out: list[dict[str, Any]] = []
-    for saat, arama, ulasilan_giden, donus, gelen, randevu, katildi in rows:
+    for saat, arama, ulasilan_giden, donus, gelen, lead_payda, lead_pay, randevu, katildi in rows:
         arama_n = int(arama)
         donus_n = int(donus)
         ulasilan_n = _reach_pay(int(ulasilan_giden), donus_n)
@@ -300,7 +309,7 @@ def hourly_table(
                 "donus": donus_n,
                 "gelen": int(gelen),
                 "ulasilan": ulasilan_n,
-                "ulasma_orani": _ratio(ulasilan_n, arama_n),
+                "ulasma_orani": _ratio(int(lead_pay), int(lead_payda)),
                 "randevu": int(randevu),
                 "katildi": int(katildi),
                 "katilim_orani": _ratio(katildi, randevu),
@@ -312,7 +321,7 @@ def hourly_table(
 def team_reach_and_join(
     window: DateWindow | None = None,
 ) -> dict[str, float | None]:
-    """Ekip geneli ulaşma ve katılım (saatlik tabloyla aynı 09–18)."""
+    """Ekip geneli ulaşma (lead, tüm gün) ve katılım (saatlik 09–18)."""
     rows = hourly_table(None, window)
     arama = sum(r["arama"] for r in rows)
     ulasilan = sum(r["ulasilan"] for r in rows)
@@ -320,8 +329,9 @@ def team_reach_and_join(
     gelen = sum(r["gelen"] for r in rows)
     randevu = sum(r["randevu"] for r in rows)
     katildi = sum(r["katildi"] for r in rows)
+    payda, pay = _lead_reach_counts(None, window)
     return {
-        "ulasma_orani": _ratio(ulasilan, arama),
+        "ulasma_orani": _ratio(pay, payda),
         "katilim_orani": _ratio(katildi, randevu),
         "arama": arama,
         "ulasilan": ulasilan,
@@ -329,7 +339,35 @@ def team_reach_and_join(
         "gelen": gelen,
         "randevu": randevu,
         "katildi": katildi,
+        "lead_payda": payda,
+        "lead_pay": pay,
     }
+
+
+def _lead_reach_counts(
+    rep_id: str | None, window: DateWindow | None = None
+) -> tuple[int, int]:
+    """Dönem içi benzersiz giden-lead ve ulaşılan-lead."""
+    org_id = get_org_id()
+    extra, params = _rep_filter("e", rep_id)
+    start_ts, end_ts = _bounds(window)
+    sql = f"""
+        SELECT
+          {_LEAD_PAYDA_E}::int AS payda,
+          {_LEAD_PAY_E}::int AS pay
+        FROM events e
+        JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+        WHERE e.org_id = %s
+          AND {_sales_rep_sql()}
+          AND e.channel = 'call'
+          AND e.occurred_at >= %s
+          AND e.occurred_at <= %s
+          AND e.occurred_at <= now()
+          {extra}
+    """
+    with connect() as conn:
+        row = conn.execute(sql, (org_id, start_ts, end_ts, *params)).fetchone()
+    return (int(row[0] or 0) if row else 0, int(row[1] or 0) if row else 0)
 
 
 def _hist_weekdays(before: date | None = None) -> int:
@@ -426,6 +464,14 @@ def today_blocks(
                 f" AND {_GELEN_E})::int AS t_{block.key}_gelen"
             )
             select_parts.append(
+                f"{distinct_attempted_leads_sql('e', extra=f'{today} AND {rng}')}"
+                f"::int AS t_{block.key}_lead_payda"
+            )
+            select_parts.append(
+                f"{distinct_reached_leads_sql('e', extra=f'{today} AND {rng}')}"
+                f"::int AS t_{block.key}_lead_pay"
+            )
+            select_parts.append(
                 f"count(*) FILTER (WHERE {hist} AND {rng} AND {is_call}"
                 f" AND {_CEVIRME_E})::int AS h_{block.key}_arama"
             )
@@ -440,6 +486,14 @@ def today_blocks(
             select_parts.append(
                 f"count(*) FILTER (WHERE {hist} AND {rng}"
                 f" AND {_GELEN_E})::int AS h_{block.key}_gelen"
+            )
+            select_parts.append(
+                f"{distinct_attempted_leads_sql('e', day_expr=_DAY_IST, extra=f'{hist} AND {rng}')}"
+                f"::int AS h_{block.key}_lead_payda"
+            )
+            select_parts.append(
+                f"{distinct_reached_leads_sql('e', day_expr=_DAY_IST, extra=f'{hist} AND {rng}')}"
+                f"::int AS h_{block.key}_lead_pay"
             )
             _append_sure(f"t_{block.key}", today, rng)
             _append_sure(f"h_{block.key}", hist, rng)
@@ -510,6 +564,10 @@ def today_blocks(
             f" AND {_DONUS_E})::int AS t_disi_donus",
             f"count(*) FILTER (WHERE {today} AND {disi}"
             f" AND {_GELEN_E})::int AS t_disi_gelen",
+            f"{distinct_attempted_leads_sql('e', extra=f'{today} AND {disi}')}"
+            f"::int AS t_disi_lead_payda",
+            f"{distinct_reached_leads_sql('e', extra=f'{today} AND {disi}')}"
+            f"::int AS t_disi_lead_pay",
             f"count(*) FILTER (WHERE {today} AND {disi} AND {is_meet})"
             f"::int AS t_disi_randevu",
             f"count(*) FILTER (WHERE {today} AND {disi} AND {is_meet}"
@@ -523,6 +581,10 @@ def today_blocks(
             f" AND {_DONUS_E})::int AS h_disi_donus",
             f"count(*) FILTER (WHERE {hist} AND {disi}"
             f" AND {_GELEN_E})::int AS h_disi_gelen",
+            f"{distinct_attempted_leads_sql('e', day_expr=_DAY_IST, extra=f'{hist} AND {disi}')}"
+            f"::int AS h_disi_lead_payda",
+            f"{distinct_reached_leads_sql('e', day_expr=_DAY_IST, extra=f'{hist} AND {disi}')}"
+            f"::int AS h_disi_lead_pay",
             f"count(*) FILTER (WHERE {hist} AND {disi} AND {is_meet})"
             f"::int AS h_disi_randevu",
             f"count(*) FILTER (WHERE {hist} AND {disi} AND {is_meet}"
@@ -587,10 +649,14 @@ def today_blocks(
             t_u = packed[f"t_{block.key}_ulasilan"]
             t_d = packed[f"t_{block.key}_donus"]
             t_g = packed[f"t_{block.key}_gelen"]
+            t_lp = packed[f"t_{block.key}_lead_pay"]
+            t_ld = packed[f"t_{block.key}_lead_payda"]
             h_a = packed[f"h_{block.key}_arama"]
             h_u = packed[f"h_{block.key}_ulasilan"]
             h_d = packed[f"h_{block.key}_donus"]
             h_g = packed[f"h_{block.key}_gelen"]
+            h_lp = packed[f"h_{block.key}_lead_pay"]
+            h_ld = packed[f"h_{block.key}_lead_payda"]
             t_pay = _reach_pay(t_u, t_d)
             h_pay = _reach_pay(h_u, h_d)
             blocks.append(
@@ -603,7 +669,7 @@ def today_blocks(
                         "donus": t_d,
                         "gelen": t_g,
                         "ulasilan": t_pay,
-                        "ulasma_orani": _ratio(t_pay, t_a),
+                        "ulasma_orani": _ratio(t_lp, t_ld),
                         **_sure_pair(f"t_{block.key}", t_u, daily_total=False),
                     },
                     "avg90": {
@@ -611,7 +677,7 @@ def today_blocks(
                         "donus": _avg(h_d),
                         "gelen": _avg(h_g),
                         "ulasilan": _avg(h_pay),
-                        "ulasma_orani": _ratio(h_pay, h_a),
+                        "ulasma_orani": _ratio(h_lp, h_ld),
                         **_sure_pair(f"h_{block.key}", h_u, daily_total=True),
                     },
                 }
@@ -657,12 +723,16 @@ def today_blocks(
     t_du = packed["t_disi_ulasilan"]
     t_dd = packed["t_disi_donus"]
     t_dg = packed["t_disi_gelen"]
+    t_dlp = packed["t_disi_lead_pay"]
+    t_dld = packed["t_disi_lead_payda"]
     t_dr = packed["t_disi_randevu"]
     t_dk = packed["t_disi_katildi"]
     h_da = packed["h_disi_arama"]
     h_du = packed["h_disi_ulasilan"]
     h_dd = packed["h_disi_donus"]
     h_dg = packed["h_disi_gelen"]
+    h_dlp = packed["h_disi_lead_pay"]
+    h_dld = packed["h_disi_lead_payda"]
     h_dr = packed["h_disi_randevu"]
     h_dk = packed["h_disi_katildi"]
     t_disi_pay = _reach_pay(t_du, t_dd)
@@ -677,7 +747,7 @@ def today_blocks(
                 "donus": t_dd,
                 "gelen": t_dg,
                 "ulasilan": t_disi_pay,
-                "ulasma_orani": _ratio(t_disi_pay, t_da),
+                "ulasma_orani": _ratio(t_dlp, t_dld),
                 "randevu": t_dr,
                 "katildi": t_dk,
                 **_sure_pair("t_disi", t_du, daily_total=False),
@@ -687,7 +757,7 @@ def today_blocks(
                 "donus": _avg(h_dd),
                 "gelen": _avg(h_dg),
                 "ulasilan": _avg(h_disi_pay),
-                "ulasma_orani": _ratio(h_disi_pay, h_da),
+                "ulasma_orani": _ratio(h_dlp, h_dld),
                 "randevu": _avg(h_dr),
                 "katildi": _avg(h_dk),
                 **_sure_pair("h_disi", h_du, daily_total=True),
@@ -1460,7 +1530,9 @@ def weekly_series(
                 WHERE e.direction = 'outbound' AND {_TEMAS_E}
               )::int AS ulasilan_giden,
               count(*) FILTER (WHERE {_DONUS_E})::int AS donus,
-              count(*) FILTER (WHERE {_GELEN_E})::int AS gelen
+              count(*) FILTER (WHERE {_GELEN_E})::int AS gelen,
+              {_LEAD_PAYDA_E}::int AS lead_payda,
+              {_LEAD_PAY_E}::int AS lead_pay
             FROM events e
             JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
             WHERE e.org_id = %s
@@ -1523,6 +1595,8 @@ def weekly_series(
           c.ulasilan_giden,
           c.donus,
           c.gelen,
+          c.lead_payda,
+          c.lead_pay,
           m.randevu,
           m.katildi,
           lw.leads,
@@ -1564,15 +1638,13 @@ def weekly_series(
         starts = [v for v in first_meet.values() if v is not None]
         gap_from = min(starts) if starts else None
     out: list[dict[str, Any]] = []
-    for week_start, arama, ulasilan_giden, donus, gelen, randevu, katildi, leads, contacts, reached, reached_c in rows:
+    for week_start, arama, ulasilan_giden, donus, gelen, lead_payda, lead_pay, randevu, katildi, leads, contacts, reached, reached_c in rows:
         week = week_start
         arama_n = int(arama) if arama is not None else 0
         donus_n = int(donus) if donus is not None else 0
         gelen_n = int(gelen) if gelen is not None else 0
-        ulasilan_n = _reach_pay(
-            int(ulasilan_giden) if ulasilan_giden is not None else 0,
-            donus_n,
-        )
+        payda_n = int(lead_payda) if lead_payda is not None else 0
+        pay_n = int(lead_pay) if lead_pay is not None else 0
         randevu_n = int(randevu) if randevu is not None else None
         katildi_n = int(katildi) if katildi is not None else None
         meeting_gap = bool(
@@ -1595,7 +1667,7 @@ def weekly_series(
                 "arama_ham": arama_n,
                 "donus": donus_n / n_reps if not rep_id else float(donus_n),
                 "gelen": gelen_n / n_reps if not rep_id else float(gelen_n),
-                "ulasma_orani": _ratio(ulasilan_n, arama_n),
+                "ulasma_orani": _ratio(pay_n, payda_n),
                 "randevu": randevu_val,
                 "katilim_orani": katilim_val,
                 "take_genel": _ratio(contacts, leads),
@@ -1683,6 +1755,8 @@ def rep_snapshot(
               )::int AS ulasilan_giden,
               count(*) FILTER (WHERE {_DONUS_E})::int AS donus,
               count(*) FILTER (WHERE {_GELEN_E})::int AS gelen,
+              {_LEAD_PAYDA_E}::int AS lead_payda,
+              {_LEAD_PAY_E}::int AS lead_pay,
               count(*) FILTER (
                 WHERE e.channel = 'meeting'
                   AND e.meta->>'randevu_durumu' IN ('katildi', 'katilmadi')
@@ -1715,21 +1789,23 @@ def rep_snapshot(
         ulasilan_giden = int(row[1] or 0) if row else 0
         donus = int(row[2] or 0) if row else 0
         gelen = int(row[3] or 0) if row else 0
-        randevu = int(row[4] or 0) if row else 0
-        katildi = int(row[5] or 0) if row else 0
+        lead_payda = int(row[4] or 0) if row else 0
+        lead_pay = int(row[5] or 0) if row else 0
+        randevu = int(row[6] or 0) if row else 0
+        katildi = int(row[7] or 0) if row else 0
         ulasilan = _reach_pay(ulasilan_giden, donus)
         return {
             "arama": arama,
             "donus": donus,
             "gelen": gelen,
             "ulasilan": ulasilan,
-            "ulasma_orani": _ratio(ulasilan, arama),
+            "ulasma_orani": _ratio(lead_pay, lead_payda),
             "randevu": randevu,
             "katildi": katildi,
             "katilim_orani": _ratio(katildi, randevu),
             "temas_randevu_orani": _ratio(randevu, ulasilan_giden),
-            "ortalama_sn": float(row[6]) if row and row[6] is not None else None,
-            "medyan_sn": float(row[7]) if row and row[7] is not None else None,
+            "ortalama_sn": float(row[8]) if row and row[8] is not None else None,
+            "medyan_sn": float(row[9]) if row and row[9] is not None else None,
         }
 
     current = _window(start_ts, end_ts)

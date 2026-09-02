@@ -85,11 +85,10 @@ _TZ = ZoneInfo("Europe/Istanbul")
 
 # Tanım balonları — metin birebir.
 HELP_ULASMA = (
-    "Giden aramalardan kacinda karsi taraf telefonu acti. "
-    "Pay: acilan giden gorusme + donus aramasi. Payda: giden "
-    "arama. Sonucu 'Yanit yok/Mesgul' veya 'Gecersiz numara' "
-    "olan gidenler ulasilamamis sayilir; sure esigi yoktur. "
-    "Planlanmis ama yapilmamis aramalar sayilmaz."
+    "Kac kisiye ulasildigi. Payda: donemde en az bir giden arama "
+    "yapilan benzersiz lead. Pay: en az bir giden gorusme (sure > 0) "
+    "veya en az bir donus alinan benzersiz lead. Ayni lead bir kez "
+    "sayilir. Donusler dahildir."
 )
 HELP_ARAMA = (
     "Giden arama sayisi. Karsi taraf acmasa bile sayilir. "
@@ -97,13 +96,13 @@ HELP_ARAMA = (
 )
 HELP_ULASILAN = (
     "Telefonun acildigi giden gorusme ile donus aramasinin toplami. "
-    "Ulasma oraninin payi."
+    "Arama sayisidir; ulasma orani lead bazlidir."
 )
 HELP_DONUS = (
     f"Musterinin geri aramasidir. Yonu gelen, suresi sifirdan buyuk "
     f"ve ayni hatta onceki {RETURN_CALL_LOOKBACK_DAYS} gun icinde "
     "giden arama kaydi vardir. Suresi sifir olanlar cevapsizdir, "
-    "sayilmaz. Ulasma oraninin payina eklenir; paydaya eklenmez."
+    "sayilmaz. Ulasma oraninda o lead bir kez sayilir."
 )
 HELP_GELEN = (
     "Yonu gelen, suresi sifirdan buyuk, donus aramasi olmayan "
