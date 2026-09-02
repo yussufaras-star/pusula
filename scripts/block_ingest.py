@@ -33,6 +33,7 @@ from pusula.blocks import (
 )
 from pusula.config import get_org_id
 from pusula.db import client
+from pusula.db.models import SyncState
 from pusula.ingest import get
 from pusula.panel_data import connect, today_arama_count
 
@@ -83,8 +84,12 @@ def _channel_for_source(source: str) -> str:
     return "meeting" if source == _BOOKINGS else "call"
 
 
+def _marker_source(block: DayBlock, channel: str) -> str:
+    return f"block_slot:{block.key}:{channel}"
+
+
 def _already_written(now: datetime, block: DayBlock, channel: str) -> bool:
-    """Bu blok aralığında channel için created_at var mı."""
+    """Blok aralığında yazım var ya da bu slot başarıyla tarandı."""
     start, end = _slot_bounds(now, block)
     org_id = get_org_id()
     sql = """
@@ -99,7 +104,24 @@ def _already_written(now: datetime, block: DayBlock, channel: str) -> bool:
     """
     with connect() as conn:
         row = conn.execute(sql, (org_id, channel, start, end)).fetchone()
-    return bool(row and row[0])
+    if row and row[0]:
+        return True
+    marker = client.get_sync_state(_marker_source(block, channel))
+    if marker is None or marker.last_synced_at is None:
+        return False
+    stamped = to_istanbul(marker.last_synced_at)
+    return start <= stamped < end
+
+
+def _mark_slot(now: datetime, block: DayBlock, channel: str) -> None:
+    """Bu slot tarandı; yedek cron Zoho'ya gitmesin."""
+    client.set_sync_state(
+        SyncState(
+            source_name=_marker_source(block, channel),
+            last_synced_at=now,
+            last_cursor=block.key,
+        )
+    )
 
 
 def _skip_fresh(source: str, now: datetime, block: DayBlock) -> bool:
@@ -141,6 +163,8 @@ def _run_calls(*, dry_run: bool) -> int:
     if result.failed > 0:
         print("hata: failed > 0, run başarısız")
         return 1
+    if not dry_run:
+        _mark_slot(now, block, "call")
     return 0
 
 
@@ -175,6 +199,8 @@ def _run_bookings(*, dry_run: bool) -> int:
     if result.failed > 0:
         print("hata: failed > 0, run başarısız")
         return 1
+    if not dry_run:
+        _mark_slot(now, block, "meeting")
     return 0
 
 
