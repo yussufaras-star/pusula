@@ -645,31 +645,22 @@ def _stat_row(items: list[dict[str, Any]]) -> None:
 
 
 def _render_status_bar() -> None:
-    latest = _latest_event()
-    clock = _fmt_event_ts(latest)
-    stale = True
-    age_hours: int | None = None
-    if latest is not None:
-        dt = latest if latest.tzinfo is not None else latest.replace(tzinfo=_TZ)
-        age = datetime.now(_TZ) - dt.astimezone(_TZ)
-        age_hours = max(0, int(age.total_seconds() // 3600))
-        stale = age > timedelta(hours=6)
-    if latest is None:
-        text = "Son veri guncelleme: — · veri tazeligi: bilinmiyor"
-    elif stale:
-        text = (
-            f"Son veri guncelleme: {clock} · "
-            f"veri tazeligi: eski ({age_hours} saat)"
-        )
+    from pusula.panel_status import (
+        format_block_line,
+        format_source_line,
+        load_panel_readiness,
+    )
+
+    ready = load_panel_readiness()
+    st.markdown(format_block_line(ready.blocks))
+    failed = [item.label for item in ready.blocks if item.state == "calismadi"]
+    if failed:
+        st.warning("çalışmadı: " + ", ".join(failed))
+    source_text = format_source_line(ready)
+    if ready.warn:
+        st.warning(source_text)
     else:
-        text = (
-            f"Son veri guncelleme: {clock} · "
-            f"veri tazeligi: taze ({age_hours} saat)"
-        )
-    if stale:
-        st.warning(text)
-    else:
-        st.info(text)
+        st.info(source_text)
 
 
 def _fmt_event_ts(value: datetime | None) -> str:

@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 ISTANBUL = ZoneInfo("Europe/Istanbul")
 LOOKBACK_HOURS = 6
+BOOKINGS_LOOKBACK_HOURS = 24
 
 
 @dataclass(frozen=True)

@@ -109,6 +109,8 @@ class BookingsIngester(Ingester):
         self.last_skip_sample: dict[str, Any] | None = None
         self.fetch_limit: int | None = None
         self.fetch_truncated = False
+        # None: günlük 7 gün. Blok ingest 24 saat verir.
+        self.lookback: timedelta | None = None
         # full_name katlaması → rep_id (yalnız satış dörtlüsü).
         self._sales_reps: dict[str, str] | None = None
         # identities.email (normalize) → lead'i olan thread var.
@@ -124,7 +126,12 @@ class BookingsIngester(Ingester):
         self._lead_emails = _load_lead_emails()
 
         now = datetime.now(ZoneInfo("Europe/Istanbul"))
-        window_start = now - timedelta(days=LOOKBACK_DAYS)
+        lookback = (
+            self.lookback
+            if self.lookback is not None
+            else timedelta(days=LOOKBACK_DAYS)
+        )
+        window_start = now - lookback
         if since is not None and since < window_start:
             window_start = since
         window_end = now

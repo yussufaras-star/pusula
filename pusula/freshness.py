@@ -7,8 +7,35 @@ Call_Start boşluğunu gizleyebilir.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
+
+_TZ = ZoneInfo("Europe/Istanbul")
+
+# Panel tazelik eşikleri — tek sözlük.
+FRESHNESS_THRESHOLDS: dict[str, timedelta] = {
+    "aramalar": timedelta(hours=3),
+    "randevular": timedelta(hours=36),
+    "leadler": timedelta(days=3),
+    "kisiler": timedelta(days=5),
+}
+
+_MESAI_START = time(9, 0)
+_MESAI_END = time(19, 0)
+
+
+def is_mesai(now: datetime | None = None) -> bool:
+    """Pazartesi–Cuma 09:00–18:59 Istanbul. Hafta sonu ve gece False."""
+    local = now or datetime.now(_TZ)
+    if local.tzinfo is None:
+        local = local.replace(tzinfo=_TZ)
+    else:
+        local = local.astimezone(_TZ)
+    if local.weekday() >= 5:
+        return False
+    clock = local.time()
+    return _MESAI_START <= clock < _MESAI_END
 
 
 # Geçmiş analiz / günlük sayım: ileri tarihli occurred_at hariç.
