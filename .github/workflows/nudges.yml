@@ -1,10 +1,14 @@
+# 3 Eylül 2026: otomatik dürtme gönderimi kapsam dışı bırakıldı.
+# Zamanlanmış tetik kapatıldı. workflow_dispatch elle çalıştırma için duruyor.
+# send_nudges.py, nudges tablosu ve gölge mod silinmedi.
+#
 # Günlük dürtü — 08:30 Europe/Istanbul = 05:30 UTC (TR UTC+3, DST yok).
 # Ingest ile aynı concurrency grubu: ingest bitmeden başlamaz.
 name: nudges
 
 on:
-  schedule:
-    - cron: "30 5 * * *"
+  # schedule:
+  #   - cron: "30 5 * * *"
   workflow_dispatch:
 
 concurrency:
