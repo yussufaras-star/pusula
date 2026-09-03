@@ -467,6 +467,6 @@ CREATE TABLE IF NOT EXISTS rep_snapshots (
 );
 
 -- nudges.nudge_type bilinen değerler (serbest text; yeni tip eklenince güncelle):
--- pencere_aciliyor | kayip_randevu | gecikmis_taahhut | planlanmis_arama | karar_bekleyen
+-- pencere_aciliyor | kayip_randevu | gecikmis_taahhut | planlanmis_arama | karar_bekleyen | blok_ozeti
 
 

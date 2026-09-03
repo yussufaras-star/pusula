@@ -175,7 +175,7 @@ def load_panel_readiness(now: datetime | None = None) -> PanelReadiness:
             )
         )
     all_fresh = all(not item.stale for item in sources)
-    warn = (not all_fresh) and is_mesai(local)
+    warn = should_warn(blocks, local)
     return PanelReadiness(
         blocks=blocks,
         sources=sources,
@@ -194,6 +194,13 @@ def _ts(row: Any) -> datetime | None:
     return None
 
 
+def should_warn(blocks: list[BlockReady], now: datetime) -> bool:
+    """Uyarı yalnız beklenen blok kaçtıysa. İlk blok öncesi False."""
+    if not is_mesai(now):
+        return False
+    return any(item.state == "calismadi" for item in blocks)
+
+
 def format_block_line(blocks: list[BlockReady]) -> str:
     parts: list[str] = []
     for item in blocks:
@@ -207,11 +214,9 @@ def format_block_line(blocks: list[BlockReady]) -> str:
 
 
 def format_source_line(ready: PanelReadiness) -> str:
-    if ready.all_fresh:
-        return "aramalar, randevular, lead'ler, kişiler güncel"
+    """Son yazım saati. Renk çağıran tarafta, yalnız kaçan blokta uyarı."""
     bits: list[str] = []
     for item in ready.sources:
         clock = _fmt_clock(item.latest) if item.latest is not None else "—"
-        flag = "eski" if item.stale else "güncel"
-        bits.append(f"{item.label} {flag} ({clock})")
+        bits.append(f"{item.label} ({clock})")
     return " · ".join(bits)

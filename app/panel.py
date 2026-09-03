@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import urllib.error
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -77,6 +78,14 @@ from pusula.panel_data import (
     weekly_series,
     weekly_team_series,
     workload_board,
+)
+from pusula.block_share import (
+    TEAM_REP_ID,
+    fmt_sent_clock,
+    last_sent_at,
+    load_sales_reps,
+    send_person,
+    send_team,
 )
 from pusula.panel_profile import PROFILE_WARNING, performance_profiles
 from pusula.temas import RETURN_CALL_LOOKBACK_DAYS
@@ -269,22 +278,26 @@ def _require_env() -> None:
         st.stop()
 
 
-def _apply_secrets() -> None:
-    """st.secrets'teki havuz URL'sini ortam değişkenine taşır.
-
-    Yerel .env doluysa üzerine yazılmaz. Placeholder (...) yok sayılır.
-    """
+def _apply_secret_key(key: str) -> None:
+    """st.secrets → env. Yerel .env doluysa üzerine yazılmaz."""
+    if os.environ.get(key):
+        return
     try:
-        pooled = st.secrets.get("DATABASE_URL_POOLED")
+        raw = st.secrets.get(key)
     except Exception:
         return
-    if pooled is None:
+    if raw is None:
         return
-    text = str(pooled).strip()
+    text = str(raw).strip()
     if not text or text == "...":
         return
-    if not os.environ.get("DATABASE_URL_POOLED"):
-        os.environ["DATABASE_URL_POOLED"] = text
+    os.environ[key] = text
+
+
+def _apply_secrets() -> None:
+    _apply_secret_key("DATABASE_URL_POOLED")
+    _apply_secret_key("CLIQ_WEBHOOK_URL")
+    _apply_secret_key("PUSULA_SHADOW_EMAIL")
 
 
 def _passwords() -> dict[str, str]:
@@ -914,6 +927,55 @@ def _render_bugun(rep_id: str | None, day: date, *, blok_disi: bool) -> None:
         _render_block_card(extra)
 
 
+def _share_send_error(exc: BaseException) -> None:
+    st.error(str(exc))
+
+
+def _render_block_share(day: date) -> None:
+    """Yalnız yönetici. Gölge mod env'den; otomatik gönderim yok."""
+    st.markdown("**Blok özeti**")
+    team_prev = last_sent_at(rep_id=TEAM_REP_ID, day=day)
+    team_l, team_r = st.columns([2, 3])
+    with team_l:
+        if st.button("Ekibe gönder", key=f"share_team_{day.isoformat()}"):
+            if team_prev is not None:
+                st.warning(
+                    f"bu gün daha önce gönderildi ({fmt_sent_clock(team_prev)})"
+                )
+            try:
+                result = send_team(day)
+                st.caption(f"gönderildi {fmt_sent_clock(result.sent_at)}")
+            except (RuntimeError, OSError, urllib.error.URLError) as exc:
+                _share_send_error(exc)
+    with team_r:
+        if team_prev is not None:
+            st.caption(f"son gönderim {fmt_sent_clock(team_prev)}")
+
+    for person in load_sales_reps():
+        prev = last_sent_at(rep_id=person.rep_id, day=day)
+        name_col, btn_col, time_col = st.columns([3, 2, 3])
+        with name_col:
+            st.caption(person.full_name)
+        with btn_col:
+            if st.button(
+                "Kişiye gönder",
+                key=f"share_rep_{person.rep_id}_{day.isoformat()}",
+            ):
+                if prev is not None:
+                    st.warning(
+                        f"bu gün daha önce gönderildi "
+                        f"({fmt_sent_clock(prev)})"
+                    )
+                try:
+                    result = send_person(person, day)
+                    st.caption(f"gönderildi {fmt_sent_clock(result.sent_at)}")
+                except (RuntimeError, OSError, urllib.error.URLError) as exc:
+                    _share_send_error(exc)
+        with time_col:
+            if prev is not None:
+                st.caption(f"son gönderim {fmt_sent_clock(prev)}")
+
+
 def _line_chart(
     frame: pd.DataFrame,
     y_col: str,
@@ -1166,6 +1228,7 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
     start, end = _keys(window)
     conv = conv_window(window)
     _render_bugun(rep_id, block_day, blok_disi=True)
+    _render_block_share(block_day)
 
     st.divider()
     _heading("Saatlik", window=window)
