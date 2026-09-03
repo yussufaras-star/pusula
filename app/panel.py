@@ -642,18 +642,6 @@ def _metric_row(items: list[dict[str, Any]]) -> None:
             )
 
 
-def _metric_delta(
-    cur: float | None, prev: float | None
-) -> tuple[str | None, str]:
-    """Streamlit tek ok ekler; isaretli metin gonderme."""
-    if cur is None or prev is None:
-        return None, "off"
-    diff = float(cur) - float(prev)
-    if abs(diff) < 0.05:
-        return "0", "off"
-    return f"{diff:.1f}", "normal"
-
-
 def _delta_markup(cur: float | None, prev: float | None) -> str:
     """Kompakt rozet: tek ok, artis yesil, dusus kirmizi, sifir gri."""
     if cur is None or prev is None:
@@ -688,8 +676,7 @@ def _block_metric(item: dict[str, Any]) -> None:
         delta_md = _delta_markup(cur, prev)
     help_text = item.get("help_text")
     st.caption(str(item["label"]), help=help_text)
-    st.markdown(f"**{shown}**")
-    st.markdown(delta_md)
+    st.caption(f"**{shown}** {delta_md}")
     extra = item.get("extra")
     if extra:
         st.caption(str(extra), help=item.get("extra_help"))
@@ -697,10 +684,14 @@ def _block_metric(item: dict[str, Any]) -> None:
 
 def _block_metric_row(items: list[dict[str, Any]]) -> None:
     """Her blok kartında aynı 4 kolon; eksik slot boş kalır."""
+    padded: list[dict[str, Any] | None] = list(items[:4])
+    while len(padded) < 4:
+        padded.append(None)
     cols = st.columns(4, gap="small")
-    for col, item in zip(cols, items[:4]):
+    for col, item in zip(cols, padded):
         with col:
-            _block_metric(item)
+            if item:
+                _block_metric(item)
 
 
 def _stat_row(items: list[dict[str, Any]]) -> None:
@@ -914,10 +905,11 @@ def _render_bugun(rep_id: str | None, day: date, *, blok_disi: bool) -> None:
         pair = planned[start : start + 2]
         if not pair:
             continue
-        cols = st.columns(len(pair), gap="small")
-        for col, block in zip(cols, pair):
-            with col:
-                _render_block_card(block)
+        cols = st.columns(2, gap="small")
+        for idx in range(2):
+            with cols[idx]:
+                if idx < len(pair):
+                    _render_block_card(pair[idx])
     if extra is not None:
         _render_block_card(extra)
 
@@ -1006,6 +998,7 @@ def _compare(
 ) -> None:
     if empty_label is not None and cur is None:
         st.metric(label, empty_label, None, help=help_text)
+        st.caption(":gray[veri yetersiz]")
         return
     if display is not None:
         shown = display
@@ -1015,11 +1008,8 @@ def _compare(
         shown = fmt_pct(cur)
     else:
         shown = fmt_num(cur)
-    delta, color = _metric_delta(cur, prev)
-    if color == "off":
-        st.metric(label, shown, delta, delta_color="off", help=help_text)
-    else:
-        st.metric(label, shown, delta, delta_color="normal", help=help_text)
+    st.metric(label, shown, None, help=help_text)
+    st.caption(_delta_markup(cur, prev))
 
 
 def _ciro_ytd_table(rows: list[dict[str, Any]]) -> None:
@@ -1621,6 +1611,7 @@ def render_temsilci(
         )
         st.caption(f"CRM kayıt tahmini {CRM_DK_PER_GORUSME} dk/görüşme")
 
+    st.divider()
     _heading("Ulaşma oranı", HELP_ULASMA, window)
     _show_reach_break(_reach_break(start, end, rep_id, False), named=False)
 
