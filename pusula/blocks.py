@@ -7,7 +7,8 @@ Blok sonu ingest bitimden 15 dakika sonra çalışır.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import date, datetime, time
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 ISTANBUL = ZoneInfo("Europe/Istanbul")
@@ -36,10 +37,25 @@ PLANNED_BLOCKS: tuple[DayBlock, ...] = (
 BLOK_DISI = DayBlock("blok_disi", "blok dışı", "other", 0, 0, 0, 0)
 
 
+CardPhase = Literal["baslamadi", "devam_ediyor", "tamamlandi"]
+
+
 def to_istanbul(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=ISTANBUL)
     return value.astimezone(ISTANBUL)
+
+
+def card_phase(block: DayBlock, day: date, now: datetime) -> CardPhase:
+    """Kart hali: [start, end) devam, end ve sonrasi tamamlandi."""
+    local = to_istanbul(now)
+    start_at = datetime.combine(day, time(hour=block.start_hour), tzinfo=ISTANBUL)
+    end_at = datetime.combine(day, time(hour=block.end_hour), tzinfo=ISTANBUL)
+    if local < start_at:
+        return "baslamadi"
+    if local < end_at:
+        return "devam_ediyor"
+    return "tamamlandi"
 
 
 def ended_block(now: datetime) -> DayBlock:

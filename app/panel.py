@@ -79,7 +79,7 @@ from pusula.panel_data import (
     weekly_team_series,
     workload_board,
 )
-from pusula.blocks import PLANNED_BLOCKS
+from pusula.blocks import PLANNED_BLOCKS, card_phase
 from pusula.block_share import (
     TEAM_REP_ID,
     fmt_sent_clock,
@@ -176,8 +176,12 @@ HELP_BLOK_SURE = (
 )
 HELP_BLOK_KIYAS = (
     "Kartın üst satırındaki kıyas, son 90 günün aynı saat "
-    "bloğundaki günlük ortalamasına göredir. Rozette yalnız "
-    "ok ve fark sayısı vardır."
+    "bloğundaki günlük ortalamasına göredir. Rozet yalnız "
+    "bloğun bitiş saati geçince çıkar; devam eden blokta yok."
+)
+HELP_TAZELIK = (
+    "Eşikler: aramalar 3 saat (mesai içi), randevular 36 saat, "
+    "lead'ler 3 gün, kişiler 5 gün."
 )
 HELP_ISYUKU = (
     "Kisi basi gunluk ortalama. Son 90 gunun pazar disi is "
@@ -208,9 +212,9 @@ HELP_SOURCE = (
     "arasindaki temas orani farki dusuktur (~4 puan)."
 )
 HELP_BUGUN = (
-    "Bugünün blokları. Saati gelmemiş blok bekleniyor durur; "
-    "sayı ve ok yok. Rozet, son 90 günün aynı blok günlük "
-    "ortalamasına göre."
+    "Bugünün blokları. Başlamadı: bekleniyor, sayı ve ok yok. "
+    "Devam ediyor: sayılar var, rozet yok. Bitti: rozet, "
+    "son 90 günün aynı blok günlük ortalamasına göre."
 )
 HELP_CIRO = (
     "Kapandi Kazanildi asamasindaki anlasmalarin toplam "
@@ -688,18 +692,16 @@ def _block_delta_markup(cur: float | None, prev: float | None) -> str:
     return core
 
 
-def _block_awaiting(block: dict[str, Any], day: date) -> bool:
-    """Seçilen günde blok saati henüz gelmedi."""
+def _block_phase(block: dict[str, Any], day: date) -> str:
+    """baslamadi | devam_ediyor | tamamlandi. blok dışı tamamlandi."""
     key = str(block.get("key") or "")
     spec = next((item for item in PLANNED_BLOCKS if item.key == key), None)
     if spec is None:
-        return False
-    now = datetime.now(_TZ)
-    start_at = datetime.combine(day, time(hour=spec.start_hour), tzinfo=_TZ)
-    return now < start_at
+        return "tamamlandi"
+    return card_phase(spec, day, datetime.now(_TZ))
 
 
-def _block_metric(item: dict[str, Any]) -> None:
+def _block_metric(item: dict[str, Any], *, badges: bool) -> None:
     """Blok kartı — kucuk punto. Gunluk ozet st.metric buyuk kalir."""
     cur = item.get("cur")
     prev = item.get("prev")
@@ -709,16 +711,16 @@ def _block_metric(item: dict[str, Any]) -> None:
         delta_md = ""
     elif item.get("display") is not None:
         shown = str(item["display"])
-        delta_md = _block_delta_markup(cur, prev)
+        delta_md = _block_delta_markup(cur, prev) if badges else ""
     elif item.get("duration"):
         shown = fmt_duration(cur)
-        delta_md = _block_delta_markup(cur, prev)
+        delta_md = _block_delta_markup(cur, prev) if badges else ""
     elif item.get("pct"):
         shown = fmt_pct(cur)
-        delta_md = _block_delta_markup(cur, prev)
+        delta_md = _block_delta_markup(cur, prev) if badges else ""
     else:
         shown = fmt_num(cur)
-        delta_md = _block_delta_markup(cur, prev)
+        delta_md = _block_delta_markup(cur, prev) if badges else ""
     help_text = item.get("help_text")
     st.caption(str(item["label"]), help=help_text)
     if delta_md:
@@ -730,16 +732,18 @@ def _block_metric(item: dict[str, Any]) -> None:
         st.caption(str(extra), help=item.get("extra_help"))
 
 
-def _block_metric_row(items: list[dict[str, Any] | None]) -> None:
-    """Her blok kartında aynı 4 kolon; eksik slot boş kalır."""
-    padded: list[dict[str, Any] | None] = list(items[:4])
-    while len(padded) < 4:
-        padded.append(None)
-    cols = st.columns(4, gap="small")
-    for col, item in zip(cols, padded):
+def _block_metric_row(
+    items: list[dict[str, Any]], *, badges: bool
+) -> None:
+    """4'lu satir. Son satirda bos kolon yok."""
+    filled = [item for item in items if item]
+    if not filled:
+        return
+    n = len(filled)
+    cols = st.columns(4 if n >= 4 else n, gap="small")
+    for col, item in zip(cols, filled[:4] if n >= 4 else filled):
         with col:
-            if item:
-                _block_metric(item)
+            _block_metric(item, badges=badges)
 
 
 def _block_group_title(title: str) -> None:
@@ -747,13 +751,15 @@ def _block_group_title(title: str) -> None:
     st.caption(f":gray[{title}]")
 
 
-def _block_group(title: str, items: list[dict[str, Any] | None]) -> None:
+def _block_group(
+    title: str, items: list[dict[str, Any] | None], *, badges: bool
+) -> None:
+    filled = [item for item in items if item]
+    if not filled:
+        return
     _block_group_title(title)
-    padded: list[dict[str, Any] | None] = list(items)
-    while len(padded) % 4 != 0 or not padded:
-        padded.append(None)
-    for start in range(0, len(padded), 4):
-        _block_metric_row(padded[start : start + 4])
+    for start in range(0, len(filled), 4):
+        _block_metric_row(filled[start : start + 4], badges=badges)
 
 
 def _metrics_arama(
@@ -845,20 +851,18 @@ def _stat_row(items: list[dict[str, Any]]) -> None:
 def _render_status_bar() -> None:
     from pusula.panel_status import (
         format_block_line,
+        format_impact_line,
         format_source_line,
         load_panel_readiness,
     )
 
     ready = load_panel_readiness()
-    st.markdown(format_block_line(ready.blocks))
-    failed = [item.label for item in ready.blocks if item.state == "calismadi"]
-    if failed:
-        st.warning("çalışmadı: " + ", ".join(failed))
-    source_text = format_source_line(ready)
-    if ready.warn:
-        st.warning(source_text)
-    else:
-        st.info(source_text)
+    with st.container():
+        st.caption(format_block_line(ready.blocks))
+        st.caption(format_source_line(ready), help=HELP_TAZELIK)
+        impact = format_impact_line(ready.blocks)
+        if impact:
+            st.caption(impact)
 
 
 def _fmt_event_ts(value: datetime | None) -> str:
@@ -872,12 +876,17 @@ def _render_block_card(block: dict[str, Any], day: date) -> None:
     kind = str(block.get("kind") or "")
     today = block.get("today") or {}
     avg90 = block.get("avg90") or {}
+    phase = _block_phase(block, day)
     with st.container(border=True):
         st.markdown(f"**{block.get('label')}**")
-        if _block_awaiting(block, day):
+        if phase == "baslamadi":
             st.caption("bekleniyor")
             return
-        st.caption("kıyas 90 günlük ortalamaya göre", help=HELP_BLOK_KIYAS)
+        badges = phase == "tamamlandi"
+        if phase == "devam_ediyor":
+            st.caption("devam ediyor")
+        else:
+            st.caption("kıyas 90 günlük ortalamaya göre", help=HELP_BLOK_KIYAS)
         arama = _metrics_arama(today, avg90, as_int=(kind == "meeting"))
         randevu_item: dict[str, Any] = {
             "label": "randevu",
@@ -902,14 +911,18 @@ def _render_block_card(block: dict[str, Any], day: date) -> None:
                     _sure_column(today, avg90),
                 ]
             )
-            _block_group("Arama", arama)
-            _block_group("Toplantı", [randevu_item])
+            _block_group("Arama", arama, badges=badges)
+            _block_group("Toplantı", [randevu_item], badges=badges)
         elif kind == "meeting":
-            _block_group("Toplantı", _metrics_toplanti(today, avg90, as_int=True))
-            _block_group("Arama", arama)
+            _block_group(
+                "Toplantı",
+                _metrics_toplanti(today, avg90, as_int=True),
+                badges=badges,
+            )
+            _block_group("Arama", arama, badges=badges)
         else:
             arama.append(_sure_column(today, avg90))
-            _block_group("Arama", arama)
+            _block_group("Arama", arama, badges=badges)
             _block_group(
                 "Toplantı",
                 [
@@ -921,12 +934,8 @@ def _render_block_card(block: dict[str, Any], day: date) -> None:
                         "help_text": HELP_KATILIM,
                     },
                 ],
+                badges=badges,
             )
-        sure_empty = (
-            kind in ("call", "other") and today.get("sure_ort") is None
-        )
-        if sure_empty:
-            st.caption("veri yetersiz")
 
 
 def _render_bugun(rep_id: str | None, day: date, *, blok_disi: bool) -> None:
@@ -1043,12 +1052,16 @@ def _week_delta(rows: list[dict[str, Any]], key: str) -> str:
 
 
 def _sure_column(today: dict[str, Any], avg90: dict[str, Any]) -> dict[str, Any]:
-    """Arama blogu 4. kolon: ortalama+tipik, altinda toplam."""
+    """Arama blogu gorusme suresi. Bosken veri yetersiz bu metrikte."""
     pair = _fmt_ortalama_tipik(today.get("sure_ort"), today.get("sure_tipik"))
     toplam = today.get("sure_toplam")
     extra = None
+    extra_help = HELP_BLOK_TOPLAM
     if toplam is not None:
         extra = f"toplam {fmt_duration(toplam)}"
+    elif pair is None:
+        extra = "veri yetersiz"
+        extra_help = HELP_BLOK_SURE
     shown = pair if pair is not None else "—"
     return {
         "label": "görüşme süresi",
@@ -1057,7 +1070,7 @@ def _sure_column(today: dict[str, Any], avg90: dict[str, Any]) -> dict[str, Any]
         "display": shown,
         "help_text": HELP_BLOK_SURE,
         "extra": extra,
-        "extra_help": HELP_BLOK_TOPLAM,
+        "extra_help": extra_help,
     }
 
 

@@ -7,7 +7,7 @@ Kullanım:
 from __future__ import annotations
 
 import sys
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -16,15 +16,24 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from pusula.blocks import ISTANBUL, PLANNED_BLOCKS
+from pusula.blocks import ISTANBUL, PLANNED_BLOCKS, card_phase
 from pusula.freshness import FRESHNESS_THRESHOLDS, is_mesai
 from pusula.panel_status import (
     BlockReady,
     format_block_line,
+    format_impact_line,
     format_source_line,
     load_panel_readiness,
     should_warn,
 )
+
+
+def _phase_label(phase: str) -> str:
+    if phase == "baslamadi":
+        return "bekleniyor"
+    if phase == "devam_ediyor":
+        return "devam ediyor"
+    return "tamamlandi"
 
 
 def main() -> int:
@@ -97,11 +106,38 @@ def main() -> int:
     print(f"  warn={ready_noon.warn}")
     print("12:00 blok kart:")
     for block in PLANNED_BLOCKS:
-        start_at = datetime.combine(
-            weekday_noon.date(), time(hour=block.start_hour), tzinfo=ISTANBUL
-        )
-        state = "bekleniyor" if weekday_noon < start_at else "acik"
-        print(f"  {block.label} {state}")
+        phase = card_phase(block, weekday_noon.date(), weekday_noon)
+        print(f"  {block.label} {_phase_label(phase)}")
+
+    at_13 = datetime(2026, 9, 3, 13, 0, tzinfo=ISTANBUL)
+    print("13:00 senaryo:")
+    phases_13: dict[str, str] = {}
+    for block in PLANNED_BLOCKS:
+        phase = card_phase(block, at_13.date(), at_13)
+        phases_13[block.key] = phase
+        print(f"  {block.label} {_phase_label(phase)}")
+    if (
+        phases_13["arama_14_17"] != "baslamadi"
+        or phases_13["toplanti_17_18"] != "baslamadi"
+    ):
+        print("hata: 13:00 14-17 ve 17-18 bekleniyor olmali")
+        return 1
+
+    at_15 = datetime(2026, 9, 3, 15, 0, tzinfo=ISTANBUL)
+    print("15:00 senaryo:")
+    phases_15: dict[str, str] = {}
+    for block in PLANNED_BLOCKS:
+        phase = card_phase(block, at_15.date(), at_15)
+        phases_15[block.key] = phase
+        print(f"  {block.label} {_phase_label(phase)}")
+    if phases_15["arama_14_17"] != "devam_ediyor":
+        print("hata: 15:00 14-17 devam ediyor olmali")
+        return 1
+    if phases_15["toplanti_17_18"] != "baslamadi":
+        print("hata: 15:00 17-18 bekleniyor olmali")
+        return 1
+    print("15:00 14-17 rozet yok (devam ediyor)")
+    print(f"  etki: {format_impact_line(missed)}")
 
     print("panel_check: ok")
     return 0

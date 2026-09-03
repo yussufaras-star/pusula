@@ -214,9 +214,22 @@ def format_block_line(blocks: list[BlockReady]) -> str:
 
 
 def format_source_line(ready: PanelReadiness) -> str:
-    """Son yazım saati. Renk çağıran tarafta, yalnız kaçan blokta uyarı."""
+    """Son yazım saati. Eşikler panel (i) balonunda."""
     bits: list[str] = []
     for item in ready.sources:
         clock = _fmt_clock(item.latest) if item.latest is not None else "—"
         bits.append(f"{item.label} ({clock})")
     return " · ".join(bits)
+
+
+def format_impact_line(blocks: list[BlockReady]) -> str | None:
+    """Kacan blok yalniz kendi kartini eksik birakir."""
+    failed = [item.label for item in blocks if item.state == "calismadi"]
+    if not failed:
+        return None
+    labels = ", ".join(failed)
+    whose = "o bloğun" if len(failed) == 1 else "o blokların"
+    return (
+        f"{labels} çalışmadı. Yalnız {whose} kartı eksik; "
+        "günlük özet ve dönemsel tablolar etkilenmedi."
+    )
