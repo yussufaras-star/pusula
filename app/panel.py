@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import sys
 import urllib.error
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -79,6 +79,7 @@ from pusula.panel_data import (
     weekly_team_series,
     workload_board,
 )
+from pusula.blocks import PLANNED_BLOCKS
 from pusula.block_share import (
     TEAM_REP_ID,
     fmt_sent_clock,
@@ -173,6 +174,10 @@ HELP_BLOK_SURE = (
     "Sure yalniz telefonun acildigi gorusmelerden hesaplanir; "
     "ulasilamayan aramalar katilmaz."
 )
+HELP_BLOK_KIYAS = (
+    "Rozetteki fark, son 90 günün aynı saat bloğundaki günlük "
+    "ortalamasına göredir. Henüz saati gelmemiş blokta rozet yok."
+)
 HELP_ISYUKU = (
     "Kisi basi gunluk ortalama. Son 90 gunun pazar disi is "
     "gunlerine bolunmustur."
@@ -202,8 +207,9 @@ HELP_SOURCE = (
     "arasindaki temas orani farki dusuktur (~4 puan)."
 )
 HELP_BUGUN = (
-    "Bugunun bloklari. Ok, son 90 gunun ayni blok gunluk "
-    "ortalamasina gore."
+    "Bugünün blokları. Saati gelmemiş blok bekleniyor durur; "
+    "sayı ve ok yok. Rozet, son 90 günün aynı blok günlük "
+    "ortalamasına göre."
 )
 HELP_CIRO = (
     "Kapandi Kazanildi asamasindaki anlasmalarin toplam "
@@ -667,6 +673,31 @@ def _delta_markup(cur: float | None, prev: float | None) -> str:
     return f":red[↓ {abs(diff):.1f}]"
 
 
+def _block_delta_markup(cur: float | None, prev: float | None) -> str:
+    """Blok rozeti. Kıyas etiketi yanında; veri yoksa rozet yok."""
+    if cur is None or prev is None:
+        return ""
+    diff = float(cur) - float(prev)
+    if abs(diff) < 0.05:
+        core = ":gray[→ 0]"
+    elif diff > 0:
+        core = f":green[↑ {diff:.1f}]"
+    else:
+        core = f":red[↓ {abs(diff):.1f}]"
+    return f"{core} {WINDOW_DAYS}g ort."
+
+
+def _block_awaiting(block: dict[str, Any], day: date) -> bool:
+    """Seçilen günde blok saati henüz gelmedi."""
+    key = str(block.get("key") or "")
+    spec = next((item for item in PLANNED_BLOCKS if item.key == key), None)
+    if spec is None:
+        return False
+    now = datetime.now(_TZ)
+    start_at = datetime.combine(day, time(hour=spec.start_hour), tzinfo=_TZ)
+    return now < start_at
+
+
 def _block_metric(item: dict[str, Any]) -> None:
     """Blok kartı — kucuk punto. Gunluk ozet st.metric buyuk kalir."""
     cur = item.get("cur")
@@ -674,28 +705,31 @@ def _block_metric(item: dict[str, Any]) -> None:
     empty_label = item.get("empty_label")
     if empty_label is not None and cur is None:
         shown = str(empty_label)
-        delta_md = ":gray[veri yetersiz]"
+        delta_md = ""
     elif item.get("display") is not None:
         shown = str(item["display"])
-        delta_md = _delta_markup(cur, prev)
+        delta_md = _block_delta_markup(cur, prev)
     elif item.get("duration"):
         shown = fmt_duration(cur)
-        delta_md = _delta_markup(cur, prev)
+        delta_md = _block_delta_markup(cur, prev)
     elif item.get("pct"):
         shown = fmt_pct(cur)
-        delta_md = _delta_markup(cur, prev)
+        delta_md = _block_delta_markup(cur, prev)
     else:
         shown = fmt_num(cur)
-        delta_md = _delta_markup(cur, prev)
+        delta_md = _block_delta_markup(cur, prev)
     help_text = item.get("help_text")
     st.caption(str(item["label"]), help=help_text)
-    st.caption(f"**{shown}** {delta_md}")
+    if delta_md:
+        st.caption(f"**{shown}** {delta_md}", help=HELP_BLOK_KIYAS)
+    else:
+        st.caption(f"**{shown}**")
     extra = item.get("extra")
     if extra:
         st.caption(str(extra), help=item.get("extra_help"))
 
 
-def _block_metric_row(items: list[dict[str, Any]]) -> None:
+def _block_metric_row(items: list[dict[str, Any] | None]) -> None:
     """Her blok kartında aynı 4 kolon; eksik slot boş kalır."""
     padded: list[dict[str, Any] | None] = list(items[:4])
     while len(padded) < 4:
@@ -705,6 +739,15 @@ def _block_metric_row(items: list[dict[str, Any]]) -> None:
         with col:
             if item:
                 _block_metric(item)
+
+
+def _block_metric_grid(items: list[dict[str, Any] | None]) -> None:
+    """Iki satir, her biri 4 kolon. Metrik eklemeden 4+4 hiza."""
+    padded: list[dict[str, Any] | None] = list(items[:8])
+    while len(padded) < 8:
+        padded.append(None)
+    _block_metric_row(padded[0:4])
+    _block_metric_row(padded[4:8])
 
 
 def _stat_row(items: list[dict[str, Any]]) -> None:
@@ -745,162 +788,155 @@ def _fmt_event_ts(value: datetime | None) -> str:
     return dt.astimezone(_TZ).strftime("%d.%m.%Y %H:%M")
 
 
-def _render_block_card(block: dict[str, Any]) -> None:
+def _render_block_card(block: dict[str, Any], day: date) -> None:
     kind = str(block.get("kind") or "")
     today = block.get("today") or {}
     avg90 = block.get("avg90") or {}
     with st.container(border=True):
         st.markdown(f"**{block.get('label')}**")
+        if _block_awaiting(block, day):
+            st.caption("bekleniyor")
+            return
         if kind == "call":
-            _block_metric_row(
-                [
-                    {
-                        "label": "giden arama",
-                        "cur": today.get("arama"),
-                        "prev": avg90.get("arama"),
-                        "help_text": HELP_ARAMA,
-                    },
-                    {
-                        "label": "ulaşılan görüşme",
-                        "cur": today.get("ulasilan"),
-                        "prev": avg90.get("ulasilan"),
-                        "help_text": HELP_ULASILAN,
-                    },
-                    {
-                        "label": "ulaşma oranı",
-                        "cur": today.get("ulasma_orani"),
-                        "prev": avg90.get("ulasma_orani"),
-                        "pct": True,
-                        "help_text": HELP_ULASMA,
-                    },
-                    _sure_column(today, avg90),
-                ]
-            )
-            _block_metric_row(
-                [
-                    {
-                        "label": "dönüş araması",
-                        "cur": today.get("donus"),
-                        "prev": avg90.get("donus"),
-                        "help_text": HELP_DONUS,
-                    },
-                    {
-                        "label": "gelen arama",
-                        "cur": today.get("gelen"),
-                        "prev": avg90.get("gelen"),
-                        "help_text": HELP_GELEN,
-                    },
-                    {
-                        "label": "randevu",
-                        "cur": today.get("randevu"),
-                        "prev": avg90.get("randevu"),
-                        "help_text": HELP_RANDEVU,
-                    },
-                ]
-            )
+            slots: list[dict[str, Any] | None] = [
+                {
+                    "label": "giden arama",
+                    "cur": today.get("arama"),
+                    "prev": avg90.get("arama"),
+                    "help_text": HELP_ARAMA,
+                },
+                {
+                    "label": "ulaşılan görüşme",
+                    "cur": today.get("ulasilan"),
+                    "prev": avg90.get("ulasilan"),
+                    "help_text": HELP_ULASILAN,
+                },
+                {
+                    "label": "ulaşma oranı",
+                    "cur": today.get("ulasma_orani"),
+                    "prev": avg90.get("ulasma_orani"),
+                    "pct": True,
+                    "help_text": HELP_ULASMA,
+                },
+                _sure_column(today, avg90),
+                {
+                    "label": "dönüş araması",
+                    "cur": today.get("donus"),
+                    "prev": avg90.get("donus"),
+                    "help_text": HELP_DONUS,
+                },
+                {
+                    "label": "gelen arama",
+                    "cur": today.get("gelen"),
+                    "prev": avg90.get("gelen"),
+                    "help_text": HELP_GELEN,
+                },
+                {
+                    "label": "randevu",
+                    "cur": today.get("randevu"),
+                    "prev": avg90.get("randevu"),
+                    "help_text": HELP_RANDEVU,
+                },
+                None,
+            ]
         elif kind == "meeting":
-            _block_metric_row(
-                [
-                    {
-                        "label": "giden arama",
-                        "cur": int(today.get("arama") or 0),
-                        "prev": avg90.get("arama"),
-                        "help_text": HELP_ARAMA,
-                    },
-                    {
-                        "label": "ulaşılan görüşme",
-                        "cur": int(today.get("ulasilan") or 0),
-                        "prev": avg90.get("ulasilan"),
-                        "help_text": HELP_ULASILAN,
-                    },
-                    {
-                        "label": "randevu",
-                        "cur": int(today.get("randevu") or 0),
-                        "prev": avg90.get("randevu"),
-                        "help_text": HELP_RANDEVU,
-                    },
-                    {
-                        "label": "katıldı",
-                        "cur": int(today.get("katildi") or 0),
-                        "prev": avg90.get("katildi"),
-                        "help_text": HELP_KATILIM,
-                    },
-                ]
-            )
-            _block_metric_row(
-                [
-                    {
-                        "label": "katılmadı",
-                        "cur": today.get("katilmadi"),
-                        "prev": avg90.get("katilmadi"),
-                        "help_text": HELP_KATILIM,
-                    },
-                    {
-                        "label": "sonuç girilmedi",
-                        "cur": today.get("sonuc_girilmedi"),
-                        "prev": avg90.get("sonuc_girilmedi"),
-                        "help_text": HELP_KATILIM,
-                    },
-                    {
-                        "label": "dönüş araması",
-                        "cur": today.get("donus"),
-                        "prev": avg90.get("donus"),
-                        "help_text": HELP_DONUS,
-                    },
-                    {
-                        "label": "gelen arama",
-                        "cur": today.get("gelen"),
-                        "prev": avg90.get("gelen"),
-                        "help_text": HELP_GELEN,
-                    },
-                ]
-            )
+            slots = [
+                {
+                    "label": "giden arama",
+                    "cur": int(today.get("arama") or 0),
+                    "prev": avg90.get("arama"),
+                    "help_text": HELP_ARAMA,
+                },
+                {
+                    "label": "ulaşılan görüşme",
+                    "cur": int(today.get("ulasilan") or 0),
+                    "prev": avg90.get("ulasilan"),
+                    "help_text": HELP_ULASILAN,
+                },
+                {
+                    "label": "randevu",
+                    "cur": int(today.get("randevu") or 0),
+                    "prev": avg90.get("randevu"),
+                    "help_text": HELP_RANDEVU,
+                },
+                {
+                    "label": "katıldı",
+                    "cur": int(today.get("katildi") or 0),
+                    "prev": avg90.get("katildi"),
+                    "help_text": HELP_KATILIM,
+                },
+                {
+                    "label": "katılmadı",
+                    "cur": today.get("katilmadi"),
+                    "prev": avg90.get("katilmadi"),
+                    "help_text": HELP_KATILIM,
+                },
+                {
+                    "label": "sonuç girilmedi",
+                    "cur": today.get("sonuc_girilmedi"),
+                    "prev": avg90.get("sonuc_girilmedi"),
+                    "help_text": HELP_KATILIM,
+                },
+                {
+                    "label": "dönüş araması",
+                    "cur": today.get("donus"),
+                    "prev": avg90.get("donus"),
+                    "help_text": HELP_DONUS,
+                },
+                {
+                    "label": "gelen arama",
+                    "cur": today.get("gelen"),
+                    "prev": avg90.get("gelen"),
+                    "help_text": HELP_GELEN,
+                },
+            ]
         else:
-            _block_metric_row(
-                [
-                    {
-                        "label": "giden arama",
-                        "cur": today.get("arama"),
-                        "prev": avg90.get("arama"),
-                        "help_text": HELP_ARAMA,
-                    },
-                    {
-                        "label": "ulaşılan görüşme",
-                        "cur": today.get("ulasilan"),
-                        "prev": avg90.get("ulasilan"),
-                        "help_text": HELP_ULASILAN,
-                    },
-                    {
-                        "label": "randevu",
-                        "cur": today.get("randevu"),
-                        "prev": avg90.get("randevu"),
-                        "help_text": HELP_RANDEVU,
-                    },
-                    {
-                        "label": "katıldı",
-                        "cur": today.get("katildi"),
-                        "prev": avg90.get("katildi"),
-                        "help_text": HELP_KATILIM,
-                    },
-                ]
-            )
-            _block_metric_row(
-                [
-                    {
-                        "label": "dönüş araması",
-                        "cur": today.get("donus"),
-                        "prev": avg90.get("donus"),
-                        "help_text": HELP_DONUS,
-                    },
-                    {
-                        "label": "gelen arama",
-                        "cur": today.get("gelen"),
-                        "prev": avg90.get("gelen"),
-                        "help_text": HELP_GELEN,
-                    },
-                    _sure_column(today, avg90),
-                ]
-            )
+            slots = [
+                {
+                    "label": "giden arama",
+                    "cur": today.get("arama"),
+                    "prev": avg90.get("arama"),
+                    "help_text": HELP_ARAMA,
+                },
+                {
+                    "label": "ulaşılan görüşme",
+                    "cur": today.get("ulasilan"),
+                    "prev": avg90.get("ulasilan"),
+                    "help_text": HELP_ULASILAN,
+                },
+                {
+                    "label": "randevu",
+                    "cur": today.get("randevu"),
+                    "prev": avg90.get("randevu"),
+                    "help_text": HELP_RANDEVU,
+                },
+                {
+                    "label": "katıldı",
+                    "cur": today.get("katildi"),
+                    "prev": avg90.get("katildi"),
+                    "help_text": HELP_KATILIM,
+                },
+                {
+                    "label": "dönüş araması",
+                    "cur": today.get("donus"),
+                    "prev": avg90.get("donus"),
+                    "help_text": HELP_DONUS,
+                },
+                {
+                    "label": "gelen arama",
+                    "cur": today.get("gelen"),
+                    "prev": avg90.get("gelen"),
+                    "help_text": HELP_GELEN,
+                },
+                _sure_column(today, avg90),
+                None,
+            ]
+        _block_metric_grid(slots)
+        sure_empty = (
+            kind in ("call", "other") and today.get("sure_ort") is None
+        )
+        if sure_empty:
+            st.caption("veri yetersiz")
 
 
 def _render_bugun(rep_id: str | None, day: date, *, blok_disi: bool) -> None:
@@ -922,9 +958,9 @@ def _render_bugun(rep_id: str | None, day: date, *, blok_disi: bool) -> None:
         for idx in range(2):
             with cols[idx]:
                 if idx < len(pair):
-                    _render_block_card(pair[idx])
+                    _render_block_card(pair[idx], day)
     if extra is not None:
-        _render_block_card(extra)
+        _render_block_card(extra, day)
 
 
 def _share_send_error(exc: BaseException) -> None:
@@ -1020,17 +1056,15 @@ def _sure_column(today: dict[str, Any], avg90: dict[str, Any]) -> dict[str, Any]
     """Arama blogu 4. kolon: ortalama+tipik, altinda toplam."""
     pair = _fmt_ortalama_tipik(today.get("sure_ort"), today.get("sure_tipik"))
     toplam = today.get("sure_toplam")
-    extra = (
-        f"toplam {fmt_duration(toplam)}"
-        if toplam is not None
-        else "toplam veri yetersiz"
-    )
+    extra = None
+    if toplam is not None:
+        extra = f"toplam {fmt_duration(toplam)}"
+    shown = pair if pair is not None else "—"
     return {
         "label": "görüşme süresi",
         "cur": today.get("sure_ort"),
         "prev": avg90.get("sure_ort"),
-        "display": pair,
-        "empty_label": "veri yetersiz",
+        "display": shown,
         "help_text": HELP_BLOK_SURE,
         "extra": extra,
         "extra_help": HELP_BLOK_TOPLAM,

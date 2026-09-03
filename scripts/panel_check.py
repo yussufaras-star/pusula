@@ -7,7 +7,7 @@ Kullanım:
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from pusula.blocks import ISTANBUL
+from pusula.blocks import ISTANBUL, PLANNED_BLOCKS
 from pusula.freshness import FRESHNESS_THRESHOLDS, is_mesai
 from pusula.panel_status import (
     BlockReady,
@@ -95,6 +95,13 @@ def main() -> int:
     print("12:00 canli (3 Eylul):")
     print(f"  {format_block_line(ready_noon.blocks)}")
     print(f"  warn={ready_noon.warn}")
+    print("12:00 blok kart:")
+    for block in PLANNED_BLOCKS:
+        start_at = datetime.combine(
+            weekday_noon.date(), time(hour=block.start_hour), tzinfo=ISTANBUL
+        )
+        state = "bekleniyor" if weekday_noon < start_at else "acik"
+        print(f"  {block.label} {state}")
 
     print("panel_check: ok")
     return 0
