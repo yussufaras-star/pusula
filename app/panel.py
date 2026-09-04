@@ -708,7 +708,7 @@ def _block_phase(block: dict[str, Any], day: date) -> str:
 
 def _team_caption(item: dict[str, Any]) -> str | None:
     """Ekip ortalaması satırı. Yoksa None."""
-    if not item.get("show_team") and item.get("team_display") is None:
+    if not item.get("show_team"):
         return None
     team_display = item.get("team_display")
     if team_display is not None:
