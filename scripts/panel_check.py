@@ -139,6 +139,24 @@ def main() -> int:
     print("15:00 14-17 rozet yok (devam ediyor)")
     print(f"  etki: {format_impact_line(missed)}")
 
+    from pusula.panel_ciro import (
+        ciro_won_month_probe,
+        has_prior_year_same_month,
+    )
+
+    print("deals ay probe:")
+    print("ay | adet | closed_at_bos | ciro")
+    probe = ciro_won_month_probe()
+    for row in probe:
+        print(
+            f"{row['ay']} | {row['adet']} | {row['closed_at_bos']} | {row['ciro']}"
+        )
+    print(f"row_count={len(probe)}")
+    print(
+        "onceki yil ayni ay kayit="
+        f"{'var' if has_prior_year_same_month(probe) else 'yok'}"
+    )
+
     print("panel_check: ok")
     return 0
 

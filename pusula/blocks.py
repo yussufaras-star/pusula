@@ -70,6 +70,13 @@ def ended_block(now: datetime) -> DayBlock:
     return chosen
 
 
+def hours_of(block: DayBlock) -> tuple[int, ...]:
+    """Bloğun [start, end) saatleri. 09-11 → 9, 10."""
+    if block.end_hour <= block.start_hour:
+        return ()
+    return tuple(range(block.start_hour, block.end_hour))
+
+
 def hour_in_planned_sql(hour_expr: str) -> str:
     """Planlı dört bloğun saat aralığı (OR)."""
     parts = [

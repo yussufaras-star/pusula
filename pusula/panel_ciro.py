@@ -6,7 +6,7 @@ Satışa dönme oranı hesaplarına dokunulmaz.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -262,6 +262,121 @@ def ciro_team_monthly() -> list[dict[str, Any]]:
 def ciro_rep_monthly(rep_id: str) -> list[dict[str, Any]]:
     """Tek temsilcinin aylık cirosu (satış ekibi üyesi)."""
     return ciro_monthly_by_rep("sales", rep_id=rep_id)
+
+
+def ciro_won_month_probe() -> list[dict[str, Any]]:
+    """Kazanılan anlaşmalar, ay ay. Doğrulama sorgusu; ekip filtresi yok."""
+    sql = """
+        SELECT date_trunc('month', coalesce(closed_at, created_at))::date AS ay,
+               count(*)::int AS adet,
+               count(*) FILTER (WHERE closed_at IS NULL)::int AS closed_at_bos,
+               sum(amount) AS ciro
+        FROM public.deals
+        WHERE stage = %s
+        GROUP BY 1
+        ORDER BY 1
+    """
+    with connect() as conn:
+        rows = conn.execute(sql, (WON_STAGE,)).fetchall()
+    out: list[dict[str, Any]] = []
+    for ay, adet, bos, ciro in rows:
+        out.append(
+            {
+                "ay": ay,
+                "adet": int(adet),
+                "closed_at_bos": int(bos),
+                "ciro": float(ciro) if ciro is not None else None,
+            }
+        )
+    return out
+
+
+def has_prior_year_same_month(rows: list[dict[str, Any]]) -> bool:
+    """Bu yılın bir ayı için geçen yıl aynı ayda kayıt var mı."""
+    months = set()
+    for row in rows:
+        ay = row.get("ay")
+        if isinstance(ay, datetime):
+            months.add((ay.year, ay.month))
+        elif isinstance(ay, date):
+            months.add((ay.year, ay.month))
+    this_year = datetime.now(_TZ).year
+    for year, month in months:
+        if year == this_year and (this_year - 1, month) in months:
+            return True
+    return False
+
+
+def closed_at_bos_ratio(rows: list[dict[str, Any]]) -> float | None:
+    total = sum(int(r.get("adet") or 0) for r in rows)
+    if total <= 0:
+        return None
+    bos = sum(int(r.get("closed_at_bos") or 0) for r in rows)
+    return float(bos) / float(total)
+
+
+def ciro_team_year_compare() -> list[dict[str, Any]]:
+    """Satış ekibi ay ay: bu yıl, geçen yıl, fark, yüzde. CIRO_START yok."""
+    org_id = get_org_id()
+    sql = f"""
+        SELECT
+          date_trunc(
+            'month',
+            {_deal_at_sql("d")} AT TIME ZONE 'Europe/Istanbul'
+          )::date AS ay,
+          coalesce(sum(d.amount), 0)::float AS ciro,
+          count(*)::int AS adet
+        FROM deals d
+        WHERE d.org_id = %s
+          AND d.stage = %s
+          AND d.owner_rep_id = ANY(%s)
+        GROUP BY 1
+        ORDER BY 1
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            sql, (org_id, WON_STAGE, list(SALES_TEAM_IDS))
+        ).fetchall()
+    by_month: dict[tuple[int, int], dict[str, Any]] = {}
+    for ay, ciro, adet in rows:
+        if not isinstance(ay, date):
+            continue
+        by_month[(ay.year, ay.month)] = {
+            "ay": ay,
+            "ciro": float(ciro or 0),
+            "adet": int(adet),
+        }
+    this_year = datetime.now(_TZ).year
+    this_month = datetime.now(_TZ).month
+    out: list[dict[str, Any]] = []
+    for month in range(1, this_month + 1):
+        cur = by_month.get((this_year, month))
+        prev = by_month.get((this_year - 1, month))
+        this_ciro = float(cur["ciro"]) if cur is not None else 0.0
+        prev_ciro = float(prev["ciro"]) if prev is not None else None
+        diff: float | None
+        pct: float | None
+        if prev is None:
+            diff = None
+            pct = None
+        else:
+            diff = this_ciro - prev_ciro
+            if prev_ciro == 0:
+                pct = None
+            else:
+                pct = round(100.0 * diff / prev_ciro, 1)
+        label_dt = datetime(this_year, month, 1, tzinfo=_TZ)
+        out.append(
+            {
+                "ay": datetime(this_year, month, 1, tzinfo=_TZ),
+                "ay_etiket": month_label(label_dt),
+                "bu_yil": this_ciro,
+                "gecen_yil": prev_ciro,
+                "fark": diff,
+                "yuzde": pct,
+            }
+        )
+    return out
 
 
 def ciro_weekly_by_rep(rep_id: str | None) -> list[dict[str, float | None | datetime]]:

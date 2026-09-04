@@ -16,4 +16,5 @@ transcripts/
 .idea/
 *.log
 .streamlit/secrets.toml
+tmp_*
 tmp_*.py

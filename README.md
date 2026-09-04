@@ -95,7 +95,7 @@ streamlit run app/panel.py
 
 Giriş noktası `app/panel.py`. Bağlantı `DATABASE_URL_POOLED` (yoksa
 `DATABASE_URL`). Sorgu önbelleği 15 dakika. Temsilci yalnız kendi
-sekmesini görür; yönetici (`yusuf.aras@rexven.com`) üç sekmeyi de.
+sekmesini görür; yönetici (`yusuf.aras@rexven.com`) iki sekmeyi de.
 
 ## Streamlit Cloud
 

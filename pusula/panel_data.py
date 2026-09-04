@@ -7,6 +7,7 @@ sonrası, Mevcut Müşteri hariç. Operasyon kıyası son 90 gün.
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -15,7 +16,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 from psycopg.rows import dict_row
 
-from pusula.blocks import BLOK_DISI, PLANNED_BLOCKS, hour_in_planned_sql
+from pusula.blocks import BLOK_DISI, PLANNED_BLOCKS, hour_in_planned_sql, hours_of
 from pusula.config import get_org_id
 from pusula.sifir_satis import WON_STAGE, won_stage_sql
 from pusula.temas import (
@@ -35,6 +36,18 @@ _TZ = ZoneInfo("Europe/Istanbul")
 WINDOW_DAYS = 90
 WEEK_COUNT = 12
 CONV_START = datetime(2026, 5, 1, tzinfo=_TZ)
+RATE_MIN_N = 5
+_TOTAL_KEYS = (
+    "arama",
+    "donus",
+    "gelen",
+    "ulasilan",
+    "randevu",
+    "katildi",
+    "katilmadi",
+    "sonuc_girilmedi",
+    "sure_toplam",
+)
 MEVCUT_MUSTERI = "Mevcut Müşteri"
 _MONTHS = (
     "Ocak",
@@ -121,6 +134,12 @@ def default_window() -> DateWindow:
     return DateWindow(start=end - timedelta(days=WINDOW_DAYS), end=end)
 
 
+def all_data_window() -> DateWindow:
+    """Dönemsel istatistik: 1 Mayıs 2026 — bugün. CONV_START alt sınırı."""
+    end = datetime.now(_TZ).date()
+    return DateWindow(start=CONV_START.date(), end=end)
+
+
 def fmt_day(day: date) -> str:
     return f"{day.day} {_MONTHS[day.month - 1]} {day.year}, {_WEEKDAYS[day.weekday()]}"
 
@@ -180,6 +199,43 @@ def _rep_filter(
     if not rep_id:
         return "", []
     return f" AND {alias}.{column} = %s ", [rep_id]
+
+
+def _owner_filter(
+    alias: str,
+    rep_id: str | None,
+    owner_ids: Sequence[str] | None = None,
+    column: str = "rep_id",
+) -> tuple[str, list[Any]]:
+    extra, params = _rep_filter(alias, rep_id, column)
+    if owner_ids:
+        extra += f" AND {alias}.{column} = ANY(%s) "
+        params = list(params) + [list(owner_ids)]
+    return extra, params
+
+
+def per_person_metrics(metrics: dict[str, Any], n: int) -> dict[str, Any]:
+    """Sayım toplamlarını kişi başına çevir. Oran ve süre ortalamasına dokunma."""
+    if n <= 0:
+        return dict(metrics)
+    out = dict(metrics)
+    for key in _TOTAL_KEYS:
+        val = out.get(key)
+        if isinstance(val, (int, float)):
+            out[key] = round(float(val) / float(n), 1)
+    return out
+
+
+def rate_cell(
+    value: float | None,
+    payda: int | float | None,
+    *,
+    min_n: int = RATE_MIN_N,
+) -> str:
+    """Payda eşiğin altındaysa oran gösterme."""
+    if payda is None or float(payda) < float(min_n):
+        return "veri yetersiz"
+    return fmt_pct(value)
 
 
 def load_reps() -> list[Rep]:
@@ -540,11 +596,14 @@ def today_arama_count(rep_id: str | None = None) -> int:
 
 
 def today_blocks(
-    rep_id: str | None, day: date | None = None
+    rep_id: str | None,
+    day: date | None = None,
+    *,
+    owner_ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Seçilen günün dört bloğu + 90 günlük aynı blok ortalaması."""
     org_id = get_org_id()
-    extra, params = _rep_filter("e", rep_id)
+    extra, params = _owner_filter("e", rep_id, owner_ids)
     hour = _hour_expr("e")
     chosen = day or datetime.now(_TZ).date()
     day_col = "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date"
@@ -855,6 +914,147 @@ def today_blocks(
         }
     )
     return {"blocks": blocks, "workdays": days}
+
+
+def today_hours(
+    rep_id: str | None,
+    day: date | None = None,
+    *,
+    owner_ids: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Seçilen gün, saat 09-17. Tanım today_blocks ile aynı."""
+    org_id = get_org_id()
+    extra, params = _owner_filter("e", rep_id, owner_ids)
+    hour = _hour_expr("e")
+    chosen = day or datetime.now(_TZ).date()
+    is_call = "e.channel = 'call' AND e.direction = 'outbound'"
+    is_meet = "e.channel = 'meeting'"
+    sql = f"""
+        WITH hours AS (
+            SELECT h FROM generate_series(9, 17) AS h
+        ),
+        slots AS (
+            SELECT
+              {hour} AS saat,
+              count(*) FILTER (
+                WHERE {is_call} AND {_CEVIRME_E}
+              )::int AS arama,
+              count(*) FILTER (
+                WHERE {is_call} AND {_TEMAS_E}
+              )::int AS ulasilan_giden,
+              count(*) FILTER (WHERE {_DONUS_E})::int AS donus,
+              count(*) FILTER (WHERE {_GELEN_E})::int AS gelen,
+              {_LEAD_PAYDA_E}::int AS lead_payda,
+              {_LEAD_PAY_E}::int AS lead_pay,
+              count(*) FILTER (WHERE {is_meet})::int AS randevu,
+              count(*) FILTER (
+                WHERE {is_meet} AND e.meta->>'randevu_durumu' = 'katildi'
+              )::int AS katildi,
+              count(*) FILTER (
+                WHERE {is_meet} AND e.meta->>'randevu_durumu' = 'katilmadi'
+              )::int AS katilmadi,
+              count(*) FILTER (
+                WHERE {is_meet}
+                  AND e.meta->>'randevu_durumu' = 'sonuc_girilmedi'
+              )::int AS sonuc,
+              sum({_DUR_E}) FILTER (
+                WHERE {is_call} AND {_TEMAS_E}
+              ) AS sure_toplam,
+              avg({_DUR_E}) FILTER (
+                WHERE {is_call} AND {_TEMAS_E}
+              ) AS sure_ort,
+              percentile_cont(0.5) WITHIN GROUP (ORDER BY {_DUR_E})
+                FILTER (WHERE {is_call} AND {_TEMAS_E}) AS sure_tipik
+            FROM events e
+            JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+            WHERE e.org_id = %s
+              AND {_sales_rep_sql()}
+              AND (e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date = %s
+              AND e.occurred_at <= now()
+              {extra}
+            GROUP BY 1
+        )
+        SELECT
+          hours.h AS saat,
+          coalesce(s.arama, 0)::int,
+          coalesce(s.ulasilan_giden, 0)::int,
+          coalesce(s.donus, 0)::int,
+          coalesce(s.gelen, 0)::int,
+          coalesce(s.lead_payda, 0)::int,
+          coalesce(s.lead_pay, 0)::int,
+          coalesce(s.randevu, 0)::int,
+          coalesce(s.katildi, 0)::int,
+          coalesce(s.katilmadi, 0)::int,
+          coalesce(s.sonuc, 0)::int,
+          s.sure_toplam,
+          s.sure_ort,
+          s.sure_tipik
+        FROM hours
+        LEFT JOIN slots s ON s.saat = hours.h
+        ORDER BY hours.h
+    """
+    with connect() as conn:
+        rows = conn.execute(sql, (org_id, chosen, *params)).fetchall()
+    out: list[dict[str, Any]] = []
+    for (
+        saat,
+        arama,
+        ulasilan_giden,
+        donus,
+        gelen,
+        lead_payda,
+        lead_pay,
+        randevu,
+        katildi,
+        katilmadi,
+        sonuc,
+        sure_toplam,
+        sure_ort,
+        sure_tipik,
+    ) in rows:
+        t_u = int(ulasilan_giden)
+        t_d = int(donus)
+        t_pay = _reach_pay(t_u, t_d)
+        katilim_payda = int(katildi) + int(katilmadi)
+        sure: dict[str, float | None]
+        if t_u == 0:
+            sure = {"sure_toplam": None, "sure_ort": None, "sure_tipik": None}
+        else:
+            sure = {
+                "sure_toplam": float(sure_toplam) if sure_toplam is not None else None,
+                "sure_ort": float(sure_ort) if sure_ort is not None else None,
+                "sure_tipik": float(sure_tipik) if sure_tipik is not None else None,
+            }
+        out.append(
+            {
+                "saat": int(saat),
+                "arama": int(arama),
+                "donus": t_d,
+                "gelen": int(gelen),
+                "ulasilan": t_pay,
+                "ulasma_orani": _ratio(int(lead_pay), int(lead_payda)),
+                "lead_payda": int(lead_payda),
+                "randevu": int(randevu),
+                "katildi": int(katildi),
+                "katilmadi": int(katilmadi),
+                "sonuc_girilmedi": int(sonuc),
+                "katilim_orani": _ratio(int(katildi), katilim_payda),
+                "katilim_payda": katilim_payda,
+                **sure,
+            }
+        )
+    return out
+
+
+def hours_for_block(
+    hour_rows: list[dict[str, Any]], block_key: str
+) -> list[dict[str, Any]]:
+    """Bloğun saat satırları. Sıra start_hour → end_hour-1."""
+    spec = next((item for item in PLANNED_BLOCKS if item.key == block_key), None)
+    if spec is None:
+        return []
+    wanted = set(hours_of(spec))
+    return [row for row in hour_rows if int(row["saat"]) in wanted]
 
 
 def _workdays() -> int:
