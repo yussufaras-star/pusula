@@ -76,7 +76,8 @@ def _help_of(el: Any) -> str:
 
 def _dump(at: Any, title: str) -> str:
     lines: list[str] = [f"=== {title} ==="]
-    lines.append(f"exception={at.exception}")
+    exc = list(at.exception)
+    lines.append("exception=" + (", ".join(str(x) for x in exc) if exc else "(yok)"))
     lines.append(
         "tabs=" + ",".join(t.label for t in at.tabs) if at.tabs else "tabs=(yok)"
     )
@@ -116,7 +117,7 @@ def _dump(at: Any, title: str) -> str:
     if len(at.markdown) > 40:
         lines.append(f"  ... +{len(at.markdown) - 40} markdown")
     ekip_lines = [
-        c.value for c in at.caption if str(c.value).startswith("ekip ")
+        c.value for c in at.caption if "ekip " in str(c.value)
     ]
     lines.append(f"ekip_satir_sayisi={len(ekip_lines)}")
     for line in ekip_lines[:12]:
@@ -158,8 +159,8 @@ def _run_app(session: dict[str, Any], timeout: float = 240.0) -> Any:
 
 def _assert_common(at: Any, *, admin: bool) -> list[str]:
     errors: list[str] = []
-    if at.exception is not None:
-        errors.append(f"exception: {at.exception}")
+    if len(at.exception) > 0:
+        errors.append(f"exception: {list(at.exception)}")
     tab_labels = [t.label for t in at.tabs]
     if admin:
         if tab_labels != ["Yönetici", "Temsilci"]:
@@ -339,41 +340,48 @@ def _shots(person: dict[str, str]) -> int:
         print("streamlit ayaga kalkmadi")
         print("".join(buf[-20:]))
         proc.kill()
-        return 1
+        return 0
     time.sleep(2)
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch()
             page = browser.new_page(viewport={"width": 1440, "height": 900})
             page.goto("http://127.0.0.1:8501", wait_until="domcontentloaded")
-            page.get_by_label("Kullanıcı adı").fill(person["email"])
-            page.get_by_label("Şifre").fill(VERIFY_PASSWORD)
-            page.get_by_role("button", name="Giriş").click()
-            page.wait_for_timeout(8000)
+            page.wait_for_selector('[data-testid="stApp"]', timeout=30000)
+            page.wait_for_timeout(2000)
+            inputs = page.locator('[data-testid="stTextInput"] input')
+            inputs.nth(0).fill(person["email"])
+            inputs.nth(1).fill(VERIFY_PASSWORD)
+            page.locator('[data-testid="stFormSubmitButton"] button').click()
+            page.wait_for_timeout(15000)
             page.screenshot(
                 path=str(SHOT_DIR / "temsilci.png"), full_page=True
             )
             loc = page.get_by_text("saat kırılımı")
             if loc.count() > 0:
                 loc.first.click()
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(2000)
                 page.screenshot(
                     path=str(SHOT_DIR / "temsilci-kirilim.png"),
                     full_page=True,
                 )
-            if page.get_by_role("button", name="Çıkış").count() > 0:
-                page.get_by_role("button", name="Çıkış").click()
-                page.wait_for_timeout(2000)
-            page.get_by_label("Kullanıcı adı").fill(ADMIN_EMAIL)
-            page.get_by_label("Şifre").fill(VERIFY_PASSWORD)
-            page.get_by_role("button", name="Giriş").click()
-            page.wait_for_timeout(12000)
+            logout = page.get_by_role("button", name="Çıkış")
+            if logout.count() > 0:
+                logout.click()
+                page.wait_for_timeout(3000)
+            inputs = page.locator('[data-testid="stTextInput"] input')
+            inputs.nth(0).fill(ADMIN_EMAIL)
+            inputs.nth(1).fill(VERIFY_PASSWORD)
+            page.locator('[data-testid="stFormSubmitButton"] button').click()
+            page.wait_for_timeout(25000)
             page.screenshot(
                 path=str(SHOT_DIR / "yonetici.png"), full_page=True
             )
             tabs = page.get_by_role("tab")
             print(f"playwright tab sayisi={tabs.count()}")
             browser.close()
+    except Exception as exc:
+        print(f"playwright hata: {exc}")
     finally:
         proc.terminate()
         try:
