@@ -86,7 +86,7 @@ from pusula.panel_data import (
     weekly_team_series,
     workload_board,
 )
-from pusula.blocks import PLANNED_BLOCKS, card_phase
+from pusula.blocks import block_by_key, card_phase
 from pusula.block_share import (
     TEAM_REP_ID,
     fmt_sent_clock,
@@ -352,6 +352,8 @@ def _store_user(user: AuthUser) -> None:
 
 
 def _render_login() -> None:
+    if _session_user() is not None:
+        return
     st.title("Pusula")
     if not _passwords():
         st.error("giriş yapılandırması yok")
@@ -700,8 +702,8 @@ def _block_delta_markup(cur: float | None, prev: float | None) -> str:
 def _block_phase(block: dict[str, Any], day: date) -> str:
     """baslamadi | devam_ediyor | tamamlandi. blok dışı tamamlandi."""
     key = str(block.get("key") or "")
-    spec = next((item for item in PLANNED_BLOCKS if item.key == key), None)
-    if spec is None:
+    spec = block_by_key(key)
+    if spec is None or spec.key == "blok_disi":
         return "tamamlandi"
     return card_phase(spec, day, datetime.now(_TZ))
 
@@ -744,12 +746,18 @@ def _block_metric(item: dict[str, Any], *, badges: bool) -> None:
         shown = fmt_num(cur)
         delta_md = _block_delta_markup(cur, prev) if badges else ""
     help_text = item.get("help_text")
-    st.caption(str(item["label"]), help=help_text)
-    if delta_md:
-        st.caption(f"**{shown}** {delta_md}")
-    else:
-        st.caption(f"**{shown}**")
     extra = item.get("extra")
+    if extra == "veri yetersiz":
+        shown = "veri yetersiz"
+        extra = None
+    if str(shown) == "veri yetersiz":
+        st.caption(f"{item['label']} — veri yetersiz", help=help_text)
+    else:
+        st.caption(str(item["label"]), help=help_text)
+        if delta_md:
+            st.caption(f"**{shown}** {delta_md}")
+        else:
+            st.caption(f"**{shown}**")
     if extra:
         st.caption(str(extra), help=item.get("extra_help"))
     team_line = _team_caption(item)
@@ -971,9 +979,9 @@ def _render_status_bar() -> None:
 
     ready = load_panel_readiness()
     with st.container():
-        st.caption(format_block_line(ready.blocks))
+        st.caption(format_block_line(ready))
         st.caption(format_source_line(ready), help=HELP_TAZELIK)
-        impact = format_impact_line(ready.blocks)
+        impact = format_impact_line(ready)
         if impact:
             st.caption(impact)
 
@@ -992,26 +1000,37 @@ def _render_block_card(
     team: dict[str, Any] | None = None,
     hours: list[dict[str, Any]] | None = None,
     team_hours: dict[int, dict[str, Any]] | None = None,
+    scope: str = "blok",
 ) -> None:
     kind = str(block.get("kind") or "")
     today = block.get("today") or {}
     avg90 = block.get("avg90") or {}
     phase = _block_phase(block, day)
+    badge_ok = bool(block.get("badge_ok", True))
     with st.container(border=True):
         st.markdown(f"**{block.get('label')}**")
         if phase == "baslamadi":
             st.caption("bekleniyor")
             return
-        badges = phase == "tamamlandi"
+        badges = phase == "tamamlandi" and badge_ok
         if phase == "devam_ediyor":
             st.caption("devam ediyor")
+        elif kind == "mixed" and not badge_ok:
+            st.caption("kıyas — veri yetersiz")
+        elif kind == "mixed":
+            st.caption("kıyas geçmiş cumartesilere göre", help=HELP_BLOK_KIYAS)
         else:
             st.caption("kıyas 90 günlük ortalamaya göre", help=HELP_BLOK_KIYAS)
         _render_block_groups(
             kind, today, avg90, badges=badges, team=team, sparse=False
         )
         if hours:
-            with st.expander("saat kırılımı", expanded=False):
+            show = st.checkbox(
+                "saat kırılımı",
+                value=False,
+                key=f"hours_{scope}_{block.get('key')}_{day.isoformat()}",
+            )
+            if show:
                 empty = {"arama": 0, "donus": 0, "gelen": 0, "ulasilan": 0}
                 for row in hours:
                     saat = int(row["saat"])
@@ -1085,6 +1104,14 @@ def _render_block_groups(
         if sparse:
             arama.extend([ulasma, sure])
         _block_group("Arama", arama, badges=badges)
+    elif kind == "mixed":
+        meeting = _metrics_toplanti(
+            today, avg90, as_int=not sparse, team=team
+        )
+        meeting.append(katilim)
+        _block_group("Toplantı", meeting, badges=badges)
+        arama.extend([ulasma, sure])
+        _block_group("Arama", arama, badges=badges)
     else:
         arama.append(sure)
         if sparse:
@@ -1103,6 +1130,7 @@ def _render_bugun(
     *,
     blok_disi: bool,
     with_team: bool = False,
+    scope: str = "blok",
 ) -> None:
     data = _today_blocks(rep_id, day.isoformat())
     hour_rows = _today_hours(rep_id, day.isoformat())
@@ -1129,28 +1157,44 @@ def _render_bugun(
                 extra = block
             continue
         planned.append(block)
-    for start in (0, 2):
-        pair = planned[start : start + 2]
-        if not pair:
-            continue
-        cols = st.columns(2, gap="small")
-        for idx in range(2):
-            with cols[idx]:
-                if idx < len(pair):
-                    blk = pair[idx]
-                    key = str(blk.get("key") or "")
-                    _render_block_card(
-                        blk,
-                        day,
-                        team=team_by_key.get(key),
-                        hours=hours_for_block(hour_rows, key),
-                        team_hours=team_hours_map,
-                    )
+    if not planned:
+        st.caption("pazar mesai yok")
+    elif len(planned) == 1:
+        blk = planned[0]
+        key = str(blk.get("key") or "")
+        _render_block_card(
+            blk,
+            day,
+            team=team_by_key.get(key),
+            hours=hours_for_block(hour_rows, key),
+            team_hours=team_hours_map,
+            scope=scope,
+        )
+    else:
+        for start in (0, 2):
+            pair = planned[start : start + 2]
+            if not pair:
+                continue
+            cols = st.columns(2, gap="small")
+            for idx in range(2):
+                with cols[idx]:
+                    if idx < len(pair):
+                        blk = pair[idx]
+                        key = str(blk.get("key") or "")
+                        _render_block_card(
+                            blk,
+                            day,
+                            team=team_by_key.get(key),
+                            hours=hours_for_block(hour_rows, key),
+                            team_hours=team_hours_map,
+                            scope=scope,
+                        )
     if extra is not None:
         _render_block_card(
             extra,
             day,
             team=team_by_key.get("blok_disi"),
+            scope=scope,
         )
 
 
@@ -1307,8 +1351,7 @@ def _compare(
     display: str | None = None,
 ) -> None:
     if empty_label is not None and cur is None:
-        st.metric(label, empty_label, None, help=help_text)
-        st.caption(":gray[veri yetersiz]")
+        st.metric(f"{label} — veri yetersiz", empty_label, None, help=help_text)
         return
     if display is not None:
         shown = display
@@ -1318,8 +1361,15 @@ def _compare(
         shown = fmt_pct(cur)
     else:
         shown = fmt_num(cur)
+    if str(shown) == "veri yetersiz":
+        st.metric(f"{label} — veri yetersiz", shown, None, help=help_text)
+        return
+    delta = _delta_markup(cur, prev)
+    if delta == ":gray[veri yetersiz]":
+        st.metric(f"{label} — veri yetersiz", shown, None, help=help_text)
+        return
     st.metric(label, shown, None, help=help_text)
-    st.caption(_delta_markup(cur, prev))
+    st.caption(delta)
 
 
 def _ciro_ytd_table(rows: list[dict[str, Any]]) -> None:
@@ -1511,7 +1561,9 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
 
     start, end = _keys(window)
     conv = conv_window(window)
-    _render_bugun(rep_id, block_day, blok_disi=True, with_team=rep_id is not None)
+    _render_bugun(
+        rep_id, block_day, blok_disi=True, with_team=rep_id is not None, scope="yon"
+    )
     _render_block_share(block_day)
 
     st.divider()
@@ -1796,7 +1848,7 @@ def render_temsilci(
     cur = snap["current"]
     prev = snap["previous"]
 
-    _render_bugun(rep_id, block_day, blok_disi=False, with_team=True)
+    _render_bugun(rep_id, block_day, blok_disi=False, with_team=True, scope="tem")
     st.divider()
     with st.container(border=True):
         st.markdown("**Günlük özet**")
@@ -1967,7 +2019,7 @@ def main() -> None:
     user = _session_user()
     if user is None:
         _render_login()
-        return
+        st.stop()
     _require_env()
     with st.container():
         _render_header(user)

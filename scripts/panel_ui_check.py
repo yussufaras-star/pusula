@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import time
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +98,9 @@ def _dump(at: Any, title: str) -> str:
     lines.append(
         "expander=" + ",".join(e.label for e in at.expander)
     )
+    lines.append(
+        "checkbox=" + ",".join(getattr(c, "label", "") for c in at.checkbox)
+    )
     lines.append("titles=" + " | ".join(t.value for t in at.title))
     lines.append("subheaders=" + " | ".join(s.value for s in at.subheader))
     mayis_helps: list[str] = []
@@ -180,6 +183,15 @@ def _assert_common(at: Any, *, admin: bool) -> list[str]:
     sub = [str(s.value) for s in at.subheader]
     if any(s.startswith("Saatlik") for s in sub):
         errors.append(f"saatlik subheader {sub}")
+    if "Ciro" not in sub:
+        errors.append(f"Ciro bolumu yok: {sub}")
+    blob = _all_text(at)
+    if "Kullanıcı adı" in blob or (hasattr(at, "form") and list(at.form)):
+        errors.append("giris formu oturumda gorunuyor")
+    if "son ingest" not in blob:
+        errors.append("ingest gostergesi yok")
+    if "11:15 çalışmadı" in blob or "14:15 çalışmadı" in blob:
+        errors.append("blok bitis saati calismadi yazisi duruyor")
     return errors
 
 
@@ -245,25 +257,56 @@ def main() -> int:
             if "ekip " not in _all_text(at_admin):
                 errors.append("yonetici temsilci seciminde ekip yok")
 
+    today = date.today()
+    # AppTest tarih Istanbul'a bagli degil; takvim gunu yeter.
+    sat = today - timedelta(days=(today.weekday() - 5) % 7)
+    friday = sat - timedelta(days=1)
+
     expanders = [e.label for e in at_admin.expander]
-    if "saat kırılımı" not in expanders:
-        errors.append(f"saat kirilimi expander yok: {expanders}")
+    if "saat kırılımı" in expanders:
+        errors.append(f"saat kirilimi hala expander: {expanders}")
+    checks = [getattr(c, "label", "") for c in at_admin.checkbox]
+    if "saat kırılımı" not in checks:
+        errors.append(f"saat kirilimi checkbox yok: {checks}")
     else:
-        first = next(e for e in at_admin.expander if e.label == "saat kırılımı")
+        box = next(c for c in at_admin.checkbox if c.label == "saat kırılımı")
+        box.check()
+        at_admin.run()
+        print(_dump(at_admin, "saat kirilimi acik"))
         hour_caps = [
-            c.value for c in first.caption if ":00" in str(c.value)
+            c.value for c in at_admin.caption if ":00" in str(c.value)
         ]
         print("kirilim saat caption:")
         for line in hour_caps[:12]:
             print(f"  {line}")
         yetersiz = [
             c.value
-            for c in first.caption
+            for c in at_admin.caption
             if "veri yetersiz" in str(c.value)
         ]
         print(f"kirilim veri yetersiz hucre={len(yetersiz)}")
-        for line in yetersiz[:6]:
+        for line in yetersiz[:8]:
             print(f"  {line}")
+
+    if at_admin.date_input:
+        at_admin.date_input[0].set_value(sat)
+        at_admin.run()
+        print(_dump(at_admin, f"cumartesi {sat.isoformat()}"))
+        sat_blob = _all_text(at_admin)
+        if "09-11 arama blogu" in sat_blob or "11-14 toplanti blogu" in sat_blob:
+            errors.append("cumarteside hafta ici blok etiketi var")
+        if "**09-15**" not in sat_blob and "09-15" not in sat_blob:
+            errors.append("cumartesi 09-15 blogu yok")
+        if "arama blogu" in sat_blob or "toplanti blogu" in sat_blob:
+            errors.append("cumartesi karti blok tipi yargisi tasiyor")
+        print(f"cumartesi gun={sat.isoformat()}")
+
+        at_admin.date_input[0].set_value(friday)
+        at_admin.run()
+        print(_dump(at_admin, f"cuma {friday.isoformat()}"))
+        fri_blob = _all_text(at_admin)
+        if "09-11 arama blogu" not in fri_blob:
+            errors.append("cumada hafta ici blok yok")
 
     print(f"AppTest sureleri temsilci={rep_s:.2f}s yonetici={admin_s:.2f}s")
     if errors:
@@ -350,33 +393,42 @@ def _shots(person: dict[str, str]) -> int:
             page.wait_for_selector('[data-testid="stApp"]', timeout=30000)
             page.wait_for_timeout(2000)
             inputs = page.locator('[data-testid="stTextInput"] input')
-            inputs.nth(0).fill(person["email"])
+            inputs.nth(0).fill(ADMIN_EMAIL)
             inputs.nth(1).fill(VERIFY_PASSWORD)
             page.locator('[data-testid="stFormSubmitButton"] button').click()
-            page.wait_for_timeout(15000)
+            t_open = time.perf_counter()
+            page.wait_for_selector("text=Ciro", timeout=120000)
+            open_s = time.perf_counter() - t_open
+            print(f"sayfa acilis (Ciro gorundu): {open_s:.2f}s")
+            page.wait_for_timeout(3000)
             page.screenshot(
-                path=str(SHOT_DIR / "temsilci.png"), full_page=True
+                path=str(SHOT_DIR / "yonetici.png"), full_page=True
+            )
+            login_left = page.locator('[data-testid="stFormSubmitButton"]')
+            print(f"giris formu adet={login_left.count()}")
+            page.screenshot(
+                path=str(SHOT_DIR / "ingest-bar.png"),
+                full_page=False,
             )
             loc = page.get_by_text("saat kırılımı")
             if loc.count() > 0:
                 loc.first.click()
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(3000)
                 page.screenshot(
-                    path=str(SHOT_DIR / "temsilci-kirilim.png"),
+                    path=str(SHOT_DIR / "saat-kirilim.png"),
                     full_page=True,
                 )
-            logout = page.get_by_role("button", name="Çıkış")
-            if logout.count() > 0:
-                logout.click()
-                page.wait_for_timeout(3000)
-            inputs = page.locator('[data-testid="stTextInput"] input')
-            inputs.nth(0).fill(ADMIN_EMAIL)
-            inputs.nth(1).fill(VERIFY_PASSWORD)
-            page.locator('[data-testid="stFormSubmitButton"] button').click()
-            page.wait_for_timeout(25000)
-            page.screenshot(
-                path=str(SHOT_DIR / "yonetici.png"), full_page=True
-            )
+            ciro = page.get_by_text("Ciro", exact=True)
+            if ciro.count() > 0:
+                ciro.first.scroll_into_view_if_needed()
+                page.wait_for_timeout(1000)
+                page.screenshot(
+                    path=str(SHOT_DIR / "ciro.png"), full_page=True
+                )
+            sat_label = page.get_by_text("09-15")
+            print(f"09-15 etiket adet={sat_label.count()}")
+            weekday_blk = page.get_by_text("09-11 arama blogu")
+            print(f"hafta ici 09-11 adet={weekday_blk.count()}")
             tabs = page.get_by_role("tab")
             print(f"playwright tab sayisi={tabs.count()}")
             browser.close()

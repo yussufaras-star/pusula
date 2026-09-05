@@ -1,7 +1,8 @@
 """Gün içi zaman blokları.
 
-09-11 arama, 11-14 toplantı, 14-17 arama, 17-18 toplantı.
-Blok sonu ingest bitimden 15 dakika sonra çalışır.
+Hafta içi: 09-11 arama, 11-14 toplantı, 14-17 arama, 17-18 toplantı.
+Cumartesi: tek karışık blok 09-15. Pazar yok.
+Ingest saat başı (dakika 07) çalışır; blok bitişine bağlı değildir.
 """
 
 from __future__ import annotations
@@ -14,13 +15,14 @@ from zoneinfo import ZoneInfo
 ISTANBUL = ZoneInfo("Europe/Istanbul")
 LOOKBACK_HOURS = 6
 BOOKINGS_LOOKBACK_HOURS = 24
+SAT_BADGE_MIN = 4
 
 
 @dataclass(frozen=True)
 class DayBlock:
     key: str
     label: str
-    kind: str  # call | meeting | other
+    kind: str  # call | meeting | mixed | other
     start_hour: int
     end_hour: int  # yarım açık [start, end)
     ingest_hour: int
@@ -34,7 +36,13 @@ PLANNED_BLOCKS: tuple[DayBlock, ...] = (
     DayBlock("toplanti_17_18", "17-18 toplanti blogu", "meeting", 17, 18, 18, 15),
 )
 
+SATURDAY_BLOCK = DayBlock(
+    "cumartesi_09_15", "09-15", "mixed", 9, 15, 15, 7
+)
+
 BLOK_DISI = DayBlock("blok_disi", "blok dışı", "other", 0, 0, 0, 0)
+
+_ALL_DISPLAY_BLOCKS: tuple[DayBlock, ...] = PLANNED_BLOCKS + (SATURDAY_BLOCK,)
 
 
 CardPhase = Literal["baslamadi", "devam_ediyor", "tamamlandi"]
@@ -44,6 +52,25 @@ def to_istanbul(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=ISTANBUL)
     return value.astimezone(ISTANBUL)
+
+
+def blocks_for(day: date) -> tuple[DayBlock, ...]:
+    """Seçilen günün planlı blokları. Pazar boş, cumartesi tek karışık."""
+    weekday = day.weekday()
+    if weekday == 5:
+        return (SATURDAY_BLOCK,)
+    if weekday == 6:
+        return ()
+    return PLANNED_BLOCKS
+
+
+def block_by_key(key: str) -> DayBlock | None:
+    if key == BLOK_DISI.key:
+        return BLOK_DISI
+    for item in _ALL_DISPLAY_BLOCKS:
+        if item.key == key:
+            return item
+    return None
 
 
 def card_phase(block: DayBlock, day: date, now: datetime) -> CardPhase:
@@ -71,16 +98,23 @@ def ended_block(now: datetime) -> DayBlock:
 
 
 def hours_of(block: DayBlock) -> tuple[int, ...]:
-    """Bloğun [start, end) saatleri. 09-11 → 9, 10."""
+    """Bloğun [start, end) saatleri. 09-11 → 9, 10. Cumartesi 09-15 → 9..14."""
     if block.end_hour <= block.start_hour:
         return ()
     return tuple(range(block.start_hour, block.end_hour))
 
 
-def hour_in_planned_sql(hour_expr: str) -> str:
-    """Planlı dört bloğun saat aralığı (OR)."""
+def hour_in_blocks_sql(hour_expr: str, blocks: tuple[DayBlock, ...]) -> str:
+    """Verilen blokların saat aralığı (OR). Boşsa FALSE."""
+    if not blocks:
+        return "FALSE"
     parts = [
         f"({hour_expr} >= {b.start_hour} AND {hour_expr} < {b.end_hour})"
-        for b in PLANNED_BLOCKS
+        for b in blocks
     ]
     return "(" + " OR ".join(parts) + ")"
+
+
+def hour_in_planned_sql(hour_expr: str) -> str:
+    """Hafta içi dört bloğun saat aralığı (OR)."""
+    return hour_in_blocks_sql(hour_expr, PLANNED_BLOCKS)

@@ -1,16 +1,29 @@
-"""Blok saat kırılımı, payda eşiği, yıl kıyası — DB yok."""
+"""Blok saat kırılımı, payda eşiği, yıl kıyası, cumartesi — DB yok."""
 
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
-from pusula.blocks import BLOK_DISI, PLANNED_BLOCKS, hours_of
+from pusula.blocks import (
+    BLOK_DISI,
+    PLANNED_BLOCKS,
+    SATURDAY_BLOCK,
+    blocks_for,
+    hours_of,
+)
+from pusula.freshness import is_mesai
 from pusula.panel_ciro import has_prior_year_same_month
 from pusula.panel_data import (
     CONV_START,
+    GUN_SAAT,
     RATE_MIN_N,
+    SAT_SAAT,
     all_data_window,
     per_person_metrics,
     rate_cell,
 )
+from pusula.panel_status import last_due_slot, next_ingest_at
+
+_TZ = ZoneInfo("Europe/Istanbul")
 
 
 def test_hours_of_planned_blocks() -> None:
@@ -20,6 +33,19 @@ def test_hours_of_planned_blocks() -> None:
     assert by_key["arama_14_17"] == (14, 15, 16)
     assert by_key["toplanti_17_18"] == (17,)
     assert hours_of(BLOK_DISI) == ()
+    assert hours_of(SATURDAY_BLOCK) == (9, 10, 11, 12, 13, 14)
+
+
+def test_blocks_for_weekday_saturday_sunday() -> None:
+    friday = date(2026, 9, 4)
+    saturday = date(2026, 9, 5)
+    sunday = date(2026, 9, 6)
+    assert blocks_for(friday) == PLANNED_BLOCKS
+    assert blocks_for(saturday) == (SATURDAY_BLOCK,)
+    assert blocks_for(sunday) == ()
+    assert SATURDAY_BLOCK.kind == "mixed"
+    assert "arama" not in SATURDAY_BLOCK.label
+    assert "toplanti" not in SATURDAY_BLOCK.label
 
 
 def test_all_data_window_starts_at_conv() -> None:
@@ -64,3 +90,32 @@ def test_prior_year_same_month_detects_pair() -> None:
     assert has_prior_year_same_month(only_this) is False
     only_last = [{"ay": date(2025, 6, 1), "adet": 3}]
     assert has_prior_year_same_month(only_last) is False
+
+
+def test_is_mesai_saturday_sunday() -> None:
+    sat = datetime(2026, 9, 5, 12, 0, tzinfo=_TZ)
+    sat_late = datetime(2026, 9, 5, 15, 0, tzinfo=_TZ)
+    sun = datetime(2026, 9, 6, 12, 0, tzinfo=_TZ)
+    night = datetime(2026, 9, 4, 21, 0, tzinfo=_TZ)
+    assert is_mesai(sat) is True
+    assert is_mesai(sat_late) is False
+    assert is_mesai(sun) is False
+    assert is_mesai(night) is False
+
+
+def test_ingest_slots_skip_sunday_and_saturday_evening() -> None:
+    after_sat = datetime(2026, 9, 5, 15, 30, tzinfo=_TZ)
+    nxt = next_ingest_at(after_sat)
+    assert nxt is not None
+    assert nxt.date() == date(2026, 9, 7)
+    assert nxt.hour == 9
+    assert nxt.minute == 7
+    due = last_due_slot(after_sat)
+    assert due is not None
+    assert due.hour == 15
+    assert due.minute == 7
+
+
+def test_occupancy_hours_constants() -> None:
+    assert GUN_SAAT == 8.0
+    assert SAT_SAAT == 6.0

@@ -1,4 +1,4 @@
-"""Panel hazırlık çubuğu — eşikler, blok durumu, mesai dışı uyarı yok.
+"""Panel hazırlık çubuğu — eşikler, ingest durumu, mesai dışı uyarı yok.
 
 Kullanım:
     python scripts/panel_check.py
@@ -7,7 +7,7 @@ Kullanım:
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -16,14 +16,24 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from pusula.blocks import ISTANBUL, PLANNED_BLOCKS, card_phase
+from pusula.blocks import (
+    ISTANBUL,
+    PLANNED_BLOCKS,
+    SATURDAY_BLOCK,
+    block_by_key,
+    blocks_for,
+    card_phase,
+    hours_of,
+)
 from pusula.freshness import FRESHNESS_THRESHOLDS, is_mesai
 from pusula.panel_status import (
-    BlockReady,
+    PanelReadiness,
     format_block_line,
     format_impact_line,
     format_source_line,
+    last_due_slot,
     load_panel_readiness,
+    next_ingest_at,
     should_warn,
 )
 
@@ -36,26 +46,53 @@ def _phase_label(phase: str) -> str:
     return "tamamlandi"
 
 
+def _fake_ready(
+    now: datetime,
+    *,
+    last_at: datetime | None,
+    missed: bool,
+) -> PanelReadiness:
+    nxt = next_ingest_at(now)
+    due = last_due_slot(now)
+    return PanelReadiness(
+        last_at=last_at,
+        next_at=nxt,
+        due_at=due,
+        missed=missed,
+        sources=[],
+        all_fresh=True,
+        warn=should_warn(missed, now),
+        now=now,
+    )
+
+
 def main() -> int:
     print("esikler:")
     for key, value in FRESHNESS_THRESHOLDS.items():
         print(f"  {key}: {value}")
     now = datetime.now(ISTANBUL)
     print(f"simdi: {now.isoformat(timespec='minutes')} mesai={is_mesai(now)}")
-    weekend = now + timedelta(days=(5 - now.weekday()) % 7 or 7)
-    weekend = weekend.replace(hour=12, minute=0, second=0, microsecond=0)
+    saturday = now + timedelta(days=(5 - now.weekday()) % 7 or 7)
+    saturday = saturday.replace(hour=12, minute=0, second=0, microsecond=0)
+    sunday = saturday + timedelta(days=1)
     night = now.replace(hour=21, minute=0, second=0, microsecond=0)
-    print(f"hafta sonu mesai={is_mesai(weekend)}")
+    print(f"cumartesi mesai={is_mesai(saturday)}")
+    print(f"pazar mesai={is_mesai(sunday)}")
     print(f"gece mesai={is_mesai(night)}")
-    if is_mesai(weekend) or is_mesai(night):
-        print("hata: mesai disi True dondu")
+    if not is_mesai(saturday):
+        print("hata: cumartesi 12:00 mesai False dondu")
+        return 1
+    if is_mesai(sunday) or is_mesai(night):
+        print("hata: pazar veya gece mesai True dondu")
         return 1
 
     ready = load_panel_readiness(now)
-    print("bloklar:")
-    print(f"  {format_block_line(ready.blocks)}")
-    for item in ready.blocks:
-        print(f"  {item.label} {item.state} written={item.written_at}")
+    print("ingest:")
+    print(f"  {format_block_line(ready)}")
+    print(
+        f"  last={ready.last_at} next={ready.next_at} "
+        f"due={ready.due_at} missed={ready.missed}"
+    )
     print("tazelik:")
     print(f"  {format_source_line(ready)}")
     print(f"  all_fresh={ready.all_fresh} warn={ready.warn}")
@@ -64,45 +101,41 @@ def main() -> int:
     if off.warn:
         print("hata: mesai disinda uyari")
         return 1
-    failed = [item.label for item in ready.blocks if item.state == "calismadi"]
-    print(f"calismadi: {failed if failed else '(yok)'}")
 
     weekday_ten = datetime(2026, 9, 3, 10, 0, tzinfo=ISTANBUL)
     weekday_noon = datetime(2026, 9, 3, 12, 0, tzinfo=ISTANBUL)
     ready_ten = load_panel_readiness(weekday_ten)
     print("10:00 senaryo:")
-    print(f"  {format_block_line(ready_ten.blocks)}")
+    print(f"  {format_block_line(ready_ten)}")
     print(f"  {format_source_line(ready_ten)}")
-    print(f"  warn={ready_ten.warn} (beklenen False)")
-    if ready_ten.warn:
-        print("hata: 10:00 tazelik uyarisi")
+    print(f"  next={next_ingest_at(weekday_ten)}")
+    print(f"  warn={ready_ten.warn}")
+    waiting = _fake_ready(weekday_ten, last_at=None, missed=False)
+    print(f"  10:00 satir: {format_block_line(waiting)}")
+    if "11:15" in format_block_line(waiting) or "14:15" in format_block_line(waiting):
+        print("hata: blok bitis saati gostergede")
         return 1
-    waiting = [
-        BlockReady(label="11:15", state="bekleniyor", written_at=None),
-        BlockReady(label="14:15", state="bekleniyor", written_at=None),
-        BlockReady(label="17:15", state="bekleniyor", written_at=None),
-        BlockReady(label="18:15", state="bekleniyor", written_at=None),
-    ]
-    if should_warn(waiting, weekday_ten):
-        print("hata: ilk blok oncesi uyari")
+    if should_warn(False, weekday_ten):
+        print("hata: kacan ingest yokken uyari")
         return 1
 
-    missed = [
-        BlockReady(label="11:15", state="calismadi", written_at=None),
-        BlockReady(label="14:15", state="bekleniyor", written_at=None),
-        BlockReady(label="17:15", state="bekleniyor", written_at=None),
-        BlockReady(label="18:15", state="bekleniyor", written_at=None),
-    ]
-    missed_warn = should_warn(missed, weekday_noon)
-    print("11:15 kacmis senaryo:")
+    missed_at = datetime(2026, 9, 3, 11, 7, tzinfo=ISTANBUL)
+    missed_now = datetime(2026, 9, 3, 12, 0, tzinfo=ISTANBUL)
+    last_ok = datetime(2026, 9, 3, 10, 7, tzinfo=ISTANBUL)
+    missed = _fake_ready(missed_now, last_at=last_ok, missed=True)
+    missed_warn = should_warn(True, missed_now)
+    print("saatlik ingest kacmis senaryo:")
     print(f"  {format_block_line(missed)}")
     print(f"  warn={missed_warn} (beklenen True)")
     if not missed_warn:
-        print("hata: 11:15 kacmis uyarisi yok")
+        print("hata: kacan ingest uyarisi yok")
+        return 1
+    if "11:15" in format_block_line(missed):
+        print("hata: 11:15 blok bitisi hala yaziliyor")
         return 1
     ready_noon = load_panel_readiness(weekday_noon)
     print("12:00 canli (3 Eylul):")
-    print(f"  {format_block_line(ready_noon.blocks)}")
+    print(f"  {format_block_line(ready_noon)}")
     print(f"  warn={ready_noon.warn}")
     print("12:00 blok kart:")
     for block in PLANNED_BLOCKS:
@@ -138,6 +171,39 @@ def main() -> int:
         return 1
     print("15:00 14-17 rozet yok (devam ediyor)")
     print(f"  etki: {format_impact_line(missed)}")
+    print(f"  kacan yuva: {missed_at.strftime('%H:%M')}")
+
+    sat_day = datetime(2026, 9, 5, 12, 0, tzinfo=ISTANBUL)
+    sat_blocks = blocks_for(sat_day.date())
+    print("cumartesi bloklar:")
+    print(f"  keys={[b.key for b in sat_blocks]} labels={[b.label for b in sat_blocks]}")
+    if sat_blocks != (SATURDAY_BLOCK,):
+        print("hata: cumartesi tek karisik blok degil")
+        return 1
+    if SATURDAY_BLOCK.kind != "mixed":
+        print("hata: cumartesi kind mixed degil")
+        return 1
+    if "arama" in SATURDAY_BLOCK.label or "toplanti" in SATURDAY_BLOCK.label:
+        print("hata: cumartesi etiketi blok tipi yargisi tasiyor")
+        return 1
+    print(f"  saatler={hours_of(SATURDAY_BLOCK)}")
+    if hours_of(SATURDAY_BLOCK) != (9, 10, 11, 12, 13, 14):
+        print("hata: cumartesi saatleri 9-14 olmali")
+        return 1
+    sat_next = next_ingest_at(datetime(2026, 9, 5, 15, 30, tzinfo=ISTANBUL))
+    print(f"  cumartesi 15:30 sonraki={sat_next}")
+    if sat_next is None or sat_next.date().weekday() != 0:
+        print("hata: cumartesi mesai sonrasi sonraki ingest pazartesi olmali")
+        return 1
+    sun_blocks = blocks_for(datetime(2026, 9, 6).date())
+    print(f"  pazar blok={list(sun_blocks)}")
+    if sun_blocks:
+        print("hata: pazarda planli blok var")
+        return 1
+    weekday_blocks = blocks_for(datetime(2026, 9, 4).date())
+    if weekday_blocks != PLANNED_BLOCKS:
+        print("hata: cuma dort blok degil")
+        return 1
 
     from pusula.panel_ciro import (
         ciro_won_month_probe,
@@ -166,7 +232,6 @@ def main() -> int:
     from collections.abc import Callable
     from typing import TypeVar
 
-    from pusula.blocks import hours_of
     from pusula.panel_ciro import (
         SALES_TEAM_IDS,
         ciro_monthly_by_rep,
@@ -312,32 +377,36 @@ def main() -> int:
     else:
         print("10 saniyeyi asan sorgu yok")
 
-    def _check_hour_sums(owner: str | None, label: str) -> bool:
-        data = today_blocks(owner, day)
-        rows = today_hours(owner, day)
-        print(f"saat vs blok ({label}, {day.isoformat()}):")
+    def _check_hour_sums(
+        owner: str | None, label: str, probe_day: date
+    ) -> bool:
+        data = today_blocks(owner, probe_day)
+        rows = today_hours(owner, probe_day)
+        print(f"saat vs blok ({label}, {probe_day.isoformat()}):")
         ok = True
+        planned_keys: list[str] = []
         for block in data.get("blocks") or []:
             key = str(block.get("key") or "")
             if key == "blok_disi":
                 continue
-            spec = next((b for b in PLANNED_BLOCKS if b.key == key), None)
+            planned_keys.append(key)
+            spec = block_by_key(key)
             hour_rows = hours_for_block(rows, key)
-            today = dict(block.get("today") or {})
+            today_m = dict(block.get("today") or {})
             expected = list(hours_of(spec)) if spec is not None else []
             got = [int(r["saat"]) for r in hour_rows]
-            print(f"  {key} saatler={got} beklenen={expected}")
+            print(f"  {key} kind={block.get('kind')} saatler={got} beklenen={expected}")
             if got != expected:
                 print("  HATA: saat listesi bloktan turemedi")
                 ok = False
             for metric in ADD_KEYS:
-                block_n = int(today.get(metric) or 0)
+                block_n = int(today_m.get(metric) or 0)
                 hour_n = sum(int(r.get(metric) or 0) for r in hour_rows)
                 mark = "ok" if block_n == hour_n else "HATA"
                 if block_n != hour_n:
                     ok = False
                 print(f"    {metric}: kart={block_n} saat={hour_n} {mark}")
-            b_sure = today.get("sure_toplam")
+            b_sure = today_m.get("sure_toplam")
             h_sure = sum(
                 float(r["sure_toplam"])
                 for r in hour_rows
@@ -356,13 +425,63 @@ def main() -> int:
                     print(
                         f"    sure_toplam: kart={left} saat={h_sure} ok"
                     )
+        print(f"  planli_keys={planned_keys} hist_n={data.get('hist_n')}")
         return ok
 
-    sums_ok = _check_hour_sums(None, "ekip")
-    sums_ok = _check_hour_sums(rep_id, "temsilci") and sums_ok
+    sat = day - timedelta(days=(day.weekday() - 5) % 7)
+    friday = sat - timedelta(days=1)
+    sums_ok = _check_hour_sums(None, "ekip cuma", friday)
+    sums_ok = _check_hour_sums(rep_id, "temsilci cuma", friday) and sums_ok
+    sums_ok = _check_hour_sums(None, "ekip cumartesi", sat) and sums_ok
     if not sums_ok:
         print("hata: saat satirlari blok toplamini tutmuyor")
         return 1
+
+    sat_data = today_blocks(None, sat)
+    sat_planned = [
+        b
+        for b in (sat_data.get("blocks") or [])
+        if str(b.get("key") or "") != "blok_disi"
+    ]
+    hist_n = int(sat_data.get("hist_n") or 0)
+    print("cumartesi canli:")
+    print(f"  gun={sat.isoformat()} adet={len(sat_planned)}")
+    print(f"  keys={[b.get('key') for b in sat_planned]}")
+    print(f"  labels={[b.get('label') for b in sat_planned]}")
+    print(f"  kinds={[b.get('kind') for b in sat_planned]}")
+    print(f"  gecmis cumartesi verisi={hist_n}")
+    if sat_planned:
+        print(f"  badge_ok={sat_planned[0].get('badge_ok')}")
+        today_m = dict(sat_planned[0].get("today") or {})
+        print(
+            f"  ham arama={today_m.get('arama')} randevu={today_m.get('randevu')} "
+            f"katildi={today_m.get('katildi')} ulasilan={today_m.get('ulasilan')}"
+        )
+    weekday_names = [
+        str(b.get("label") or "")
+        for b in sat_planned
+        if "arama blogu" in str(b.get("label") or "")
+        or "toplanti blogu" in str(b.get("label") or "")
+    ]
+    if weekday_names:
+        print(f"hata: cumarteside hafta ici etiketi var: {weekday_names}")
+        return 1
+    if len(sat_planned) != 1 or sat_planned[0].get("kind") != "mixed":
+        print("hata: cumartesi tek karisik blok degil")
+        return 1
+    if hist_n < 4 and sat_planned[0].get("badge_ok"):
+        print("hata: 4'ten az cumartesi verisinde rozet acik")
+        return 1
+    if hist_n < 4:
+        print("  rozet yok, kiyas veri yetersiz")
+    else:
+        print("  rozet esigi gecti")
+
+    board = workload_board(None, 3.0, 6.0)
+    print(
+        f"is gunu/doluluk: workdays={board.get('workdays')} "
+        f"doluluk={board.get('doluluk')}"
+    )
 
     print("payda < 5 saatler:")
     found_sparse = False

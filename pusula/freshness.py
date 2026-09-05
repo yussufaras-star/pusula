@@ -23,18 +23,22 @@ FRESHNESS_THRESHOLDS: dict[str, timedelta] = {
 
 _MESAI_START = time(9, 0)
 _MESAI_END = time(19, 0)
+_SAT_MESAI_END = time(15, 0)
 
 
 def is_mesai(now: datetime | None = None) -> bool:
-    """Pazartesi–Cuma 09:00–18:59 Istanbul. Hafta sonu ve gece False."""
+    """Pazartesi–Cuma 09:00–18:59, cumartesi 09:00–14:59. Pazar ve gece False."""
     local = now or datetime.now(_TZ)
     if local.tzinfo is None:
         local = local.replace(tzinfo=_TZ)
     else:
         local = local.astimezone(_TZ)
-    if local.weekday() >= 5:
+    weekday = local.weekday()
+    if weekday == 6:
         return False
     clock = local.time()
+    if weekday == 5:
+        return _MESAI_START <= clock < _SAT_MESAI_END
     return _MESAI_START <= clock < _MESAI_END
 
 

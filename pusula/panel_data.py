@@ -16,7 +16,15 @@ from zoneinfo import ZoneInfo
 import psycopg
 from psycopg.rows import dict_row
 
-from pusula.blocks import BLOK_DISI, PLANNED_BLOCKS, hour_in_planned_sql, hours_of
+from pusula.blocks import (
+    BLOK_DISI,
+    SAT_BADGE_MIN,
+    SATURDAY_BLOCK,
+    block_by_key,
+    blocks_for,
+    hour_in_blocks_sql,
+    hours_of,
+)
 from pusula.config import get_org_id
 from pusula.sifir_satis import WON_STAGE, won_stage_sql
 from pusula.temas import (
@@ -78,6 +86,7 @@ TOPLANTI_DK = 30.0
 CRM_DK_PER_GORUSME = 1.5
 OLU_ZAMAN_SN = 20.0
 GUN_SAAT = 8.0
+SAT_SAAT = 6.0
 DEFAULT_ARAMA_PER_LEAD = 3.0
 DEFAULT_TOPLANTI_GUN = 6.0
 # Eski ad: panel import kırılmasın.
@@ -574,6 +583,53 @@ def _hist_weekdays(before: date | None = None) -> int:
     return int(row[0]) if row else WINDOW_DAYS
 
 
+def _hist_isodow(before: date | None, iso_dow: int) -> int:
+    """Seçilen günden önceki 90 gün, verilen ISO gün (6=cumartesi)."""
+    gun = before or datetime.now(_TZ).date()
+    with connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT count(*)::int
+            FROM generate_series(
+                %s::date - interval '{WINDOW_DAYS} days',
+                %s::date - interval '1 day',
+                interval '1 day'
+            ) AS d
+            WHERE extract(isodow FROM d) = %s
+            """,
+            (gun, gun, iso_dow),
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _saturday_data_days(
+    before: date,
+    extra: str,
+    params: Sequence[Any],
+) -> int:
+    """90 günde 09-15 arası olayı olan geçmiş cumartesi sayısı."""
+    org_id = get_org_id()
+    hour = _hour_expr("e")
+    day_col = "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date"
+    sql = f"""
+        SELECT count(DISTINCT {day_col})::int
+        FROM events e
+        JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+        WHERE e.org_id = %s
+          AND {_sales_rep_sql()}
+          AND {day_col} >= %s::date - interval '{WINDOW_DAYS} days'
+          AND {day_col} < %s::date
+          AND extract(isodow FROM {day_col}) = 6
+          AND {hour} >= {SATURDAY_BLOCK.start_hour}
+          AND {hour} < {SATURDAY_BLOCK.end_hour}
+          AND e.occurred_at <= now()
+          {extra}
+    """
+    with connect() as conn:
+        row = conn.execute(sql, (org_id, before, before, *params)).fetchone()
+    return int(row[0]) if row else 0
+
+
 def today_arama_count(rep_id: str | None = None) -> int:
     """Bugün Istanbul, satış outbound bağlı arama."""
     org_id = get_org_id()
@@ -601,21 +657,36 @@ def today_blocks(
     *,
     owner_ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Seçilen günün dört bloğu + 90 günlük aynı blok ortalaması."""
+    """Seçilen günün planlı blokları + 90 günlük aynı blok ortalaması.
+
+    Hafta içi kıyas yalnız pazartesi–cuma. Cumartesi kıyas yalnız
+    geçmiş cumartesiler. Pazar planlı blok yok.
+    """
     org_id = get_org_id()
     extra, params = _owner_filter("e", rep_id, owner_ids)
     hour = _hour_expr("e")
     chosen = day or datetime.now(_TZ).date()
+    planned_blocks = blocks_for(chosen)
     day_col = "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date"
     today = f"{day_col} = p.gun"
+    weekday = chosen.weekday()
+    if weekday == 5:
+        hist_dow = f"extract(isodow FROM {day_col}) = 6"
+        days = max(_hist_isodow(chosen, 6), 1)
+    elif weekday == 6:
+        hist_dow = "FALSE"
+        days = 1
+    else:
+        hist_dow = f"extract(isodow FROM {day_col}) < 6"
+        days = max(_hist_weekdays(chosen), 1)
     hist = f"""
         {day_col} >= p.gun - interval '{WINDOW_DAYS} days'
         AND {day_col} < p.gun
-        AND extract(isodow FROM {day_col}) < 6
+        AND {hist_dow}
     """
     is_call = "e.channel = 'call' AND e.direction = 'outbound'"
     is_meet = "e.channel = 'meeting'"
-    planned = hour_in_planned_sql(hour)
+    planned = hour_in_blocks_sql(hour, planned_blocks)
 
     def _append_sure(prefix: str, window_sql: str, slot_sql: str) -> None:
         # Sure yalniz ulasilan gorusme; temas tanimi temas.py.
@@ -632,7 +703,7 @@ def today_blocks(
         )
 
     select_parts: list[str] = []
-    for block in PLANNED_BLOCKS:
+    for block in planned_blocks:
         rng = f"{hour} >= {block.start_hour} AND {hour} < {block.end_hour}"
         select_parts.append(
             f"count(*) FILTER (WHERE {today} AND {rng} AND {is_call}"
@@ -776,7 +847,6 @@ def today_blocks(
           AND e.occurred_at <= now()
           {extra}
     """
-    days = max(_hist_weekdays(chosen), 1)
     with connect() as conn:
         cur = conn.execute(sql, (chosen, org_id, *params))
         row = cur.fetchone()
@@ -813,7 +883,10 @@ def today_blocks(
         }
 
     blocks: list[dict[str, Any]] = []
-    for block in PLANNED_BLOCKS:
+    hist_n = days
+    if weekday == 5:
+        hist_n = _saturday_data_days(chosen, extra, params)
+    for block in planned_blocks:
         t_a = packed[f"t_{block.key}_arama"]
         t_u = packed[f"t_{block.key}_ulasilan"]
         t_d = packed[f"t_{block.key}_donus"]
@@ -841,6 +914,8 @@ def today_blocks(
                 "key": block.key,
                 "label": block.label,
                 "kind": block.kind,
+                "hist_n": hist_n,
+                "badge_ok": True if weekday != 5 else hist_n >= SAT_BADGE_MIN,
                 "today": {
                     "arama": t_a,
                     "donus": t_d,
@@ -913,7 +988,7 @@ def today_blocks(
             },
         }
     )
-    return {"blocks": blocks, "workdays": days}
+    return {"blocks": blocks, "workdays": days, "hist_n": hist_n}
 
 
 def today_hours(
@@ -922,16 +997,22 @@ def today_hours(
     *,
     owner_ids: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Seçilen gün, saat 09-17. Tanım today_blocks ile aynı."""
+    """Seçilen gün, planlı saatler. Tanım today_blocks ile aynı."""
     org_id = get_org_id()
     extra, params = _owner_filter("e", rep_id, owner_ids)
     hour = _hour_expr("e")
     chosen = day or datetime.now(_TZ).date()
+    planned = blocks_for(chosen)
+    if planned:
+        hour_start = min(b.start_hour for b in planned)
+        hour_end = max(b.end_hour for b in planned) - 1
+    else:
+        hour_start, hour_end = 9, 8
     is_call = "e.channel = 'call' AND e.direction = 'outbound'"
     is_meet = "e.channel = 'meeting'"
     sql = f"""
         WITH hours AS (
-            SELECT h FROM generate_series(9, 17) AS h
+            SELECT h FROM generate_series({hour_start}, {hour_end}) AS h
         ),
         slots AS (
             SELECT
@@ -1050,8 +1131,8 @@ def hours_for_block(
     hour_rows: list[dict[str, Any]], block_key: str
 ) -> list[dict[str, Any]]:
     """Bloğun saat satırları. Sıra start_hour → end_hour-1."""
-    spec = next((item for item in PLANNED_BLOCKS if item.key == block_key), None)
-    if spec is None:
+    spec = block_by_key(block_key)
+    if spec is None or spec.key == BLOK_DISI.key:
         return []
     wanted = set(hours_of(spec))
     return [row for row in hour_rows if int(row["saat"]) in wanted]
@@ -1072,6 +1153,27 @@ def _workdays() -> int:
             """
         ).fetchone()
     return int(row[0]) if row else WINDOW_DAYS
+
+
+def _workday_split() -> tuple[int, int]:
+    """90 günlük pencerede pazartesi–cuma ve cumartesi sayısı. Pazar yok."""
+    with connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT
+              count(*) FILTER (WHERE extract(isodow FROM d) < 6)::int,
+              count(*) FILTER (WHERE extract(isodow FROM d) = 6)::int
+            FROM generate_series(
+                (now() AT TIME ZONE 'Europe/Istanbul')::date
+                  - interval '{WINDOW_DAYS} days',
+                (now() AT TIME ZONE 'Europe/Istanbul')::date,
+                interval '1 day'
+            ) AS d
+            """
+        ).fetchone()
+    if not row:
+        return WINDOW_DAYS, 0
+    return int(row[0] or 0), int(row[1] or 0)
 
 
 def daily_workload() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
@@ -1240,6 +1342,7 @@ def workload_board(
           AND {_sales_rep_sql()}
           AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
           AND e.occurred_at <= now()
+          AND extract(isodow FROM e.occurred_at AT TIME ZONE 'Europe/Istanbul') <> 7
           {extra}
     """
     lead_sql = f"""
@@ -1328,15 +1431,18 @@ def workload_board(
         )
     plan_dk_sum = sum(plan_dk.values())
     gercek_dk_sum = sum(gercek_dk.values())
+    n_wd, n_sat = _workday_split()
+    avail_dk = (n_wd * GUN_SAAT + n_sat * SAT_SAAT) * 60.0
+    total_gercek_dk = gercek_dk_sum * float(days)
     return {
         "rows": rows,
         "plan_saat": round(plan_dk_sum / 60.0, 2),
         "gercek_saat": round(gercek_dk_sum / 60.0, 2),
-        "doluluk": _ratio(gercek_dk_sum, GUN_SAAT * 60.0),
+        "doluluk": _ratio(total_gercek_dk, avail_dk),
         "toplam_oran": _ratio(gercek_dk_sum, plan_dk_sum),
         "miss_sn": miss_sn,
         "hit_sn": hit_sn,
-        "workdays": days,
+        "workdays": n_wd + n_sat,
         "n_reps": n_reps,
     }
 
