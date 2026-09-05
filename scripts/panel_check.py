@@ -433,7 +433,8 @@ def main() -> int:
     def _compare_before_after(
         owner: str | None, label: str, probe_day: date
     ) -> bool:
-        before = _planned_block_sum(today_blocks(owner, probe_day))
+        block_data = today_blocks(owner, probe_day)
+        before = _planned_block_sum(block_data)
         rows = today_hours(owner, probe_day)
         after = sum_hour_rows(rows)
         wanted = display_hours(probe_day)
@@ -452,7 +453,7 @@ def main() -> int:
             print(f"  {key}: onceki={left} sonra={right} {mark}")
         disi = [
             b
-            for b in (today_blocks(owner, probe_day).get("blocks") or [])
+            for b in (block_data.get("blocks") or [])
             if str(b.get("key") or "") == "blok_disi"
         ]
         if disi:
@@ -465,6 +466,8 @@ def main() -> int:
 
     sat = day - timedelta(days=(day.weekday() - 5) % 7)
     friday = sat - timedelta(days=1)
+    # Canlı günde ingest randevu_durumu'nu iki sorgu arasında değiştirebilir.
+    sat_probe = sat - timedelta(days=7) if sat >= day else sat
     fri_rows = today_hours(None, friday)
     fri_ok = bool(_print_hour_table(f"ekip cuma {friday.isoformat()}", fri_rows))
     sat_rows = today_hours(None, sat)
@@ -498,7 +501,12 @@ def main() -> int:
 
     sums_ok = _compare_before_after(None, "ekip cuma", friday)
     sums_ok = _compare_before_after(rep_id, "temsilci cuma", friday) and sums_ok
-    sums_ok = _compare_before_after(None, "ekip cumartesi", sat) and sums_ok
+    if sat_probe != sat:
+        print(
+            f"onceki/sonra ekip cumartesi: {sat.isoformat()} canli gun, "
+            f"kapanmis {sat_probe.isoformat()} kullanildi"
+        )
+    sums_ok = _compare_before_after(None, "ekip cumartesi", sat_probe) and sums_ok
     if not sums_ok:
         print("hata: degisiklikten once/sonra gun toplamlari farkli")
         return 1
