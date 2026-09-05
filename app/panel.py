@@ -65,7 +65,9 @@ from pusula.panel_data import (
     fmt_window,
     funnel,
     funnel_dropped_by_rep,
-    hours_for_block,
+    GUN_SAAT,
+    SAT_SAAT,
+    hour_history,
     latest_event_created_at,
     lead_reach_breakdown,
     load_rep_by_email,
@@ -80,13 +82,13 @@ from pusula.panel_data import (
     take_rate,
     talk_duration_by_rep,
     team_reach_and_join,
-    today_blocks,
     today_hours,
+    sum_hour_rows,
     weekly_series,
     weekly_team_series,
     workload_board,
 )
-from pusula.blocks import block_by_key, card_phase
+from pusula.blocks import display_hours
 from pusula.block_share import (
     TEAM_REP_ID,
     fmt_sent_clock,
@@ -171,21 +173,6 @@ HELP_SURE = (
     "Telefonun acildigi gorusmelerin ortalama suresi. Tipik de "
     "gosterilir cunku birkac uzun gorusme ortalamayi yukari cekebilir."
 )
-HELP_BLOK_TOPLAM = (
-    "Bu bloktaki ulasilan gorusmelerin sureleri toplami. "
-    "Sure yalniz telefonun acildigi gorusmelerden hesaplanir; "
-    "ulasilamayan aramalar katilmaz."
-)
-HELP_BLOK_SURE = (
-    "Bu bloktaki ulasilan gorusmelerin ortalama ve tipik suresi. "
-    "Sure yalniz telefonun acildigi gorusmelerden hesaplanir; "
-    "ulasilamayan aramalar katilmaz."
-)
-HELP_BLOK_KIYAS = (
-    "Kartın üst satırındaki kıyas, son 90 günün aynı saat "
-    "bloğundaki günlük ortalamasına göredir. Rozet yalnız "
-    "bloğun bitiş saati geçince çıkar; devam eden blokta yok."
-)
 HELP_TAZELIK = (
     "Eşikler: aramalar 3 saat (mesai içi), randevular 36 saat, "
     "lead'ler 3 gün, kişiler 5 gün. "
@@ -198,7 +185,8 @@ HELP_ISYUKU = (
 HELP_DOLULUK = (
     "Gun doluluk orani — olculebilen islerin (arama, gorusme, "
     "toplanti, CRM kayit) gunun kacini doldurdugu. WhatsApp ve "
-    "mola bu hesaba dahil degildir."
+    "mola bu hesaba dahil degildir. Hafta ici 9 saat (09:00-18:00), "
+    "cumartesi 6 saat (09:00-15:00), pazar yok."
 )
 HELP_LEAD = "Temsilciye atanan yeni lead sayisi."
 HELP_HUNI = (
@@ -220,9 +208,10 @@ HELP_SOURCE = (
     "arasindaki temas orani farki dusuktur (~4 puan)."
 )
 HELP_BUGUN = (
-    "Bugünün blokları. Başlamadı: bekleniyor, sayı ve ok yok. "
-    "Devam ediyor: sayılar var, rozet yok. Bitti: rozet, "
-    "son 90 günün aynı blok günlük ortalamasına göre."
+    "Seçilen günün saatlik dökümü. Her satır bir saat. "
+    "Kıyas, aynı saatin son 90 gündeki günlük ortalamasına göre. "
+    "Cumartesi yalnız geçmiş cumartesilerle kıyaslanır. "
+    "Payda 5'in altındaysa oran yerine veri yetersiz."
 )
 HELP_CIRO = (
     "Kapandi Kazanildi asamasindaki anlasmalarin toplam "
@@ -242,8 +231,12 @@ COL_HELP: dict[str, str] = {
     "gelen arama": HELP_GELEN,
     "gelen arama/gün": HELP_GELEN,
     "ulaşılan": HELP_ULASILAN,
+    "ulaşılan görüşme": HELP_ULASILAN,
     "ulaşılan/gün": HELP_ULASILAN,
     "ulaşma %": HELP_ULASMA,
+    "ulaşma oranı": HELP_ULASMA,
+    "görüşme süresi": HELP_SURE,
+    "katıldı": HELP_KATILIM,
     "oran": HELP_ULASMA,
     "aranan lead": HELP_ARANAN_LEAD,
     "giden temas": HELP_GIDEN_TEMAS,
@@ -490,18 +483,6 @@ def _rep_snap(rep_id: str, start: str, end: str) -> dict[str, Any]:
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _today_blocks(rep_id: str | None, day: str) -> dict[str, Any]:
-    return today_blocks(rep_id, date.fromisoformat(day))
-
-
-@st.cache_data(ttl=CACHE_TTL)
-def _today_blocks_team(day: str) -> dict[str, Any]:
-    return today_blocks(
-        None, date.fromisoformat(day), owner_ids=SALES_TEAM_IDS
-    )
-
-
-@st.cache_data(ttl=CACHE_TTL)
 def _today_hours(rep_id: str | None, day: str) -> list[dict[str, Any]]:
     return today_hours(rep_id, date.fromisoformat(day))
 
@@ -511,6 +492,11 @@ def _today_hours_team(day: str) -> list[dict[str, Any]]:
     return today_hours(
         None, date.fromisoformat(day), owner_ids=SALES_TEAM_IDS
     )
+
+
+@st.cache_data(ttl=CACHE_TTL)
+def _hour_history(rep_id: str | None, day: str) -> dict[int, dict[str, Any]]:
+    return hour_history(rep_id, date.fromisoformat(day))
 
 
 @st.cache_data(ttl=CACHE_TTL)
@@ -629,7 +615,7 @@ def _ciro_window() -> DateWindow:
 def _render_block_day() -> date:
     today = datetime.now(_TZ).date()
     raw_day = st.date_input(
-        "Gün (bloklar)",
+        "Gün",
         value=today,
         max_value=today,
         key="block_day",
@@ -685,276 +671,16 @@ def _delta_markup(cur: float | None, prev: float | None) -> str:
     return f":red[↓ {abs(diff):.1f}]"
 
 
-def _block_delta_markup(cur: float | None, prev: float | None) -> str:
-    """Blok rozeti: yalniz ok ve sayi. Kıyas kartın üstünde bir kez."""
+def _plain_delta(cur: float | None, prev: float | None) -> str:
+    """Saat tablosu kıyası. Dataframe markdown işlemez."""
     if cur is None or prev is None:
         return ""
     diff = float(cur) - float(prev)
     if abs(diff) < 0.05:
-        core = ":gray[→ 0]"
-    elif diff > 0:
-        core = f":green[↑ {diff:.1f}]"
-    else:
-        core = f":red[↓ {abs(diff):.1f}]"
-    return core
-
-
-def _block_phase(block: dict[str, Any], day: date) -> str:
-    """baslamadi | devam_ediyor | tamamlandi. blok dışı tamamlandi."""
-    key = str(block.get("key") or "")
-    spec = block_by_key(key)
-    if spec is None or spec.key == "blok_disi":
-        return "tamamlandi"
-    return card_phase(spec, day, datetime.now(_TZ))
-
-
-def _team_caption(item: dict[str, Any]) -> str | None:
-    """Ekip ortalaması satırı. Yoksa None."""
-    if not item.get("show_team"):
-        return None
-    team_display = item.get("team_display")
-    if team_display is not None:
-        return f"ekip {team_display}"
-    team = item.get("team")
-    if item.get("duration"):
-        shown = fmt_duration(team)
-    elif item.get("pct"):
-        shown = fmt_pct(team)
-    else:
-        shown = fmt_num(team)
-    return f"ekip {shown}"
-
-
-def _block_metric(item: dict[str, Any], *, badges: bool) -> None:
-    """Blok kartı — kucuk punto. Gunluk ozet st.metric buyuk kalir."""
-    cur = item.get("cur")
-    prev = item.get("prev")
-    empty_label = item.get("empty_label")
-    if empty_label is not None and cur is None:
-        shown = str(empty_label)
-        delta_md = ""
-    elif item.get("display") is not None:
-        shown = str(item["display"])
-        delta_md = _block_delta_markup(cur, prev) if badges else ""
-    elif item.get("duration"):
-        shown = fmt_duration(cur)
-        delta_md = _block_delta_markup(cur, prev) if badges else ""
-    elif item.get("pct"):
-        shown = fmt_pct(cur)
-        delta_md = _block_delta_markup(cur, prev) if badges else ""
-    else:
-        shown = fmt_num(cur)
-        delta_md = _block_delta_markup(cur, prev) if badges else ""
-    help_text = item.get("help_text")
-    extra = item.get("extra")
-    if extra == "veri yetersiz":
-        shown = "veri yetersiz"
-        extra = None
-    if str(shown) == "veri yetersiz":
-        st.caption(f"{item['label']} — veri yetersiz", help=help_text)
-    else:
-        st.caption(str(item["label"]), help=help_text)
-        if delta_md:
-            st.caption(f"**{shown}** {delta_md}")
-        else:
-            st.caption(f"**{shown}**")
-    if extra:
-        st.caption(str(extra), help=item.get("extra_help"))
-    team_line = _team_caption(item)
-    if team_line:
-        st.caption(f":gray[{team_line}]")
-
-
-def _block_metric_row(
-    items: list[dict[str, Any]], *, badges: bool
-) -> None:
-    """4'lu satir. Son satirda bos kolon yok."""
-    filled = [item for item in items if item]
-    if not filled:
-        return
-    n = len(filled)
-    cols = st.columns(4 if n >= 4 else n, gap="small")
-    for col, item in zip(cols, filled[:4] if n >= 4 else filled):
-        with col:
-            _block_metric(item, badges=badges)
-
-
-def _block_group_title(title: str) -> None:
-    """Grup basligi — kucuk, soluk; metrik sayisinin onune gecmesin."""
-    st.caption(f":gray[{title}]")
-
-
-def _block_group(
-    title: str, items: list[dict[str, Any] | None], *, badges: bool
-) -> None:
-    filled = [item for item in items if item]
-    if not filled:
-        return
-    _block_group_title(title)
-    for start in range(0, len(filled), 4):
-        _block_metric_row(filled[start : start + 4], badges=badges)
-
-
-def _metrics_arama(
-    today: dict[str, Any],
-    avg90: dict[str, Any],
-    *,
-    as_int: bool = False,
-    team: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    def _val(key: str) -> Any:
-        raw = today.get(key)
-        if as_int:
-            return int(raw or 0)
-        return raw
-
-    def _team(key: str) -> Any:
-        if team is None:
-            return None
-        return team.get(key)
-
-    return [
-        {
-            "label": "giden arama",
-            "cur": _val("arama"),
-            "prev": avg90.get("arama"),
-            "help_text": HELP_ARAMA,
-            "team": _team("arama"),
-            "show_team": team is not None,
-        },
-        {
-            "label": "ulaşılan görüşme",
-            "cur": _val("ulasilan"),
-            "prev": avg90.get("ulasilan"),
-            "help_text": HELP_ULASILAN,
-            "team": _team("ulasilan"),
-            "show_team": team is not None,
-        },
-        {
-            "label": "dönüş araması",
-            "cur": today.get("donus"),
-            "prev": avg90.get("donus"),
-            "help_text": HELP_DONUS,
-            "team": _team("donus"),
-            "show_team": team is not None,
-        },
-        {
-            "label": "gelen arama",
-            "cur": today.get("gelen"),
-            "prev": avg90.get("gelen"),
-            "help_text": HELP_GELEN,
-            "team": _team("gelen"),
-            "show_team": team is not None,
-        },
-    ]
-
-
-def _ulasma_item(
-    today: dict[str, Any],
-    avg90: dict[str, Any],
-    *,
-    team: dict[str, Any] | None = None,
-    sparse: bool = False,
-) -> dict[str, Any]:
-    item: dict[str, Any] = {
-        "label": "ulaşma oranı",
-        "cur": today.get("ulasma_orani"),
-        "prev": avg90.get("ulasma_orani"),
-        "pct": True,
-        "help_text": HELP_ULASMA,
-        "team": None if team is None else team.get("ulasma_orani"),
-        "show_team": team is not None,
-    }
-    if sparse:
-        item["display"] = rate_cell(
-            today.get("ulasma_orani"), today.get("lead_payda")
-        )
-        if team is not None:
-            item["team_display"] = rate_cell(
-                team.get("ulasma_orani"), team.get("lead_payda")
-            )
-    return item
-
-
-def _metrics_toplanti(
-    today: dict[str, Any],
-    avg90: dict[str, Any],
-    *,
-    as_int: bool = False,
-    team: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    def _val(key: str) -> Any:
-        raw = today.get(key)
-        if as_int:
-            return int(raw or 0)
-        return raw
-
-    def _team(key: str) -> Any:
-        if team is None:
-            return None
-        return team.get(key)
-
-    return [
-        {
-            "label": "randevu",
-            "cur": _val("randevu"),
-            "prev": avg90.get("randevu"),
-            "help_text": HELP_RANDEVU,
-            "team": _team("randevu"),
-            "show_team": team is not None,
-        },
-        {
-            "label": "katıldı",
-            "cur": _val("katildi"),
-            "prev": avg90.get("katildi"),
-            "help_text": HELP_KATILIM,
-            "team": _team("katildi"),
-            "show_team": team is not None,
-        },
-        {
-            "label": "katılmadı",
-            "cur": today.get("katilmadi"),
-            "prev": avg90.get("katilmadi"),
-            "help_text": HELP_KATILIM,
-            "team": _team("katilmadi"),
-            "show_team": team is not None,
-        },
-        {
-            "label": "sonuç girilmedi",
-            "cur": today.get("sonuc_girilmedi"),
-            "prev": avg90.get("sonuc_girilmedi"),
-            "help_text": HELP_KATILIM,
-            "team": _team("sonuc_girilmedi"),
-            "show_team": team is not None,
-        },
-    ]
-
-
-def _katilim_item(
-    today: dict[str, Any],
-    avg90: dict[str, Any],
-    *,
-    team: dict[str, Any] | None = None,
-    sparse: bool = False,
-) -> dict[str, Any]:
-    item: dict[str, Any] = {
-        "label": "katılım %",
-        "cur": today.get("katilim_orani"),
-        "prev": avg90.get("katilim_orani"),
-        "pct": True,
-        "help_text": HELP_KATILIM,
-        "team": None if team is None else team.get("katilim_orani"),
-        "show_team": team is not None,
-    }
-    if sparse:
-        item["display"] = rate_cell(
-            today.get("katilim_orani"), today.get("katilim_payda")
-        )
-        if team is not None:
-            item["team_display"] = rate_cell(
-                team.get("katilim_orani"), team.get("katilim_payda")
-            )
-    return item
+        return " → 0"
+    if diff > 0:
+        return f" ↑ {diff:.1f}"
+    return f" ↓ {abs(diff):.1f}"
 
 
 def _stat_row(items: list[dict[str, Any]]) -> None:
@@ -993,209 +719,264 @@ def _fmt_event_ts(value: datetime | None) -> str:
     return dt.astimezone(_TZ).strftime("%d.%m.%Y %H:%M")
 
 
-def _render_block_card(
-    block: dict[str, Any],
-    day: date,
+def _hour_done(saat: int, day: date) -> bool:
+    """Saat dilimi [saat, saat+1) bitti mi."""
+    now = datetime.now(_TZ)
+    if day < now.date():
+        return True
+    if day > now.date():
+        return False
+    return now.hour > saat
+
+
+def _count_cell(
+    cur: Any,
+    prev: Any,
     *,
-    team: dict[str, Any] | None = None,
-    hours: list[dict[str, Any]] | None = None,
-    team_hours: dict[int, dict[str, Any]] | None = None,
-    scope: str = "blok",
-) -> None:
-    kind = str(block.get("kind") or "")
-    today = block.get("today") or {}
-    avg90 = block.get("avg90") or {}
-    phase = _block_phase(block, day)
-    badge_ok = bool(block.get("badge_ok", True))
-    with st.container(border=True):
-        st.markdown(f"**{block.get('label')}**")
-        if phase == "baslamadi":
-            st.caption("bekleniyor")
-            return
-        badges = phase == "tamamlandi" and badge_ok
-        if phase == "devam_ediyor":
-            st.caption("devam ediyor")
-        elif kind == "mixed" and not badge_ok:
-            st.caption("kıyas — veri yetersiz")
-        elif kind == "mixed":
-            st.caption("kıyas geçmiş cumartesilere göre", help=HELP_BLOK_KIYAS)
-        else:
-            st.caption("kıyas 90 günlük ortalamaya göre", help=HELP_BLOK_KIYAS)
-        _render_block_groups(
-            kind, today, avg90, badges=badges, team=team, sparse=False
+    badges: bool,
+    team: Any = None,
+    show_team: bool = False,
+) -> str:
+    shown = fmt_num(cur)
+    if badges:
+        delta = _plain_delta(
+            float(cur) if isinstance(cur, (int, float)) else None,
+            float(prev) if isinstance(prev, (int, float)) else None,
         )
-        if hours:
-            show = st.checkbox(
-                "saat kırılımı",
-                value=False,
-                key=f"hours_{scope}_{block.get('key')}_{day.isoformat()}",
-            )
-            if show:
-                empty = {"arama": 0, "donus": 0, "gelen": 0, "ulasilan": 0}
-                for row in hours:
-                    saat = int(row["saat"])
-                    st.caption(f"{saat:02d}:00")
-                    hour_team = None
-                    if team_hours is not None:
-                        hour_team = team_hours.get(saat)
-                    _render_block_groups(
-                        kind,
-                        row,
-                        empty,
-                        badges=False,
-                        team=hour_team,
-                        sparse=True,
-                    )
+        if delta:
+            shown = f"{shown}{delta}"
+    if show_team:
+        shown = f"{shown} · ekip {fmt_num(team)}"
+    return shown
 
 
-def _render_block_groups(
-    kind: str,
-    today: dict[str, Any],
-    avg90: dict[str, Any],
+def _rate_cell_text(
+    row: dict[str, Any],
+    avg: dict[str, Any],
+    *,
+    key: str,
+    payda_key: str,
+    badges: bool,
+    team: dict[str, Any] | None,
+) -> str:
+    cell = rate_cell(row.get(key), row.get(payda_key))
+    if cell == "veri yetersiz":
+        shown = "veri yetersiz"
+    else:
+        shown = cell
+        if badges:
+            delta = _plain_delta(row.get(key), avg.get(key))
+            if delta:
+                shown = f"{shown}{delta}"
+    if team is not None:
+        team_cell = rate_cell(team.get(key), team.get(payda_key))
+        if team_cell == "veri yetersiz":
+            shown = f"{shown} · ekip veri yetersiz"
+        else:
+            shown = f"{shown} · ekip {team_cell}"
+    return shown
+
+
+def _sure_cell_text(
+    row: dict[str, Any],
+    avg: dict[str, Any],
     *,
     badges: bool,
     team: dict[str, Any] | None,
-    sparse: bool,
-) -> None:
-    arama = _metrics_arama(
-        today, avg90, as_int=(kind == "meeting" and not sparse), team=team
-    )
-    randevu_item: dict[str, Any] = {
-        "label": "randevu",
-        "cur": (
-            int(today.get("randevu") or 0)
-            if kind == "meeting" and not sparse
-            else today.get("randevu")
-        ),
-        "prev": avg90.get("randevu"),
-        "help_text": HELP_RANDEVU,
-        "team": None if team is None else team.get("randevu"),
-        "show_team": team is not None,
-    }
-    ulasma = _ulasma_item(today, avg90, team=team, sparse=sparse)
-    sure = _sure_column(today, avg90, team=team)
-    katildi_item: dict[str, Any] = {
-        "label": "katıldı",
-        "cur": (
-            int(today.get("katildi") or 0)
-            if kind == "meeting" and not sparse
-            else today.get("katildi")
-        ),
-        "prev": avg90.get("katildi"),
-        "help_text": HELP_KATILIM,
-        "team": None if team is None else team.get("katildi"),
-        "show_team": team is not None,
-    }
-    katilim = _katilim_item(today, avg90, team=team, sparse=sparse)
-    if kind == "call":
-        arama.extend([ulasma, sure])
-        _block_group("Arama", arama, badges=badges)
-        meeting_items: list[dict[str, Any] | None] = [randevu_item]
-        if sparse:
-            meeting_items.extend([katildi_item, katilim])
-        _block_group("Toplantı", meeting_items, badges=badges)
-    elif kind == "meeting":
-        meeting = _metrics_toplanti(
-            today, avg90, as_int=not sparse, team=team
-        )
-        if sparse:
-            meeting.append(katilim)
-        _block_group("Toplantı", meeting, badges=badges)
-        if sparse:
-            arama.extend([ulasma, sure])
-        _block_group("Arama", arama, badges=badges)
-    elif kind == "mixed":
-        meeting = _metrics_toplanti(
-            today, avg90, as_int=not sparse, team=team
-        )
-        meeting.append(katilim)
-        _block_group("Toplantı", meeting, badges=badges)
-        arama.extend([ulasma, sure])
-        _block_group("Arama", arama, badges=badges)
+) -> str:
+    pair = _fmt_ortalama_tipik(row.get("sure_ort"), row.get("sure_tipik"))
+    toplam = row.get("sure_toplam")
+    if pair is None and toplam is None:
+        shown = "veri yetersiz"
+    elif pair is None:
+        shown = f"toplam {fmt_duration(toplam)}"
     else:
-        arama.append(sure)
-        if sparse:
-            arama.extend([ulasma, katilim])
-        _block_group("Arama", arama, badges=badges)
-        _block_group(
-            "Toplantı",
-            [randevu_item, katildi_item],
-            badges=badges,
+        shown = pair
+        if toplam is not None:
+            shown = f"{shown} (toplam {fmt_duration(toplam)})"
+        if badges:
+            delta = _plain_delta(row.get("sure_ort"), avg.get("sure_ort"))
+            if delta:
+                shown = f"{shown}{delta}"
+    if team is not None:
+        t_pair = _fmt_ortalama_tipik(team.get("sure_ort"), team.get("sure_tipik"))
+        if t_pair is not None:
+            shown = f"{shown} · ekip {t_pair}"
+        else:
+            shown = f"{shown} · ekip veri yetersiz"
+    return shown
+
+
+def _hour_table_frame(
+    rows: list[dict[str, Any]],
+    hist: dict[int, dict[str, Any]],
+    day: date,
+    *,
+    team_hours: dict[int, dict[str, Any]] | None,
+    badge_ok: bool,
+) -> pd.DataFrame:
+    records: list[dict[str, Any]] = []
+    now = datetime.now(_TZ)
+    for row in rows:
+        saat = int(row["saat"])
+        avg = hist.get(saat) or {}
+        team = None if team_hours is None else team_hours.get(saat)
+        show_team = team is not None
+        badges = badge_ok and _hour_done(saat, day)
+        future = day == now.date() and now.hour < saat
+        label = f"{saat:02d}:00"
+        if future:
+            records.append(
+                {
+                    "saat": label,
+                    "giden arama": "bekleniyor",
+                    "ulaşılan görüşme": "",
+                    "dönüş araması": "",
+                    "gelen arama": "",
+                    "ulaşma oranı": "",
+                    "görüşme süresi": "",
+                    "randevu": "",
+                    "katıldı": "",
+                }
+            )
+            continue
+        records.append(
+            {
+                "saat": label,
+                "giden arama": _count_cell(
+                    row.get("arama"), avg.get("arama"),
+                    badges=badges, team=None if team is None else team.get("arama"),
+                    show_team=show_team,
+                ),
+                "ulaşılan görüşme": _count_cell(
+                    row.get("ulasilan"), avg.get("ulasilan"),
+                    badges=badges, team=None if team is None else team.get("ulasilan"),
+                    show_team=show_team,
+                ),
+                "dönüş araması": _count_cell(
+                    row.get("donus"), avg.get("donus"),
+                    badges=badges, team=None if team is None else team.get("donus"),
+                    show_team=show_team,
+                ),
+                "gelen arama": _count_cell(
+                    row.get("gelen"), avg.get("gelen"),
+                    badges=badges, team=None if team is None else team.get("gelen"),
+                    show_team=show_team,
+                ),
+                "ulaşma oranı": _rate_cell_text(
+                    row, avg, key="ulasma_orani", payda_key="lead_payda",
+                    badges=badges, team=team,
+                ),
+                "görüşme süresi": _sure_cell_text(
+                    row, avg, badges=badges, team=team,
+                ),
+                "randevu": _count_cell(
+                    row.get("randevu"), avg.get("randevu"),
+                    badges=badges, team=None if team is None else team.get("randevu"),
+                    show_team=show_team,
+                ),
+                "katıldı": _count_cell(
+                    row.get("katildi"), avg.get("katildi"),
+                    badges=badges, team=None if team is None else team.get("katildi"),
+                    show_team=show_team,
+                ),
+            }
         )
+    total = sum_hour_rows(rows)
+    empty_avg: dict[str, Any] = {}
+    team_total = None
+    if team_hours:
+        team_total = sum_hour_rows(list(team_hours.values()))
+    records.append(
+        {
+            "saat": "gün toplamı",
+            "giden arama": _count_cell(
+                total.get("arama"), None, badges=False,
+                team=None if team_total is None else team_total.get("arama"),
+                show_team=team_total is not None,
+            ),
+            "ulaşılan görüşme": _count_cell(
+                total.get("ulasilan"), None, badges=False,
+                team=None if team_total is None else team_total.get("ulasilan"),
+                show_team=team_total is not None,
+            ),
+            "dönüş araması": _count_cell(
+                total.get("donus"), None, badges=False,
+                team=None if team_total is None else team_total.get("donus"),
+                show_team=team_total is not None,
+            ),
+            "gelen arama": _count_cell(
+                total.get("gelen"), None, badges=False,
+                team=None if team_total is None else team_total.get("gelen"),
+                show_team=team_total is not None,
+            ),
+            "ulaşma oranı": _rate_cell_text(
+                total, empty_avg, key="ulasma_orani", payda_key="lead_payda",
+                badges=False, team=team_total,
+            ),
+            "görüşme süresi": _sure_cell_text(
+                total, empty_avg, badges=False, team=team_total,
+            ),
+            "randevu": _count_cell(
+                total.get("randevu"), None, badges=False,
+                team=None if team_total is None else team_total.get("randevu"),
+                show_team=team_total is not None,
+            ),
+            "katıldı": _count_cell(
+                total.get("katildi"), None, badges=False,
+                team=None if team_total is None else team_total.get("katildi"),
+                show_team=team_total is not None,
+            ),
+        }
+    )
+    return pd.DataFrame(records)
 
 
 def _render_bugun(
     rep_id: str | None,
     day: date,
     *,
-    blok_disi: bool,
     with_team: bool = False,
-    scope: str = "blok",
+    scope: str = "gun",
 ) -> None:
-    data = _today_blocks(rep_id, day.isoformat())
+    del scope
+    hours = display_hours(day)
+    _heading(f"Bugün - {fmt_day(day)}", HELP_BUGUN)
+    if not hours:
+        st.caption("pazar mesai yok")
+        return
     hour_rows = _today_hours(rep_id, day.isoformat())
-    team_by_key: dict[str, dict[str, Any]] = {}
+    hist = _hour_history(rep_id, day.isoformat())
+    hist_n = 0
+    if hist:
+        hist_n = int(next(iter(hist.values())).get("hist_n") or 0)
+    badge_ok = True
+    if day.weekday() == 5:
+        badge_ok = hist_n >= 4
+        st.caption("saatler 09:00-15:00 · doluluk 6 saat üzerinden")
+        if not badge_ok:
+            st.caption("kıyas — veri yetersiz")
+        else:
+            st.caption("kıyas geçmiş cumartesilerin aynı saatine göre")
+    else:
+        st.caption("saatler 09:00-18:00 · doluluk 9 saat üzerinden")
+        st.caption("kıyas son 90 günün hafta içi aynı saatine göre")
     team_hours_map: dict[int, dict[str, Any]] | None = None
     n_team = max(len(SALES_TEAM_IDS), 1)
     if with_team and rep_id is not None:
-        raw_team = _today_blocks_team(day.isoformat())
-        for block in raw_team.get("blocks") or []:
-            team_by_key[str(block.get("key"))] = per_person_metrics(
-                dict(block.get("today") or {}), n_team
-            )
         team_hours_map = {}
         for row in _today_hours_team(day.isoformat()):
             team_hours_map[int(row["saat"])] = per_person_metrics(
                 dict(row), n_team
             )
-    _heading(f"Bugün - {fmt_day(day)}", HELP_BUGUN)
-    planned: list[dict[str, Any]] = []
-    extra: dict[str, Any] | None = None
-    for block in data.get("blocks") or []:
-        if str(block.get("key")) == "blok_disi":
-            if blok_disi:
-                extra = block
-            continue
-        planned.append(block)
-    if not planned:
-        st.caption("pazar mesai yok")
-    elif len(planned) == 1:
-        blk = planned[0]
-        key = str(blk.get("key") or "")
-        _render_block_card(
-            blk,
-            day,
-            team=team_by_key.get(key),
-            hours=hours_for_block(hour_rows, key),
-            team_hours=team_hours_map,
-            scope=scope,
-        )
-    else:
-        for start in (0, 2):
-            pair = planned[start : start + 2]
-            if not pair:
-                continue
-            cols = st.columns(2, gap="small")
-            for idx in range(2):
-                with cols[idx]:
-                    if idx < len(pair):
-                        blk = pair[idx]
-                        key = str(blk.get("key") or "")
-                        _render_block_card(
-                            blk,
-                            day,
-                            team=team_by_key.get(key),
-                            hours=hours_for_block(hour_rows, key),
-                            team_hours=team_hours_map,
-                            scope=scope,
-                        )
-    if extra is not None:
-        _render_block_card(
-            extra,
-            day,
-            team=team_by_key.get("blok_disi"),
-            scope=scope,
-        )
+    frame = _hour_table_frame(
+        hour_rows,
+        hist,
+        day,
+        team_hours=team_hours_map,
+        badge_ok=badge_ok,
+    )
+    _table(frame)
 
 
 def _share_send_error(exc: BaseException) -> None:
@@ -1204,7 +985,7 @@ def _share_send_error(exc: BaseException) -> None:
 
 def _render_block_share(day: date) -> None:
     """Yalnız yönetici. Gölge mod env'den; otomatik gönderim yok."""
-    st.markdown("**Blok özeti**")
+    st.markdown("**Gün özeti**")
     team_prev = last_sent_at(rep_id=TEAM_REP_ID, day=day)
     team_l, team_r = st.columns([2, 3])
     with team_l:
@@ -1285,48 +1066,6 @@ def _week_delta(rows: list[dict[str, Any]], key: str) -> str:
     avg12 = mean([v for v in values if isinstance(v, (int, float))])
     last_f = float(last) if isinstance(last, (int, float)) else None
     return arrow(last_f, avg12)
-
-
-def _sure_column(
-    today: dict[str, Any],
-    avg90: dict[str, Any],
-    *,
-    team: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Arama blogu gorusme suresi. Bosken veri yetersiz bu metrikte."""
-    pair = _fmt_ortalama_tipik(today.get("sure_ort"), today.get("sure_tipik"))
-    toplam = today.get("sure_toplam")
-    extra = None
-    extra_help = HELP_BLOK_TOPLAM
-    if toplam is not None:
-        extra = f"toplam {fmt_duration(toplam)}"
-    elif pair is None:
-        extra = "veri yetersiz"
-        extra_help = HELP_BLOK_SURE
-    shown = pair if pair is not None else "—"
-    item: dict[str, Any] = {
-        "label": "görüşme süresi",
-        "cur": today.get("sure_ort"),
-        "prev": avg90.get("sure_ort"),
-        "display": shown,
-        "help_text": HELP_BLOK_SURE,
-        "extra": extra,
-        "extra_help": extra_help,
-        "duration": True,
-        "show_team": team is not None,
-    }
-    if team is not None:
-        item["team"] = team.get("sure_ort")
-        t_pair = _fmt_ortalama_tipik(
-            team.get("sure_ort"), team.get("sure_tipik")
-        )
-        if t_pair is not None:
-            item["team_display"] = t_pair
-        elif team.get("sure_toplam") is not None:
-            item["team_display"] = f"toplam {fmt_duration(team.get('sure_toplam'))}"
-        else:
-            item["team_display"] = "veri yetersiz"
-    return item
 
 
 def _fmt_ortalama_tipik(
@@ -1562,7 +1301,7 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
     start, end = _keys(window)
     conv = conv_window(window)
     _render_bugun(
-        rep_id, block_day, blok_disi=True, with_team=rep_id is not None, scope="yon"
+        rep_id, block_day, with_team=rep_id is not None, scope="yon"
     )
     _render_block_share(block_day)
 
@@ -1647,7 +1386,8 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
         f"ulaşılamayan arama ort. {fmt_duration(board.get('miss_sn'))} · "
         f"ulaşılan görüşme ort. {fmt_duration(board.get('hit_sn'))} · "
         f"toplantı {int(TOPLANTI_DK)} dk · CRM {CRM_DK_PER_GORUSME} dk/görüşme · "
-        f"ölü zaman {fmt_duration(OLU_ZAMAN_SN)}/arama · {int(board.get('workdays') or 0)} iş günü"
+        f"ölü zaman {fmt_duration(OLU_ZAMAN_SN)}/arama · {int(board.get('workdays') or 0)} iş günü · "
+        f"hafta içi {GUN_SAAT:.0f} saat · cumartesi {SAT_SAAT:.0f} saat"
     )
 
     _heading("Görüşme süresi", HELP_SURE, window)
@@ -1848,7 +1588,7 @@ def render_temsilci(
     cur = snap["current"]
     prev = snap["previous"]
 
-    _render_bugun(rep_id, block_day, blok_disi=False, with_team=True, scope="tem")
+    _render_bugun(rep_id, block_day, with_team=True, scope="tem")
     st.divider()
     with st.container(border=True):
         st.markdown("**Günlük özet**")

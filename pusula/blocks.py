@@ -64,6 +64,16 @@ def blocks_for(day: date) -> tuple[DayBlock, ...]:
     return PLANNED_BLOCKS
 
 
+def display_hours(day: date) -> tuple[int, ...]:
+    """Tabloda görünen saatler. Hafta içi 09-18, cumartesi 09-15, pazar yok."""
+    weekday = day.weekday()
+    if weekday == 6:
+        return ()
+    if weekday == 5:
+        return tuple(range(9, 15))
+    return tuple(range(9, 18))
+
+
 def block_by_key(key: str) -> DayBlock | None:
     if key == BLOK_DISI.key:
         return BLOK_DISI

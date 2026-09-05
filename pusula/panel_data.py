@@ -22,6 +22,7 @@ from pusula.blocks import (
     SATURDAY_BLOCK,
     block_by_key,
     blocks_for,
+    display_hours,
     hour_in_blocks_sql,
     hours_of,
 )
@@ -85,7 +86,7 @@ _WEEKDAYS = (
 TOPLANTI_DK = 30.0
 CRM_DK_PER_GORUSME = 1.5
 OLU_ZAMAN_SN = 20.0
-GUN_SAAT = 8.0
+GUN_SAAT = 9.0
 SAT_SAAT = 6.0
 DEFAULT_ARAMA_PER_LEAD = 3.0
 DEFAULT_TOPLANTI_GUN = 6.0
@@ -997,17 +998,15 @@ def today_hours(
     *,
     owner_ids: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Seçilen gün, planlı saatler. Tanım today_blocks ile aynı."""
+    """Seçilen gün, görünen saatler. Tanım today_blocks ile aynı."""
     org_id = get_org_id()
     extra, params = _owner_filter("e", rep_id, owner_ids)
     hour = _hour_expr("e")
     chosen = day or datetime.now(_TZ).date()
-    planned = blocks_for(chosen)
-    if planned:
-        hour_start = min(b.start_hour for b in planned)
-        hour_end = max(b.end_hour for b in planned) - 1
-    else:
-        hour_start, hour_end = 9, 8
+    wanted = display_hours(chosen)
+    if not wanted:
+        return []
+    hour_start, hour_end = wanted[0], wanted[-1]
     is_call = "e.channel = 'call' AND e.direction = 'outbound'"
     is_meet = "e.channel = 'meeting'"
     sql = f"""
@@ -1115,6 +1114,7 @@ def today_hours(
                 "ulasilan": t_pay,
                 "ulasma_orani": _ratio(int(lead_pay), int(lead_payda)),
                 "lead_payda": int(lead_payda),
+                "lead_pay": int(lead_pay),
                 "randevu": int(randevu),
                 "katildi": int(katildi),
                 "katilmadi": int(katilmadi),
@@ -1125,6 +1125,203 @@ def today_hours(
             }
         )
     return out
+
+
+def hour_history(
+    rep_id: str | None,
+    day: date | None = None,
+    *,
+    owner_ids: Sequence[str] | None = None,
+) -> dict[int, dict[str, Any]]:
+    """Aynı saatin 90 günlük geçmiş ortalaması. Filtreler today_hours ile aynı.
+
+    Hafta içi yalnız pazartesi–cuma, cumartesi yalnız geçmiş cumartesiler.
+    Sayımlar gün sayısına bölünür; oranlar havuzlanmış pay/payda.
+    """
+    org_id = get_org_id()
+    extra, params = _owner_filter("e", rep_id, owner_ids)
+    hour = _hour_expr("e")
+    chosen = day or datetime.now(_TZ).date()
+    wanted = display_hours(chosen)
+    if not wanted:
+        return {}
+    hour_start, hour_end = wanted[0], wanted[-1]
+    weekday = chosen.weekday()
+    day_col = "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date"
+    if weekday == 5:
+        hist_dow = f"extract(isodow FROM {day_col}) = 6"
+        days = max(_hist_isodow(chosen, 6), 1)
+    else:
+        hist_dow = f"extract(isodow FROM {day_col}) < 6"
+        days = max(_hist_weekdays(chosen), 1)
+    is_call = "e.channel = 'call' AND e.direction = 'outbound'"
+    is_meet = "e.channel = 'meeting'"
+    sql = f"""
+        WITH hours AS (
+            SELECT h FROM generate_series({hour_start}, {hour_end}) AS h
+        ),
+        slots AS (
+            SELECT
+              {hour} AS saat,
+              count(*) FILTER (
+                WHERE {is_call} AND {_CEVIRME_E}
+              )::int AS arama,
+              count(*) FILTER (
+                WHERE {is_call} AND {_TEMAS_E}
+              )::int AS ulasilan_giden,
+              count(*) FILTER (WHERE {_DONUS_E})::int AS donus,
+              count(*) FILTER (WHERE {_GELEN_E})::int AS gelen,
+              {distinct_attempted_leads_sql('e', day_expr=_DAY_IST)}::int AS lead_payda,
+              {distinct_reached_leads_sql('e', day_expr=_DAY_IST)}::int AS lead_pay,
+              count(*) FILTER (WHERE {is_meet})::int AS randevu,
+              count(*) FILTER (
+                WHERE {is_meet} AND e.meta->>'randevu_durumu' = 'katildi'
+              )::int AS katildi,
+              count(*) FILTER (
+                WHERE {is_meet} AND e.meta->>'randevu_durumu' = 'katilmadi'
+              )::int AS katilmadi,
+              count(*) FILTER (
+                WHERE {is_meet}
+                  AND e.meta->>'randevu_durumu' = 'sonuc_girilmedi'
+              )::int AS sonuc,
+              sum({_DUR_E}) FILTER (
+                WHERE {is_call} AND {_TEMAS_E}
+              ) AS sure_toplam,
+              avg({_DUR_E}) FILTER (
+                WHERE {is_call} AND {_TEMAS_E}
+              ) AS sure_ort,
+              percentile_cont(0.5) WITHIN GROUP (ORDER BY {_DUR_E})
+                FILTER (WHERE {is_call} AND {_TEMAS_E}) AS sure_tipik
+            FROM events e
+            JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+            WHERE e.org_id = %s
+              AND {_sales_rep_sql()}
+              AND {day_col} >= %s::date - interval '{WINDOW_DAYS} days'
+              AND {day_col} < %s::date
+              AND {hist_dow}
+              AND e.occurred_at <= now()
+              {extra}
+            GROUP BY 1
+        )
+        SELECT
+          hours.h AS saat,
+          coalesce(s.arama, 0)::int,
+          coalesce(s.ulasilan_giden, 0)::int,
+          coalesce(s.donus, 0)::int,
+          coalesce(s.gelen, 0)::int,
+          coalesce(s.lead_payda, 0)::int,
+          coalesce(s.lead_pay, 0)::int,
+          coalesce(s.randevu, 0)::int,
+          coalesce(s.katildi, 0)::int,
+          coalesce(s.katilmadi, 0)::int,
+          coalesce(s.sonuc, 0)::int,
+          s.sure_toplam,
+          s.sure_ort,
+          s.sure_tipik
+        FROM hours
+        LEFT JOIN slots s ON s.saat = hours.h
+        ORDER BY hours.h
+    """
+    with connect() as conn:
+        rows = conn.execute(sql, (org_id, chosen, chosen, *params)).fetchall()
+
+    def _avg(total: int | float) -> float:
+        return round(float(total) / float(days), 1)
+
+    out: dict[int, dict[str, Any]] = {}
+    for (
+        saat,
+        arama,
+        ulasilan_giden,
+        donus,
+        gelen,
+        lead_payda,
+        lead_pay,
+        randevu,
+        katildi,
+        katilmadi,
+        sonuc,
+        sure_toplam,
+        sure_ort,
+        sure_tipik,
+    ) in rows:
+        t_u = int(ulasilan_giden)
+        t_d = int(donus)
+        t_pay = _reach_pay(t_u, t_d)
+        katilim_payda = int(katildi) + int(katilmadi)
+        if t_u == 0:
+            sure: dict[str, float | None] = {
+                "sure_toplam": None,
+                "sure_ort": None,
+                "sure_tipik": None,
+            }
+        else:
+            sure = {
+                "sure_toplam": (
+                    _avg(sure_toplam) if sure_toplam is not None else None
+                ),
+                "sure_ort": float(sure_ort) if sure_ort is not None else None,
+                "sure_tipik": float(sure_tipik) if sure_tipik is not None else None,
+            }
+        out[int(saat)] = {
+            "saat": int(saat),
+            "arama": _avg(arama),
+            "donus": _avg(t_d),
+            "gelen": _avg(gelen),
+            "ulasilan": _avg(t_pay),
+            "ulasma_orani": _ratio(int(lead_pay), int(lead_payda)),
+            "lead_payda": int(lead_payda),
+            "lead_pay": int(lead_pay),
+            "randevu": _avg(randevu),
+            "katildi": _avg(katildi),
+            "katilmadi": _avg(katilmadi),
+            "sonuc_girilmedi": _avg(sonuc),
+            "katilim_orani": _ratio(int(katildi), katilim_payda),
+            "katilim_payda": katilim_payda,
+            "hist_n": days,
+            **sure,
+        }
+    return out
+
+
+def sum_hour_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Gün toplamı. Sayımlar toplanır; oranlar toplam pay/payda ile."""
+    arama = sum((r.get("arama") or 0) for r in rows)
+    donus = sum((r.get("donus") or 0) for r in rows)
+    gelen = sum((r.get("gelen") or 0) for r in rows)
+    ulasilan = sum((r.get("ulasilan") or 0) for r in rows)
+    randevu = sum((r.get("randevu") or 0) for r in rows)
+    katildi = sum((r.get("katildi") or 0) for r in rows)
+    katilmadi = sum((r.get("katilmadi") or 0) for r in rows)
+    sonuc = sum((r.get("sonuc_girilmedi") or 0) for r in rows)
+    lead_payda = sum((r.get("lead_payda") or 0) for r in rows)
+    lead_pay = sum((r.get("lead_pay") or 0) for r in rows)
+    katilim_payda = katildi + katilmadi
+    sure_vals = [
+        float(r["sure_toplam"])
+        for r in rows
+        if r.get("sure_toplam") is not None
+    ]
+    sure_toplam = sum(sure_vals) if sure_vals else None
+    return {
+        "saat": None,
+        "arama": arama,
+        "donus": donus,
+        "gelen": gelen,
+        "ulasilan": ulasilan,
+        "ulasma_orani": _ratio(lead_pay, lead_payda),
+        "lead_payda": lead_payda,
+        "lead_pay": lead_pay,
+        "randevu": randevu,
+        "katildi": katildi,
+        "katilmadi": katilmadi,
+        "sonuc_girilmedi": sonuc,
+        "katilim_orani": _ratio(katildi, katilim_payda),
+        "katilim_payda": katilim_payda,
+        "sure_toplam": sure_toplam,
+        "sure_ort": None,
+        "sure_tipik": None,
+    }
 
 
 def hours_for_block(

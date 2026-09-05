@@ -8,6 +8,7 @@ from pusula.blocks import (
     PLANNED_BLOCKS,
     SATURDAY_BLOCK,
     blocks_for,
+    display_hours,
     hours_of,
 )
 from pusula.freshness import is_mesai
@@ -20,6 +21,7 @@ from pusula.panel_data import (
     all_data_window,
     per_person_metrics,
     rate_cell,
+    sum_hour_rows,
 )
 from pusula.panel_status import last_due_slot, next_ingest_at
 
@@ -116,6 +118,56 @@ def test_ingest_slots_skip_sunday_and_saturday_evening() -> None:
     assert due.minute == 7
 
 
+def test_display_hours_weekday_saturday_sunday() -> None:
+    friday = date(2026, 9, 4)
+    saturday = date(2026, 9, 5)
+    sunday = date(2026, 9, 6)
+    assert display_hours(friday) == (9, 10, 11, 12, 13, 14, 15, 16, 17)
+    assert display_hours(saturday) == (9, 10, 11, 12, 13, 14)
+    assert display_hours(sunday) == ()
+
+
+def test_sum_hour_rows_counts_and_pooled_rates() -> None:
+    rows = [
+        {
+            "arama": 3,
+            "donus": 1,
+            "gelen": 0,
+            "ulasilan": 2,
+            "randevu": 1,
+            "katildi": 1,
+            "katilmadi": 0,
+            "sonuc_girilmedi": 0,
+            "lead_payda": 4,
+            "lead_pay": 2,
+            "sure_toplam": 10.0,
+        },
+        {
+            "arama": 2,
+            "donus": 0,
+            "gelen": 1,
+            "ulasilan": 1,
+            "randevu": 1,
+            "katildi": 0,
+            "katilmadi": 1,
+            "sonuc_girilmedi": 0,
+            "lead_payda": 2,
+            "lead_pay": 1,
+            "sure_toplam": 5.0,
+        },
+    ]
+    total = sum_hour_rows(rows)
+    assert total["arama"] == 5
+    assert total["donus"] == 1
+    assert total["gelen"] == 1
+    assert total["ulasilan"] == 3
+    assert total["randevu"] == 2
+    assert total["katildi"] == 1
+    assert total["sure_toplam"] == 15.0
+    assert total["ulasma_orani"] == 50.0
+    assert total["katilim_orani"] == 50.0
+
+
 def test_occupancy_hours_constants() -> None:
-    assert GUN_SAAT == 8.0
+    assert GUN_SAAT == 9.0
     assert SAT_SAAT == 6.0

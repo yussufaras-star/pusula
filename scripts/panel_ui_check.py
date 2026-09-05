@@ -119,6 +119,14 @@ def _dump(at: Any, title: str) -> str:
         lines.append(f"  {md.value}")
     if len(at.markdown) > 40:
         lines.append(f"  ... +{len(at.markdown) - 40} markdown")
+    lines.append("dataframes:")
+    for i, frame in enumerate(at.dataframe[:6]):
+        try:
+            value = frame.value
+            lines.append(f"  df{i} cols={list(value.columns)} rows={len(value)}")
+            lines.append(str(value)[:1200])
+        except Exception as exc:
+            lines.append(f"  df{i} hata={exc}")
     ekip_lines = [
         c.value for c in at.caption if "ekip " in str(c.value)
     ]
@@ -171,7 +179,7 @@ def _assert_common(at: Any, *, admin: bool) -> list[str]:
     elif tab_labels:
         errors.append(f"temsilci sekmeler {tab_labels}")
     date_labels = [d.label for d in at.date_input]
-    if date_labels != ["Gün (bloklar)"]:
+    if date_labels != ["Gün"]:
         errors.append(f"tarih secici {date_labels}")
     radio_labels = [getattr(r, "label", "") for r in at.radio]
     joined = " ".join(radio_labels)
@@ -192,6 +200,32 @@ def _assert_common(at: Any, *, admin: bool) -> list[str]:
         errors.append("ingest gostergesi yok")
     if "11:15 çalışmadı" in blob or "14:15 çalışmadı" in blob:
         errors.append("blok bitis saati calismadi yazisi duruyor")
+    lower = blob.lower()
+    if "blok dışı" in blob or "blok disi" in lower:
+        errors.append("blok disi ifadesi duruyor")
+    if "09-11 arama blogu" in blob or "blok kart" in lower:
+        errors.append("blok karti ifadesi duruyor")
+    hour_cols = {
+        "giden arama",
+        "ulaşılan görüşme",
+        "dönüş araması",
+        "gelen arama",
+        "ulaşma oranı",
+        "görüşme süresi",
+        "randevu",
+        "katıldı",
+    }
+    found_hour_table = False
+    for frame in at.dataframe:
+        try:
+            cols = {str(c) for c in frame.value.columns}
+        except Exception:
+            continue
+        if hour_cols.issubset(cols):
+            found_hour_table = True
+            break
+    if not found_hour_table:
+        errors.append("saatlik tablo kolonlari yok")
     return errors
 
 
@@ -266,27 +300,25 @@ def main() -> int:
     if "saat kırılımı" in expanders:
         errors.append(f"saat kirilimi hala expander: {expanders}")
     checks = [getattr(c, "label", "") for c in at_admin.checkbox]
-    if "saat kırılımı" not in checks:
-        errors.append(f"saat kirilimi checkbox yok: {checks}")
-    else:
-        box = next(c for c in at_admin.checkbox if c.label == "saat kırılımı")
-        box.check()
-        at_admin.run()
-        print(_dump(at_admin, "saat kirilimi acik"))
-        hour_caps = [
-            c.value for c in at_admin.caption if ":00" in str(c.value)
-        ]
-        print("kirilim saat caption:")
-        for line in hour_caps[:12]:
-            print(f"  {line}")
-        yetersiz = [
-            c.value
-            for c in at_admin.caption
-            if "veri yetersiz" in str(c.value)
-        ]
-        print(f"kirilim veri yetersiz hucre={len(yetersiz)}")
-        for line in yetersiz[:8]:
-            print(f"  {line}")
+    if any("saat kırılımı" in str(c) for c in checks):
+        errors.append(f"saat kirilimi checkbox duruyor: {checks}")
+
+    def _hour_frame(at: Any) -> Any | None:
+        wanted = {
+            "saat",
+            "giden arama",
+            "ulaşılan görüşme",
+            "randevu",
+            "katıldı",
+        }
+        for frame in at.dataframe:
+            try:
+                cols = {str(c) for c in frame.value.columns}
+            except Exception:
+                continue
+            if wanted.issubset(cols):
+                return frame.value
+        return None
 
     if at_admin.date_input:
         at_admin.date_input[0].set_value(sat)
@@ -295,18 +327,40 @@ def main() -> int:
         sat_blob = _all_text(at_admin)
         if "09-11 arama blogu" in sat_blob or "11-14 toplanti blogu" in sat_blob:
             errors.append("cumarteside hafta ici blok etiketi var")
-        if "**09-15**" not in sat_blob and "09-15" not in sat_blob:
-            errors.append("cumartesi 09-15 blogu yok")
-        if "arama blogu" in sat_blob or "toplanti blogu" in sat_blob:
-            errors.append("cumartesi karti blok tipi yargisi tasiyor")
+        if "blok dışı" in sat_blob:
+            errors.append("cumarteside blok disi var")
+        sat_df = _hour_frame(at_admin)
+        if sat_df is None:
+            errors.append("cumartesi saatlik tablo yok")
+        else:
+            hours = [str(v) for v in sat_df["saat"].tolist()]
+            print(f"cumartesi saat satirlar={hours}")
+            if "09:00" not in hours or "14:00" not in hours:
+                errors.append(f"cumartesi 09-15 araligi yok: {hours}")
+            if "15:00" in hours or "17:00" in hours:
+                errors.append(f"cumartesi fazla saat: {hours}")
+            if "gün toplamı" not in hours:
+                errors.append("cumartesi gun toplami satiri yok")
+        if "doluluk 6 saat" not in sat_blob:
+            errors.append("cumartesi doluluk 6 saat yazisi yok")
         print(f"cumartesi gun={sat.isoformat()}")
 
         at_admin.date_input[0].set_value(friday)
         at_admin.run()
         print(_dump(at_admin, f"cuma {friday.isoformat()}"))
         fri_blob = _all_text(at_admin)
-        if "09-11 arama blogu" not in fri_blob:
-            errors.append("cumada hafta ici blok yok")
+        if "09-11 arama blogu" in fri_blob:
+            errors.append("cumada blok karti duruyor")
+        fri_df = _hour_frame(at_admin)
+        if fri_df is None:
+            errors.append("cuma saatlik tablo yok")
+        else:
+            hours = [str(v) for v in fri_df["saat"].tolist()]
+            print(f"cuma saat satirlar={hours}")
+            if "09:00" not in hours or "17:00" not in hours:
+                errors.append(f"cuma 09-18 araligi yok: {hours}")
+            if "gün toplamı" not in hours:
+                errors.append("cuma gun toplami satiri yok")
 
     print(f"AppTest sureleri temsilci={rep_s:.2f}s yonetici={admin_s:.2f}s")
     if errors:
@@ -410,14 +464,15 @@ def _shots(person: dict[str, str]) -> int:
                 path=str(SHOT_DIR / "ingest-bar.png"),
                 full_page=False,
             )
-            loc = page.get_by_text("saat kırılımı")
-            if loc.count() > 0:
-                loc.first.click()
-                page.wait_for_timeout(3000)
-                page.screenshot(
-                    path=str(SHOT_DIR / "saat-kirilim.png"),
-                    full_page=True,
-                )
+            hour_row = page.get_by_text("gün toplamı")
+            print(f"gun toplami adet={hour_row.count()}")
+            if hour_row.count() > 0:
+                hour_row.first.scroll_into_view_if_needed()
+                page.wait_for_timeout(500)
+            page.screenshot(
+                path=str(SHOT_DIR / "saatlik-tablo.png"),
+                full_page=True,
+            )
             ciro = page.get_by_text("Ciro", exact=True)
             if ciro.count() > 0:
                 ciro.first.scroll_into_view_if_needed()
@@ -425,10 +480,14 @@ def _shots(person: dict[str, str]) -> int:
                 page.screenshot(
                     path=str(SHOT_DIR / "ciro.png"), full_page=True
                 )
-            sat_label = page.get_by_text("09-15")
-            print(f"09-15 etiket adet={sat_label.count()}")
+            sat_label = page.get_by_text("09:00-15:00")
+            print(f"09:00-15:00 etiket adet={sat_label.count()}")
             weekday_blk = page.get_by_text("09-11 arama blogu")
             print(f"hafta ici 09-11 adet={weekday_blk.count()}")
+            disi = page.get_by_text("blok dışı")
+            print(f"blok disi adet={disi.count()}")
+            doluluk6 = page.get_by_text("doluluk 6 saat")
+            print(f"doluluk 6 saat adet={doluluk6.count()}")
             tabs = page.get_by_role("tab")
             print(f"playwright tab sayisi={tabs.count()}")
             browser.close()
