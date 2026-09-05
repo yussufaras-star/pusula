@@ -20,6 +20,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import pandas as pd
+
 from pusula.config import get_org_id
 from pusula.panel_auth import ADMIN_EMAIL
 from pusula.panel_ciro import AFTER_SALES_IDS, SALES_TEAM_IDS
@@ -29,6 +31,25 @@ ROOT = Path(__file__).resolve().parent.parent
 PANEL = ROOT / "app" / "panel.py"
 SHOT_DIR = Path("/tmp/pusula-panel-shots")
 VERIFY_PASSWORD = "verify-ci"
+
+
+def _leaf_names(frame: pd.DataFrame) -> set[str]:
+    names: set[str] = set()
+    for col in frame.columns:
+        if isinstance(col, tuple):
+            names.update(str(part) for part in col if str(part))
+        else:
+            names.add(str(col))
+    return names
+
+
+def _saat_values(frame: pd.DataFrame) -> list[str]:
+    if isinstance(frame.columns, pd.MultiIndex):
+        series = frame.xs("saat", axis=1, level=-1)
+        if isinstance(series, pd.DataFrame):
+            series = series.iloc[:, 0]
+        return [str(v) for v in series.tolist()]
+    return [str(v) for v in frame["saat"].tolist()]
 
 
 def _roster() -> list[dict[str, str]]:
@@ -212,18 +233,22 @@ def _assert_common(at: Any, *, admin: bool) -> list[str]:
         "gelen arama",
         "ulaşma oranı",
         "görüşme süresi",
-        "randevu",
+        "toplantı",
         "katıldı",
+        "sonuç girilmedi",
+        "arama",
     }
     found_hour_table = False
     for frame in at.dataframe:
         try:
-            cols = {str(c) for c in frame.value.columns}
+            cols = _leaf_names(frame.value)
         except Exception:
             continue
-        if hour_cols.issubset(cols):
-            found_hour_table = True
-            break
+            if hour_cols.issubset(cols):
+                found_hour_table = True
+                if "randevu" in cols:
+                    errors.append("saatlik tabloda randevu adi duruyor")
+                break
     if not found_hour_table:
         errors.append("saatlik tablo kolonlari yok")
     return errors
@@ -308,12 +333,14 @@ def main() -> int:
             "saat",
             "giden arama",
             "ulaşılan görüşme",
-            "randevu",
+            "toplantı",
             "katıldı",
+            "sonuç girilmedi",
+            "arama",
         }
         for frame in at.dataframe:
             try:
-                cols = {str(c) for c in frame.value.columns}
+                cols = _leaf_names(frame.value)
             except Exception:
                 continue
             if wanted.issubset(cols):
@@ -333,8 +360,9 @@ def main() -> int:
         if sat_df is None:
             errors.append("cumartesi saatlik tablo yok")
         else:
-            hours = [str(v) for v in sat_df["saat"].tolist()]
+            hours = _saat_values(sat_df)
             print(f"cumartesi saat satirlar={hours}")
+            print(f"cumartesi kolonlar={sorted(_leaf_names(sat_df))}")
             if "09:00" not in hours or "14:00" not in hours:
                 errors.append(f"cumartesi 09-15 araligi yok: {hours}")
             if "15:00" in hours or "17:00" in hours:
@@ -355,8 +383,9 @@ def main() -> int:
         if fri_df is None:
             errors.append("cuma saatlik tablo yok")
         else:
-            hours = [str(v) for v in fri_df["saat"].tolist()]
+            hours = _saat_values(fri_df)
             print(f"cuma saat satirlar={hours}")
+            print(f"cuma kolonlar={sorted(_leaf_names(fri_df))}")
             if "09:00" not in hours or "17:00" not in hours:
                 errors.append(f"cuma 09-18 araligi yok: {hours}")
             if "gün toplamı" not in hours:
@@ -455,6 +484,10 @@ def _shots(person: dict[str, str]) -> int:
             open_s = time.perf_counter() - t_open
             print(f"sayfa acilis (Ciro gorundu): {open_s:.2f}s")
             page.wait_for_timeout(3000)
+            print(
+                "grup yontemi: pandas MultiIndex ust baslik "
+                "(arama / toplantı); ikon yok"
+            )
             page.screenshot(
                 path=str(SHOT_DIR / "yonetici.png"), full_page=True
             )
@@ -464,22 +497,16 @@ def _shots(person: dict[str, str]) -> int:
                 path=str(SHOT_DIR / "ingest-bar.png"),
                 full_page=False,
             )
-            hour_row = page.get_by_text("gün toplamı")
-            print(f"gun toplami adet={hour_row.count()}")
-            if hour_row.count() > 0:
-                hour_row.first.scroll_into_view_if_needed()
-                page.wait_for_timeout(500)
             page.screenshot(
                 path=str(SHOT_DIR / "saatlik-tablo.png"),
                 full_page=True,
             )
-            ciro = page.get_by_text("Ciro", exact=True)
-            if ciro.count() > 0:
-                ciro.first.scroll_into_view_if_needed()
-                page.wait_for_timeout(1000)
-                page.screenshot(
-                    path=str(SHOT_DIR / "ciro.png"), full_page=True
-                )
+            print(f"toplanti yazi adet={page.get_by_text('toplantı').count()}")
+            print(
+                "sonuc girilmedi adet="
+                f"{page.get_by_text('sonuç girilmedi').count()}"
+            )
+            print(f"gun toplami adet={page.get_by_text('gün toplamı').count()}")
             sat_label = page.get_by_text("09:00-15:00")
             print(f"09:00-15:00 etiket adet={sat_label.count()}")
             weekday_blk = page.get_by_text("09-11 arama blogu")

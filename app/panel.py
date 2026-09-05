@@ -243,7 +243,9 @@ COL_HELP: dict[str, str] = {
     "dönüşle gelen": HELP_DONUSLE_GELEN,
     "benzersiz ulaşılan": HELP_BENZERSIZ_ULASILAN,
     "randevu": HELP_RANDEVU,
+    "toplantı": HELP_RANDEVU,
     "randevu/gün": HELP_RANDEVU,
+    "sonuç girilmedi": HELP_KATILIM,
     "katılım %": HELP_KATILIM,
     "ortalama": HELP_SURE,
     "tipik": HELP_TIPIK,
@@ -550,13 +552,42 @@ def _df(rows: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+# Saatlik tablo üst başlığı: arama / toplantı. İkon yok.
+HOUR_COL_GROUPS: tuple[tuple[str, str], ...] = (
+    ("", "saat"),
+    ("arama", "giden arama"),
+    ("arama", "ulaşılan görüşme"),
+    ("arama", "dönüş araması"),
+    ("arama", "gelen arama"),
+    ("arama", "ulaşma oranı"),
+    ("arama", "görüşme süresi"),
+    ("toplantı", "toplantı"),
+    ("toplantı", "katıldı"),
+    ("toplantı", "sonuç girilmedi"),
+)
+
+
+def _col_leaf(col: Any) -> str:
+    if isinstance(col, tuple):
+        return str(col[-1])
+    return str(col)
+
+
 def _col_config(frame: pd.DataFrame) -> dict[str, Any] | None:
     cfg: dict[str, Any] = {}
     for col in frame.columns:
-        text = COL_HELP.get(str(col))
+        leaf = _col_leaf(col)
+        text = COL_HELP.get(leaf)
         if text:
-            cfg[str(col)] = st.column_config.Column(str(col), help=text)
+            cfg[leaf] = st.column_config.Column(leaf, help=text)
     return cfg or None
+
+
+def _with_hour_groups(frame: pd.DataFrame) -> pd.DataFrame:
+    """İkinci satır metrik adı; birinci satır grup (arama / toplantı)."""
+    out = frame.copy()
+    out.columns = pd.MultiIndex.from_tuples(HOUR_COL_GROUPS)
+    return out
 
 
 def _table(frame: pd.DataFrame) -> None:
@@ -807,6 +838,33 @@ def _sure_cell_text(
     return shown
 
 
+def _hour_display_row(
+    *,
+    saat: str,
+    giden: str,
+    ulasilan: str,
+    donus: str,
+    gelen: str,
+    ulasma: str,
+    sure: str,
+    toplanti: str,
+    katildi: str,
+    sonuc: str,
+) -> dict[str, Any]:
+    return {
+        "saat": saat,
+        "giden arama": giden,
+        "ulaşılan görüşme": ulasilan,
+        "dönüş araması": donus,
+        "gelen arama": gelen,
+        "ulaşma oranı": ulasma,
+        "görüşme süresi": sure,
+        "toplantı": toplanti,
+        "katıldı": katildi,
+        "sonuç girilmedi": sonuc,
+    }
+
+
 def _hour_table_frame(
     rows: list[dict[str, Any]],
     hist: dict[int, dict[str, Any]],
@@ -827,60 +885,67 @@ def _hour_table_frame(
         label = f"{saat:02d}:00"
         if future:
             records.append(
-                {
-                    "saat": label,
-                    "giden arama": "bekleniyor",
-                    "ulaşılan görüşme": "",
-                    "dönüş araması": "",
-                    "gelen arama": "",
-                    "ulaşma oranı": "",
-                    "görüşme süresi": "",
-                    "randevu": "",
-                    "katıldı": "",
-                }
+                _hour_display_row(
+                    saat=label,
+                    giden="bekleniyor",
+                    ulasilan="",
+                    donus="",
+                    gelen="",
+                    ulasma="",
+                    sure="",
+                    toplanti="",
+                    katildi="",
+                    sonuc="",
+                )
             )
             continue
         records.append(
-            {
-                "saat": label,
-                "giden arama": _count_cell(
+            _hour_display_row(
+                saat=label,
+                giden=_count_cell(
                     row.get("arama"), avg.get("arama"),
                     badges=badges, team=None if team is None else team.get("arama"),
                     show_team=show_team,
                 ),
-                "ulaşılan görüşme": _count_cell(
+                ulasilan=_count_cell(
                     row.get("ulasilan"), avg.get("ulasilan"),
                     badges=badges, team=None if team is None else team.get("ulasilan"),
                     show_team=show_team,
                 ),
-                "dönüş araması": _count_cell(
+                donus=_count_cell(
                     row.get("donus"), avg.get("donus"),
                     badges=badges, team=None if team is None else team.get("donus"),
                     show_team=show_team,
                 ),
-                "gelen arama": _count_cell(
+                gelen=_count_cell(
                     row.get("gelen"), avg.get("gelen"),
                     badges=badges, team=None if team is None else team.get("gelen"),
                     show_team=show_team,
                 ),
-                "ulaşma oranı": _rate_cell_text(
+                ulasma=_rate_cell_text(
                     row, avg, key="ulasma_orani", payda_key="lead_payda",
                     badges=badges, team=team,
                 ),
-                "görüşme süresi": _sure_cell_text(
+                sure=_sure_cell_text(
                     row, avg, badges=badges, team=team,
                 ),
-                "randevu": _count_cell(
+                toplanti=_count_cell(
                     row.get("randevu"), avg.get("randevu"),
                     badges=badges, team=None if team is None else team.get("randevu"),
                     show_team=show_team,
                 ),
-                "katıldı": _count_cell(
+                katildi=_count_cell(
                     row.get("katildi"), avg.get("katildi"),
                     badges=badges, team=None if team is None else team.get("katildi"),
                     show_team=show_team,
                 ),
-            }
+                sonuc=_count_cell(
+                    row.get("sonuc_girilmedi"), avg.get("sonuc_girilmedi"),
+                    badges=badges,
+                    team=None if team is None else team.get("sonuc_girilmedi"),
+                    show_team=show_team,
+                ),
+            )
         )
     total = sum_hour_rows(rows)
     empty_avg: dict[str, Any] = {}
@@ -888,48 +953,53 @@ def _hour_table_frame(
     if team_hours:
         team_total = sum_hour_rows(list(team_hours.values()))
     records.append(
-        {
-            "saat": "gün toplamı",
-            "giden arama": _count_cell(
+        _hour_display_row(
+            saat="gün toplamı",
+            giden=_count_cell(
                 total.get("arama"), None, badges=False,
                 team=None if team_total is None else team_total.get("arama"),
                 show_team=team_total is not None,
             ),
-            "ulaşılan görüşme": _count_cell(
+            ulasilan=_count_cell(
                 total.get("ulasilan"), None, badges=False,
                 team=None if team_total is None else team_total.get("ulasilan"),
                 show_team=team_total is not None,
             ),
-            "dönüş araması": _count_cell(
+            donus=_count_cell(
                 total.get("donus"), None, badges=False,
                 team=None if team_total is None else team_total.get("donus"),
                 show_team=team_total is not None,
             ),
-            "gelen arama": _count_cell(
+            gelen=_count_cell(
                 total.get("gelen"), None, badges=False,
                 team=None if team_total is None else team_total.get("gelen"),
                 show_team=team_total is not None,
             ),
-            "ulaşma oranı": _rate_cell_text(
+            ulasma=_rate_cell_text(
                 total, empty_avg, key="ulasma_orani", payda_key="lead_payda",
                 badges=False, team=team_total,
             ),
-            "görüşme süresi": _sure_cell_text(
+            sure=_sure_cell_text(
                 total, empty_avg, badges=False, team=team_total,
             ),
-            "randevu": _count_cell(
+            toplanti=_count_cell(
                 total.get("randevu"), None, badges=False,
                 team=None if team_total is None else team_total.get("randevu"),
                 show_team=team_total is not None,
             ),
-            "katıldı": _count_cell(
+            katildi=_count_cell(
                 total.get("katildi"), None, badges=False,
                 team=None if team_total is None else team_total.get("katildi"),
                 show_team=team_total is not None,
             ),
-        }
+            sonuc=_count_cell(
+                total.get("sonuc_girilmedi"), None, badges=False,
+                team=None if team_total is None else team_total.get("sonuc_girilmedi"),
+                show_team=team_total is not None,
+            ),
+        )
     )
-    return pd.DataFrame(records)
+    return _with_hour_groups(pd.DataFrame(records))
 
 
 def _render_bugun(

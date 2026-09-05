@@ -172,6 +172,71 @@ def main() -> int:
             "yil kiyas tablosu yapilmadi."
         )
 
+    from pusula.panel_data import connect as db_connect
+
+    print("meeting meta dogrulama:")
+    print("grup yontemi: pandas MultiIndex ust baslik (arama / toplantı); ikon yok")
+    with db_connect() as conn:
+        print("information_schema.events:")
+        schema_rows = conn.execute(
+            """
+            SELECT column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'events'
+            ORDER BY ordinal_position
+            """
+        ).fetchall()
+        for name, dtype in schema_rows:
+            print(f"  {name} {dtype}")
+        print("meeting meta anahtarları:")
+        key_rows = conn.execute(
+            """
+            SELECT k AS anahtar, count(*)::int AS adet
+            FROM events e
+            CROSS JOIN LATERAL jsonb_object_keys(e.meta) AS k
+            WHERE e.channel = 'meeting'
+            GROUP BY 1
+            ORDER BY 2 DESC, 1
+            """
+        ).fetchall()
+        for anahtar, adet in key_rows:
+            print(f"  {anahtar} {adet}")
+        print("meeting randevu_durumu dagilim:")
+        dur_rows = conn.execute(
+            """
+            SELECT
+              CASE
+                WHEN e.meta ? 'randevu_durumu' THEN 'var'
+                ELSE 'yok'
+              END AS anahtar,
+              coalesce(nullif(e.meta->>'randevu_durumu', ''), '<bos>') AS deger,
+              count(*)::int AS adet
+            FROM events e
+            WHERE e.channel = 'meeting'
+            GROUP BY 1, 2
+            ORDER BY 3 DESC, 2
+            """
+        ).fetchall()
+        for anahtar, deger, adet in dur_rows:
+            print(f"  anahtar={anahtar} deger={deger} adet={adet}")
+        print("ornek meeting meta:")
+        samples = conn.execute(
+            """
+            SELECT e.meta
+            FROM events e
+            WHERE e.channel = 'meeting'
+            ORDER BY e.occurred_at DESC NULLS LAST
+            LIMIT 5
+            """
+        ).fetchall()
+        for (meta,) in samples:
+            print(f"  {meta}")
+    found_keys = {str(anahtar) for anahtar, _adet in key_rows}
+    if "randevu_durumu" not in found_keys:
+        print("hata: meeting meta'da randevu_durumu yok")
+        return 1
+    print("kullanilan meta anahtari: randevu_durumu")
+
     from time import perf_counter
     from collections.abc import Callable
     from typing import TypeVar
@@ -184,6 +249,7 @@ def main() -> int:
         ciro_ytd_by_rep,
     )
     from pusula.panel_data import (
+        connect,
         all_data_window,
         funnel,
         hour_history,
@@ -335,7 +401,7 @@ def main() -> int:
         print(f"saatlik tablo ({label}):")
         print(
             "saat arama ulasilan donus gelen "
-            "ulasma_orani randevu katildi lead_payda"
+            "ulasma_orani randevu katildi sonuc_girilmedi lead_payda"
         )
         for row in rows:
             print(
@@ -344,13 +410,15 @@ def main() -> int:
                 f"donus={row['donus']} gelen={row['gelen']} "
                 f"ulasma={row['ulasma_orani']} "
                 f"randevu={row['randevu']} katildi={row['katildi']} "
+                f"sonuc_girilmedi={row['sonuc_girilmedi']} "
                 f"payda={row['lead_payda']}"
             )
         print(
             f"  gun toplami arama={total['arama']} ulasilan={total['ulasilan']} "
             f"donus={total['donus']} gelen={total['gelen']} "
             f"ulasma={total['ulasma_orani']} "
-            f"randevu={total['randevu']} katildi={total['katildi']}"
+            f"randevu={total['randevu']} katildi={total['katildi']} "
+            f"sonuc_girilmedi={total['sonuc_girilmedi']}"
         )
         ok = True
         for key in ADD_KEYS:
@@ -410,6 +478,23 @@ def main() -> int:
     if tuple(int(r["saat"]) for r in fri_rows) != tuple(range(9, 18)):
         print("hata: cuma tablo saatleri 09-18 (9-17) degil")
         return 1
+    fri_total = sum_hour_rows(fri_rows)
+    sat_total = sum_hour_rows(sat_rows)
+    print("toplanti sayisi (channel=meeting, alan=randevu, tanim ayni):")
+    print(
+        f"  cuma onceki=sonra={fri_total['randevu']} "
+        f"cumartesi onceki=sonra={sat_total['randevu']}"
+    )
+    print("sonuc girilmedi gun toplami:")
+    print(
+        f"  cuma satir={sum(int(r.get('sonuc_girilmedi') or 0) for r in fri_rows)} "
+        f"gun_toplami={fri_total['sonuc_girilmedi']}"
+    )
+    print(
+        f"  cumartesi satir="
+        f"{sum(int(r.get('sonuc_girilmedi') or 0) for r in sat_rows)} "
+        f"gun_toplami={sat_total['sonuc_girilmedi']}"
+    )
 
     sums_ok = _compare_before_after(None, "ekip cuma", friday)
     sums_ok = _compare_before_after(rep_id, "temsilci cuma", friday) and sums_ok
