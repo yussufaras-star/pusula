@@ -34,12 +34,22 @@ VERIFY_PASSWORD = "verify-ci"
 
 
 def _leaf_names(frame: pd.DataFrame) -> set[str]:
+    """MultiIndex veya düz kolon adlarından yaprak/grup isimlerini topla.
+
+    AppTest bazen MultiIndex kolonunu "('arama', 'giden arama')" stringi
+    olarak verir; o biçimi de parçala.
+    """
     names: set[str] = set()
     for col in frame.columns:
         if isinstance(col, tuple):
             names.update(str(part) for part in col if str(part))
-        else:
-            names.add(str(col))
+            names.add(str(col[-1]))
+            continue
+        text = str(col)
+        names.add(text)
+        if text.startswith("(") and "," in text:
+            inner = text.strip("()").replace("'", "").replace('"', "")
+            names.update(part.strip() for part in inner.split(",") if part.strip())
     return names
 
 
@@ -189,6 +199,26 @@ def _run_app(session: dict[str, Any], timeout: float = 240.0) -> Any:
     return at
 
 
+def _hour_frame(at: Any) -> Any | None:
+    wanted = {
+        "saat",
+        "giden arama",
+        "ulaşılan görüşme",
+        "toplantı",
+        "katıldı",
+        "sonuç girilmedi",
+        "arama",
+    }
+    for frame in at.dataframe:
+        try:
+            cols = _leaf_names(frame.value)
+        except Exception:
+            continue
+        if wanted.issubset(cols):
+            return frame.value
+    return None
+
+
 def _assert_common(at: Any, *, admin: bool) -> list[str]:
     errors: list[str] = []
     if len(at.exception) > 0:
@@ -226,31 +256,13 @@ def _assert_common(at: Any, *, admin: bool) -> list[str]:
         errors.append("blok disi ifadesi duruyor")
     if "09-11 arama blogu" in blob or "blok kart" in lower:
         errors.append("blok karti ifadesi duruyor")
-    hour_cols = {
-        "giden arama",
-        "ulaşılan görüşme",
-        "dönüş araması",
-        "gelen arama",
-        "ulaşma oranı",
-        "görüşme süresi",
-        "toplantı",
-        "katıldı",
-        "sonuç girilmedi",
-        "arama",
-    }
-    found_hour_table = False
-    for frame in at.dataframe:
-        try:
-            cols = _leaf_names(frame.value)
-        except Exception:
-            continue
-            if hour_cols.issubset(cols):
-                found_hour_table = True
-                if "randevu" in cols:
-                    errors.append("saatlik tabloda randevu adi duruyor")
-                break
-    if not found_hour_table:
+    hour_df = _hour_frame(at)
+    if hour_df is None:
         errors.append("saatlik tablo kolonlari yok")
+    else:
+        cols = _leaf_names(hour_df)
+        if "randevu" in cols and "toplantı" not in cols:
+            errors.append("saatlik tabloda randevu basligi duruyor, toplantı olmali")
     return errors
 
 
@@ -327,25 +339,6 @@ def main() -> int:
     checks = [getattr(c, "label", "") for c in at_admin.checkbox]
     if any("saat kırılımı" in str(c) for c in checks):
         errors.append(f"saat kirilimi checkbox duruyor: {checks}")
-
-    def _hour_frame(at: Any) -> Any | None:
-        wanted = {
-            "saat",
-            "giden arama",
-            "ulaşılan görüşme",
-            "toplantı",
-            "katıldı",
-            "sonuç girilmedi",
-            "arama",
-        }
-        for frame in at.dataframe:
-            try:
-                cols = _leaf_names(frame.value)
-            except Exception:
-                continue
-            if wanted.issubset(cols):
-                return frame.value
-        return None
 
     if at_admin.date_input:
         at_admin.date_input[0].set_value(sat)
