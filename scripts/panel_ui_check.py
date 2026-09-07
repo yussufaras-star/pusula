@@ -127,6 +127,13 @@ def _dump(at: Any, title: str) -> str:
         )
     )
     lines.append(
+        "metric="
+        + " | ".join(
+            f"{getattr(m, 'label', '')}={getattr(m, 'value', '')}"
+            for m in getattr(at, "metric", [])
+        )
+    )
+    lines.append(
         "expander=" + ",".join(e.label for e in at.expander)
     )
     lines.append(
@@ -181,6 +188,11 @@ def _all_text(at: Any) -> str:
         chunks.append(exp.label)
     for tab in at.tabs:
         chunks.append(tab.label)
+    for met in getattr(at, "metric", []):
+        chunks.append(str(getattr(met, "label", "") or ""))
+        chunks.append(str(getattr(met, "value", "") or ""))
+        chunks.append(str(getattr(met, "delta", "") or ""))
+        chunks.append(_help_of(met))
     for frame in at.dataframe:
         try:
             chunks.append(str(frame.value))
