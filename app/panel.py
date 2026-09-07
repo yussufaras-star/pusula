@@ -48,9 +48,12 @@ from pusula.panel_ciro import (
 )
 from pusula.panel_data import (
     CRM_DK_PER_GORUSME,
+    CRM_SN_PER_ULASILAMAYAN,
     DEFAULT_ARAMA_PER_LEAD,
     DEFAULT_TOPLANTI_GUN,
     FUNNEL_DROPPED_STATUS,
+    MESAI_SAT_SAAT,
+    MESAI_WD_SAAT,
     OLU_ZAMAN_SN,
     TOPLANTI_DK,
     DateWindow,
@@ -65,8 +68,6 @@ from pusula.panel_data import (
     fmt_window,
     funnel,
     funnel_dropped_by_rep,
-    GUN_SAAT,
-    SAT_SAAT,
     hour_history,
     latest_event_created_at,
     lead_reach_breakdown,
@@ -183,10 +184,14 @@ HELP_ISYUKU = (
     "gunlerine bolunmustur."
 )
 HELP_DOLULUK = (
-    "Gun doluluk orani — olculebilen islerin (arama, gorusme, "
-    "toplanti, CRM kayit) gunun kacini doldurdugu. WhatsApp ve "
-    "mola bu hesaba dahil degildir. Hafta ici 9 saat (09:00-18:00), "
-    "cumartesi 6 saat (09:00-15:00), pazar yok."
+    "Gün doluluk oranı. Payda mesai süresi (hafta içi 09:00-18:00 "
+    "eksi 1 saat mola = 8 saat; cumartesi 09:00-15:00 eksi 1 saat "
+    "mola = 5 saat; pazar yok). Pay ölçülen arama süresi "
+    "(call_status=connected, duration_sec) ve katılınan toplantı "
+    "süresi artı varsayılan CRM (ulaşılamayan 30 sn, ulaşılan "
+    "1.5 dk) ve ölü zaman. WhatsApp bu hesaba dahil değil. "
+    "Ulaşılan görüşme süresi arama satırında sayılır, ikinci "
+    "kez eklenmez."
 )
 HELP_LEAD = "Temsilciye atanan yeni lead sayisi."
 HELP_HUNI = (
@@ -262,6 +267,10 @@ COL_HELP: dict[str, str] = {
     "plan gerçekleşme": (
         "Plan gerçekleşme oranı — gerçekleşen / planlanan. "
         "Her satır ve toplam süre için ayrı hesaplanır."
+    ),
+    "süre kaynağı": (
+        "Ölçülen: events.meta.duration_sec veya Bookings duration. "
+        "Varsayım: CRM kayıt ve ölü zaman."
     ),
     "kayıt sayısı": HELP_KAYIT,
     "durum": HELP_HUNI,
@@ -1377,6 +1386,9 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
 
     st.divider()
     dip = _team_dip(start, end)
+    team_board = _board(
+        None, float(DEFAULT_ARAMA_PER_LEAD), float(DEFAULT_TOPLANTI_GUN)
+    )
     with st.container(border=True):
         _stat_row(
             [
@@ -1399,6 +1411,15 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
                     "label": "ekip gelen arama",
                     "value": fmt_num(dip.get("gelen")),
                     "help": HELP_GELEN,
+                },
+            ]
+        )
+        _stat_row(
+            [
+                {
+                    "label": "ekip doluluk oranı",
+                    "value": fmt_pct(team_board.get("doluluk")),
+                    "help": HELP_DOLULUK,
                 },
             ]
         )
@@ -1445,7 +1466,11 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
                     "value": f"{board['gercek_saat']} saat",
                 },
                 {
-                    "label": "gün doluluk oranı",
+                    "label": (
+                        "ekip doluluk oranı"
+                        if rep_id is None
+                        else "gün doluluk oranı"
+                    ),
                     "value": fmt_pct(board.get("doluluk")),
                     "help": HELP_DOLULUK,
                 },
@@ -1455,9 +1480,13 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
         f"plan gerçekleşme (süre) {fmt_pct(board.get('toplam_oran'))} · "
         f"ulaşılamayan arama ort. {fmt_duration(board.get('miss_sn'))} · "
         f"ulaşılan görüşme ort. {fmt_duration(board.get('hit_sn'))} · "
-        f"toplantı {int(TOPLANTI_DK)} dk · CRM {CRM_DK_PER_GORUSME} dk/görüşme · "
-        f"ölü zaman {fmt_duration(OLU_ZAMAN_SN)}/arama · {int(board.get('workdays') or 0)} iş günü · "
-        f"hafta içi {GUN_SAAT:.0f} saat · cumartesi {SAT_SAAT:.0f} saat"
+        f"toplantı plan {int(TOPLANTI_DK)} dk · "
+        f"CRM ulaşılamayan {int(CRM_SN_PER_ULASILAMAYAN)} sn · "
+        f"CRM ulaşılan {CRM_DK_PER_GORUSME} dk/görüşme · "
+        f"ölü zaman {fmt_duration(OLU_ZAMAN_SN)}/arama · "
+        f"{int(board.get('workdays') or 0)} iş günü · "
+        f"mesai hafta içi {MESAI_WD_SAAT:.0f} saat · "
+        f"cumartesi {MESAI_SAT_SAAT:.0f} saat"
     )
 
     _heading("Görüşme süresi", HELP_SURE, window)
@@ -1791,6 +1820,21 @@ def render_temsilci(
                 },
             ]
         )
+        own_board = _board(
+            rep_id, float(DEFAULT_ARAMA_PER_LEAD), float(DEFAULT_TOPLANTI_GUN)
+        )
+        team_board = _board(
+            None, float(DEFAULT_ARAMA_PER_LEAD), float(DEFAULT_TOPLANTI_GUN)
+        )
+        with st.container():
+            st.metric(
+                "gün doluluk oranı",
+                fmt_pct(own_board.get("doluluk")),
+                help=HELP_DOLULUK,
+            )
+            st.caption(
+                f"ekip ortalaması {fmt_pct(team_board.get('doluluk'))}"
+            )
         st.caption(f"CRM kayıt tahmini {CRM_DK_PER_GORUSME} dk/görüşme")
 
     st.divider()

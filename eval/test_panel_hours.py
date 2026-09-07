@@ -191,5 +191,48 @@ def test_hour_col_groups_arama_toplanti() -> None:
 
 
 def test_occupancy_hours_constants() -> None:
+    from pusula.panel_data import MESAI_SAT_SAAT, MESAI_WD_SAAT
+
     assert GUN_SAAT == 9.0
     assert SAT_SAAT == 6.0
+    assert MESAI_WD_SAAT == 8.0
+    assert MESAI_SAT_SAAT == 5.0
+
+
+def test_occupancy_pay_no_double_count() -> None:
+    from pusula.panel_data import (
+        CRM_DK_PER_GORUSME,
+        CRM_SN_PER_ULASILAMAYAN,
+        OLU_ZAMAN_SN,
+        occupancy_pay_dk,
+        _cap_doluluk,
+        mesai_avail_dk,
+    )
+
+    call_sec = 600.0
+    meet_dk = 30.0
+    unreached = 10.0
+    reached = 4.0
+    arama = 14.0
+    pay = occupancy_pay_dk(
+        call_sec=call_sec,
+        meet_dk=meet_dk,
+        unreached=unreached,
+        reached=reached,
+        arama=arama,
+    )
+    expected = (
+        call_sec / 60.0
+        + meet_dk
+        + unreached * (CRM_SN_PER_ULASILAMAYAN / 60.0)
+        + reached * CRM_DK_PER_GORUSME
+        + arama * (OLU_ZAMAN_SN / 60.0)
+    )
+    assert pay == expected
+    # Ulaşılan görüşme süresi call_sec içinde; ikinci kez eklenmez.
+    doubled = pay + call_sec / 60.0
+    assert doubled != pay
+    assert mesai_avail_dk(1, 0, 1) == 8.0 * 60.0
+    assert mesai_avail_dk(0, 1, 1) == 5.0 * 60.0
+    assert _cap_doluluk(80.0, detail="ok") == 80.0
+    assert _cap_doluluk(140.0, detail="test asim") == 100.0

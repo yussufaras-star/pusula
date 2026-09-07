@@ -267,6 +267,14 @@ def main() -> int:
         today_hours,
         GUN_SAAT,
         SAT_SAAT,
+        MESAI_WD_SAAT,
+        MESAI_SAT_SAAT,
+        MEET_DURATION_KEY,
+        CRM_DK_PER_GORUSME,
+        CRM_SN_PER_ULASILAMAYAN,
+        OLU_ZAMAN_SN,
+        TOPLANTI_DK,
+        occupancy_breakdown,
         weekly_series,
         weekly_team_series,
         workload_board,
@@ -532,17 +540,148 @@ def main() -> int:
 
     board = workload_board(None, 3.0, 6.0)
     print(
-        f"doluluk payda: hafta ici {GUN_SAAT:.0f} saat, "
-        f"cumartesi {SAT_SAAT:.0f} saat, pazar yok"
+        "saatlik tablo pencere: "
+        f"hafta ici {GUN_SAAT:.0f} saat, cumartesi {SAT_SAAT:.0f} saat"
     )
     print(f"  GUN_SAAT={GUN_SAAT} SAT_SAAT={SAT_SAAT}")
     print(
+        "doluluk mesai payda: "
+        f"hafta ici {MESAI_WD_SAAT:.0f} saat, "
+        f"cumartesi {MESAI_SAT_SAAT:.0f} saat, pazar yok"
+    )
+    print(f"  MESAI_WD_SAAT={MESAI_WD_SAAT} MESAI_SAT_SAAT={MESAI_SAT_SAAT}")
+    print(
         f"is gunu/doluluk: workdays={board.get('workdays')} "
-        f"doluluk={board.get('doluluk')}"
+        f"n_wd={board.get('n_wd')} n_sat={board.get('n_sat')} "
+        f"doluluk={board.get('doluluk')} raw={board.get('doluluk_raw')}"
     )
     if GUN_SAAT != 9.0 or SAT_SAAT != 6.0:
-        print("hata: doluluk saatleri 9/6 degil")
+        print("hata: saatlik tablo saatleri 9/6 degil")
         return 1
+    if MESAI_WD_SAAT != 8.0 or MESAI_SAT_SAAT != 5.0:
+        print("hata: mesai payda 8/5 degil")
+        return 1
+    if float(board.get("ulasilan_dk") or 0) != 0.0:
+        print("hata: ulasilan gorusme suresi doluluk payina eklendi")
+        return 1
+
+    print("toplanti duration anahtari dogrulama:")
+    print(f"kullanilan anahtar: {MEET_DURATION_KEY}")
+    with connect() as conn:
+        print("meeting meta anahtar (duration gecenler):")
+        key_rows = conn.execute(
+            """
+            SELECT k AS anahtar, count(*)::int AS adet
+            FROM events e
+            CROSS JOIN LATERAL jsonb_object_keys(e.meta) AS k
+            WHERE e.channel = 'meeting'
+            GROUP BY 1
+            ORDER BY 2 DESC, 1
+            """
+        ).fetchall()
+        for anahtar, adet in key_rows:
+            print(f"  {anahtar} {adet}")
+        print("meeting duration deger dagilimi:")
+        dur_vals = conn.execute(
+            """
+            SELECT
+              coalesce(nullif(e.meta->>'duration', ''), '<bos>') AS deger,
+              count(*)::int AS adet
+            FROM events e
+            WHERE e.channel = 'meeting'
+            GROUP BY 1
+            ORDER BY 2 DESC
+            """
+        ).fetchall()
+        for deger, adet in dur_vals:
+            print(f"  deger={deger} adet={adet}")
+        print("ornek katildi meeting meta:")
+        samples = conn.execute(
+            """
+            SELECT e.meta
+            FROM events e
+            WHERE e.channel = 'meeting'
+              AND e.meta->>'randevu_durumu' = 'katildi'
+            ORDER BY e.occurred_at DESC NULLS LAST
+            LIMIT 5
+            """
+        ).fetchall()
+        for (meta,) in samples:
+            print(f"  {meta}")
+    found_keys = {str(anahtar) for anahtar, _adet in key_rows}
+    if MEET_DURATION_KEY not in found_keys:
+        print(f"hata: meeting meta'da {MEET_DURATION_KEY} yok")
+        return 1
+
+    probe_day = friday
+    occ = occupancy_breakdown(None, probe_day)
+    print(f"elle hesap (ekip {probe_day.isoformat()}):")
+    print(f"  olculen arama suresi: {occ['call_sec']:.1f} sn = {occ['call_dk']:.2f} dk")
+    print(f"  olculen toplanti suresi (katildi, {MEET_DURATION_KEY}): {occ['meet_dk']:.2f} dk")
+    print(
+        f"  ulasilamayan {occ['unreached']} x {int(CRM_SN_PER_ULASILAMAYAN)} sn "
+        f"= {occ['crm_miss_dk']:.2f} dk"
+    )
+    print(
+        f"  ulasilan {occ['ulasilan']} x {CRM_DK_PER_GORUSME} dk "
+        f"= {occ['crm_hit_dk']:.2f} dk"
+    )
+    print(
+        f"  olu zaman {occ['arama']} x {int(OLU_ZAMAN_SN)} sn "
+        f"= {occ['olu_dk']:.2f} dk"
+    )
+    print(
+        f"  toplam pay={occ['pay_dk']:.2f} dk "
+        f"({occ['pay_dk'] / 60.0:.2f} saat)"
+    )
+    print(
+        f"  payda={occ['payda_dk']:.2f} dk "
+        f"(n_reps={occ['n_reps']} x mesai "
+        f"{MESAI_WD_SAAT if occ['n_wd'] else MESAI_SAT_SAAT} saat)"
+    )
+    print(f"  sonuc doluluk={occ['doluluk']} raw={occ['doluluk_raw']}")
+    recon = (
+        occ["call_dk"]
+        + occ["meet_dk"]
+        + occ["crm_miss_dk"]
+        + occ["crm_hit_dk"]
+        + occ["olu_dk"]
+    )
+    if abs(recon - occ["pay_dk"]) > 0.05:
+        print(f"hata: pay bilesenleri toplamı {recon:.2f} != {occ['pay_dk']:.2f}")
+        return 1
+    print("cift sayim:")
+    print(f"  arama olculen dk={occ['call_dk']:.2f}")
+    print("  ulasilan gorusme ayri dk=0 (payda eklenmedi)")
+    print(
+        f"  pay = arama {occ['call_dk']:.2f} + toplanti {occ['meet_dk']:.2f} "
+        f"+ crm_miss {occ['crm_miss_dk']:.2f} + crm_hit {occ['crm_hit_dk']:.2f} "
+        f"+ olu {occ['olu_dk']:.2f}"
+    )
+    old_pay_dk = (
+        (
+            occ["unreached"] * occ["miss_sn"]
+            + occ["arama"] * OLU_ZAMAN_SN
+        )
+        / 60.0
+        + occ["ulasilan"] * occ["hit_sn"] / 60.0
+        + occ["katildi"] * TOPLANTI_DK
+        + occ["ulasilan"] * CRM_DK_PER_GORUSME
+    )
+    old_payda = float(occ["n_reps"]) * GUN_SAAT * 60.0
+    old_pct = (
+        round(100.0 * old_pay_dk / old_payda, 1) if old_payda else None
+    )
+    print("eski vs yeni doluluk (ayni gun):")
+    print(
+        f"  eski pay={old_pay_dk:.2f} dk payda={old_payda:.2f} dk "
+        f"oran={old_pct} (adet x ortalama, payda {GUN_SAAT:.0f}s)"
+    )
+    print(
+        f"  yeni pay={occ['pay_dk']:.2f} dk payda={occ['payda_dk']:.2f} dk "
+        f"oran={occ['doluluk']} (olculen sure, payda mesai "
+        f"{MESAI_WD_SAAT:.0f}s)"
+    )
 
     print("payda < 5 saatler:")
     found_sparse = False

@@ -6,6 +6,7 @@ sonrası, Mevcut Müşteri hariç. Operasyon kıyası son 90 gün.
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -27,6 +28,8 @@ from pusula.blocks import (
     hours_of,
 )
 from pusula.config import get_org_id
+
+logger = logging.getLogger(__name__)
 from pusula.sifir_satis import WON_STAGE, won_stage_sql
 from pusula.temas import (
     distinct_attempted_leads_sql,
@@ -36,6 +39,8 @@ from pusula.temas import (
     is_cevirme_sql,
     is_donus_sql,
     is_gelen_sql,
+    is_not_future_sql,
+    is_not_planned_sql,
     is_temas_sql,
     lead_reach_split_agg_sql,
     lead_reach_thread_flags_sql,
@@ -85,9 +90,15 @@ _WEEKDAYS = (
 # İş yükü süre varsayımları — tek yer.
 TOPLANTI_DK = 30.0
 CRM_DK_PER_GORUSME = 1.5
+CRM_SN_PER_ULASILAMAYAN = 30.0
 OLU_ZAMAN_SN = 20.0
+# Saatlik tablo penceresi (mola düşülmez). Doluluk paydası MESAI_* .
 GUN_SAAT = 9.0
 SAT_SAAT = 6.0
+MESAI_WD_SAAT = 8.0
+MESAI_SAT_SAAT = 5.0
+# Bookings ingest: meta.duration (ör. '30 mins'). Probe panel_check.
+MEET_DURATION_KEY = "duration"
 DEFAULT_ARAMA_PER_LEAD = 3.0
 DEFAULT_TOPLANTI_GUN = 6.0
 # Eski ad: panel import kırılmasın.
@@ -1373,6 +1384,199 @@ def _workday_split() -> tuple[int, int]:
     return int(row[0] or 0), int(row[1] or 0)
 
 
+def _meeting_duration_min_sql(alias: str = "e") -> str:
+    """Bookings meta.duration → dakika. Eksik kayıt 0; varsayılan yok.
+
+    '30 mins' → 30. '1 hour' / '1 hour 30 mins' saat+dakika.
+    """
+    raw = f"nullif(btrim(coalesce({alias}.meta->>'{MEET_DURATION_KEY}', '')), '')"
+    hours = (
+        f"coalesce(NULLIF(regexp_replace("
+        f"substring({raw} from '([0-9]+)\\s*hour'), '[^0-9]', '', 'g'), '')"
+        f"::numeric, 0)"
+    )
+    mins = (
+        f"coalesce(NULLIF(regexp_replace("
+        f"substring({raw} from '([0-9]+)\\s*min'), '[^0-9]', '', 'g'), '')"
+        f"::numeric, 0)"
+    )
+    digits = (
+        f"coalesce(NULLIF(regexp_replace({raw}, '[^0-9]', '', 'g'), '')"
+        f"::numeric, 0)"
+    )
+    return f"""
+        CASE
+          WHEN {raw} IS NULL THEN 0
+          WHEN {raw} ~* 'hour' THEN {hours} * 60 + {mins}
+          ELSE {digits}
+        END
+    """
+
+
+def _call_connected_sql(alias: str = "e") -> str:
+    """Ölçülen arama süresi: connected teknik alan, temas değil."""
+    return (
+        f"{alias}.channel = 'call' "
+        f"AND {alias}.meta->>'call_status' = 'connected' "
+        f"AND {is_not_planned_sql(alias)} "
+        f"AND {is_not_future_sql(alias)}"
+    )
+
+
+def occupancy_pay_dk(
+    *,
+    call_sec: float,
+    meet_dk: float,
+    unreached: float,
+    reached: float,
+    arama: float,
+) -> float:
+    """Doluluk payı (dk): ölçülen arama+toplantı + varsayılan CRM ve ölü zaman.
+
+    Arama süresi tek kalem; ulaşılan görüşme ayrıca eklenmez.
+    """
+    return (
+        float(call_sec) / 60.0
+        + float(meet_dk)
+        + float(unreached) * (CRM_SN_PER_ULASILAMAYAN / 60.0)
+        + float(reached) * CRM_DK_PER_GORUSME
+        + float(arama) * (OLU_ZAMAN_SN / 60.0)
+    )
+
+
+def mesai_avail_dk(n_wd: int, n_sat: int, n_reps: int = 1) -> float:
+    """Mesai paydası (dk). Hafta içi 8 saat, cumartesi 5 saat, pazar yok."""
+    return (
+        float(n_reps)
+        * (float(n_wd) * MESAI_WD_SAAT + float(n_sat) * MESAI_SAT_SAAT)
+        * 60.0
+    )
+
+
+def _cap_doluluk(pct: float | None, *, detail: str) -> float | None:
+    if pct is None:
+        return None
+    if pct > 100.0:
+        logger.warning("doluluk %%100 asimi: %.1f (%s)", pct, detail)
+        return 100.0
+    return pct
+
+
+def occupancy_breakdown(
+    rep_id: str | None,
+    day: date | None = None,
+) -> dict[str, Any]:
+    """Doluluk pay/payda. day verilirse o gün; yoksa 90 gün (pazar hariç)."""
+    org_id = get_org_id()
+    extra, params = _rep_filter("e", rep_id)
+    n_reps = 1 if rep_id else max(len(load_reps()), 1)
+    meet_dk = _meeting_duration_min_sql("e")
+    connected = _call_connected_sql("e")
+    sunday = (
+        "extract(isodow FROM e.occurred_at AT TIME ZONE 'Europe/Istanbul') <> 7"
+    )
+    if day is not None:
+        window_sql = (
+            "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date = %s"
+        )
+        window_params: tuple[Any, ...] = (day,)
+        wd = day.weekday()
+        n_wd, n_sat = (1, 0) if wd < 5 else ((0, 1) if wd == 5 else (0, 0))
+    else:
+        window_sql = (
+            f"e.occurred_at >= now() - interval '{WINDOW_DAYS} days' "
+            f"AND e.occurred_at <= now()"
+        )
+        window_params = ()
+        n_wd, n_sat = _workday_split()
+    sql = f"""
+        SELECT
+          count(*) FILTER (
+            WHERE e.channel = 'call' AND e.direction = 'outbound'
+              AND {_CEVIRME_E}
+          )::int AS arama,
+          count(*) FILTER (
+            WHERE e.channel = 'call' AND e.direction = 'outbound'
+              AND {_TEMAS_E}
+          )::int AS ulasilan,
+          count(*) FILTER (
+            WHERE e.channel = 'meeting'
+              AND e.meta->>'randevu_durumu' = 'katildi'
+          )::int AS katildi,
+          coalesce(sum({_DUR_E}) FILTER (WHERE {connected}), 0)::float
+            AS call_sec,
+          coalesce(sum({meet_dk}) FILTER (
+            WHERE e.channel = 'meeting'
+              AND e.meta->>'randevu_durumu' = 'katildi'
+          ), 0)::float AS meet_dk,
+          avg({_DUR_E}) FILTER (
+            WHERE e.channel = 'call' AND e.direction = 'outbound'
+              AND {_CEVIRME_E} AND NOT ({_TEMAS_E})
+          )::float AS miss_sn,
+          avg({_DUR_E}) FILTER (
+            WHERE e.channel = 'call' AND e.direction = 'outbound'
+              AND {_TEMAS_E}
+          )::float AS hit_sn
+        FROM events e
+        JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+        WHERE e.org_id = %s
+          AND {_sales_rep_sql()}
+          AND {window_sql}
+          AND {sunday}
+          {extra}
+    """
+    with connect() as conn:
+        row = conn.execute(
+            sql, (org_id, *window_params, *params)
+        ).fetchone()
+    arama = int(row[0] or 0) if row else 0
+    ulasilan = int(row[1] or 0) if row else 0
+    katildi = int(row[2] or 0) if row else 0
+    call_sec = float(row[3] or 0) if row else 0.0
+    meet_dk_val = float(row[4] or 0) if row else 0.0
+    miss_sn = float(row[5]) if row and row[5] is not None else 0.0
+    hit_sn = float(row[6]) if row and row[6] is not None else 0.0
+    unreached = max(arama - ulasilan, 0)
+    crm_miss_dk = unreached * (CRM_SN_PER_ULASILAMAYAN / 60.0)
+    crm_hit_dk = ulasilan * CRM_DK_PER_GORUSME
+    olu_dk = arama * (OLU_ZAMAN_SN / 60.0)
+    pay_dk = occupancy_pay_dk(
+        call_sec=call_sec,
+        meet_dk=meet_dk_val,
+        unreached=unreached,
+        reached=ulasilan,
+        arama=arama,
+    )
+    payda_dk = mesai_avail_dk(n_wd, n_sat, n_reps)
+    raw = _ratio(pay_dk, payda_dk)
+    label = (
+        f"rep={rep_id or 'ekip'} day={day.isoformat() if day else '90g'} "
+        f"pay_dk={pay_dk:.1f} payda_dk={payda_dk:.1f}"
+    )
+    return {
+        "arama": arama,
+        "ulasilan": ulasilan,
+        "unreached": unreached,
+        "katildi": katildi,
+        "call_sec": call_sec,
+        "call_dk": call_sec / 60.0,
+        "meet_dk": meet_dk_val,
+        "crm_miss_dk": crm_miss_dk,
+        "crm_hit_dk": crm_hit_dk,
+        "olu_dk": olu_dk,
+        "pay_dk": pay_dk,
+        "payda_dk": payda_dk,
+        "doluluk_raw": raw,
+        "doluluk": _cap_doluluk(raw, detail=label),
+        "miss_sn": miss_sn,
+        "hit_sn": hit_sn,
+        "n_reps": n_reps,
+        "n_wd": n_wd,
+        "n_sat": n_sat,
+        "meet_duration_key": MEET_DURATION_KEY,
+    }
+
+
 def daily_workload() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
     """Kişi başı günlük iş yükü + ulaşılamayan ort. / ulaşılan medyan süre."""
     org_id = get_org_id()
@@ -1506,6 +1710,7 @@ def workload_board(
     n_reps = 1
     if not rep_id:
         n_reps = max(len(load_reps()), 1)
+    occ = occupancy_breakdown(rep_id)
 
     sql = f"""
         SELECT
@@ -1565,13 +1770,16 @@ def workload_board(
     leads_t = int(lead_row[0] or 0) if lead_row else 0
 
     scale = float(days) * float(n_reps)
+    unreached_t = max(arama_t - ulasilan_t, 0)
     actual = {
         "lead": leads_t / scale,
         "arama": arama_t / scale,
         "ulasilan": ulasilan_t / scale,
         "randevu": randevu_t / scale,
         "toplanti": katildi_t / scale,
-        "crm": ulasilan_t / scale,
+        "crm_miss": unreached_t / scale,
+        "crm_hit": ulasilan_t / scale,
+        "olu": arama_t / scale,
     }
     ulasma = _ratio(ulasilan_t, arama_t)
     randevu_orani = _ratio(randevu_t, ulasilan_t)
@@ -1582,13 +1790,16 @@ def workload_board(
     arama_plan = lead_plan * arama_per_lead
     ulasilan_plan = arama_plan * ulasma_f
     randevu_plan = ulasilan_plan * randevu_f
+    unreached_plan = max(arama_plan - ulasilan_plan, 0.0)
     plan = {
         "lead": lead_plan,
         "arama": arama_plan,
         "ulasilan": ulasilan_plan,
         "randevu": randevu_plan,
         "toplanti": float(toplanti_gun),
-        "crm": ulasilan_plan,
+        "crm_miss": unreached_plan,
+        "crm_hit": ulasilan_plan,
+        "olu": arama_plan,
     }
     plan_dk = _minutes_for(
         arama=plan["arama"],
@@ -1597,50 +1808,73 @@ def workload_board(
         miss_sn=miss_sn,
         hit_sn=hit_sn,
     )
-    gercek_dk = _minutes_for(
-        arama=actual["arama"],
-        ulasilan=actual["ulasilan"],
-        katildi=actual["toplanti"],
-        miss_sn=miss_sn,
-        hit_sn=hit_sn,
-    )
+    plan_dk["crm_miss"] = unreached_plan * (CRM_SN_PER_ULASILAMAYAN / 60.0)
+    plan_dk["crm_hit"] = ulasilan_plan * CRM_DK_PER_GORUSME
+    plan_dk["olu"] = arama_plan * (OLU_ZAMAN_SN / 60.0)
+    # Plan arama satırındaki ölü zaman ayrı satıra taşındı; çift yazılmasın.
+    plan_dk["arama"] = (
+        max(plan["arama"] - plan["ulasilan"], 0.0) * miss_sn
+        + plan["ulasilan"] * hit_sn
+    ) / 60.0
+    plan_dk["ulasilan"] = 0.0
+
+    occ_scale = float(days) * float(n_reps)
+    gercek_dk = {
+        "lead": 0.0,
+        "arama": occ["call_dk"] / occ_scale,
+        "ulasilan": 0.0,
+        "randevu": 0.0,
+        "toplanti": occ["meet_dk"] / occ_scale,
+        "crm_miss": occ["crm_miss_dk"] / occ_scale,
+        "crm_hit": occ["crm_hit_dk"] / occ_scale,
+        "olu": occ["olu_dk"] / occ_scale,
+    }
     labels = [
-        ("lead", "gelen lead"),
-        ("arama", "arama"),
-        ("ulasilan", "ulaşılan görüşme"),
-        ("randevu", "randevu alınan"),
-        ("toplanti", "gerçekleşen toplantı"),
-        ("crm", "CRM kayıt"),
+        ("lead", "gelen lead", "—"),
+        ("arama", "arama", "ölçülen"),
+        ("ulasilan", "ulaşılan görüşme", "—"),
+        ("randevu", "randevu alınan", "—"),
+        ("toplanti", "gerçekleşen toplantı", "ölçülen"),
+        ("crm_miss", "CRM ulaşılamayan", "varsayım"),
+        ("crm_hit", "CRM ulaşılan", "varsayım"),
+        ("olu", "ölü zaman", "varsayım"),
     ]
     rows: list[dict[str, Any]] = []
-    for key, label in labels:
+    for key, label, kaynak in labels:
         p = plan[key]
         g = actual[key]
         rows.append(
             {
                 "iş": label,
                 "planlanan": round(p, 1),
-                "plan dk": round(plan_dk[key], 1),
+                "plan dk": round(plan_dk.get(key) or 0.0, 1),
                 "gerçekleşen": round(g, 1),
-                "gerçek dk": round(gercek_dk[key], 1),
+                "gerçek dk": round(gercek_dk.get(key) or 0.0, 1),
+                "süre kaynağı": kaynak,
                 "plan gerçekleşme": _ratio(g, p),
             }
         )
-    plan_dk_sum = sum(plan_dk.values())
-    gercek_dk_sum = sum(gercek_dk.values())
-    n_wd, n_sat = _workday_split()
-    avail_dk = (n_wd * GUN_SAAT + n_sat * SAT_SAAT) * 60.0
-    total_gercek_dk = gercek_dk_sum * float(days)
+    plan_dk_sum = sum(plan_dk.get(k) or 0.0 for k, _lab, _src in labels)
+    gercek_dk_sum = sum(gercek_dk.get(k) or 0.0 for k, _lab, _src in labels)
     return {
         "rows": rows,
         "plan_saat": round(plan_dk_sum / 60.0, 2),
         "gercek_saat": round(gercek_dk_sum / 60.0, 2),
-        "doluluk": _ratio(total_gercek_dk, avail_dk),
-        "toplam_oran": _ratio(gercek_dk_sum, plan_dk_sum),
+        "doluluk": occ["doluluk"],
+        "doluluk_raw": occ["doluluk_raw"],
+        "toplam_oran": _ratio(occ["pay_dk"], plan_dk_sum * occ_scale),
         "miss_sn": miss_sn,
         "hit_sn": hit_sn,
-        "workdays": n_wd + n_sat,
+        "workdays": occ["n_wd"] + occ["n_sat"],
         "n_reps": n_reps,
+        "n_wd": occ["n_wd"],
+        "n_sat": occ["n_sat"],
+        "pay_dk": occ["pay_dk"],
+        "payda_dk": occ["payda_dk"],
+        "call_dk": occ["call_dk"],
+        "meet_dk": occ["meet_dk"],
+        "ulasilan_dk": 0.0,
+        "meet_duration_key": MEET_DURATION_KEY,
     }
 
 

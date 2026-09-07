@@ -290,6 +290,12 @@ def main() -> int:
     blob = _all_text(at_rep)
     if "ekip " not in blob:
         errors.append("temsilcide ekip ortalamasi yok")
+    if "gün doluluk oranı" not in blob:
+        errors.append("temsilcide gun doluluk orani yok")
+    if "ekip ortalaması" not in blob:
+        errors.append("temsilcide ekip doluluk kiyasi yok")
+    if "ekip doluluk oranı" in blob:
+        errors.append("temsilcide ekip doluluk basligi var")
     others = [
         row["full_name"]
         for row in roster
@@ -314,6 +320,15 @@ def main() -> int:
     print(_dump(at_admin, "yonetici girisi (tumu)"))
     print(f"yonetici AppTest: {admin_s:.2f}s")
     errors.extend(_assert_common(at_admin, admin=True))
+    admin_blob = _all_text(at_admin)
+    if "ekip doluluk oranı" not in admin_blob:
+        errors.append("yoneticide ekip doluluk orani yok")
+    if "mesai hafta içi 8 saat" not in admin_blob:
+        errors.append("yoneticide mesai 8 saat yazisi yok")
+    if "CRM ulaşılamayan" not in admin_blob:
+        errors.append("yoneticide CRM ulasilamayan satiri yok")
+    if "ölçülen" not in admin_blob or "varsayım" not in admin_blob:
+        errors.append("yoneticide olculen/varsayim ayrimi yok")
     help_blob = " ".join(_help_of(c) for c in at_admin.caption)
     help_blob += " ".join(_help_of(s) for s in at_admin.subheader)
     if "1 Mayıs 2026" not in help_blob and "1 Mayis 2026" not in help_blob:
