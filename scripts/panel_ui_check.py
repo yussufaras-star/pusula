@@ -373,8 +373,8 @@ def main() -> int:
     if "Mart 2026" in admin_blob:
         errors.append("aylik tabloda nisan oncesi ay duruyor")
     admin_donem = [s for s in at_admin.selectbox if str(s.label) == "Dönem"]
-    if not admin_donem:
-        errors.append("yoneticide Donem secici yok")
+    if len(admin_donem) != 1:
+        errors.append(f"yoneticide Donem adet={len(admin_donem)} (beklenen 1)")
     else:
         opts = [str(o) for o in admin_donem[0].options]
         needed = [

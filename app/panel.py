@@ -690,28 +690,36 @@ def _as_date(value: Any) -> date:
     raise TypeError("tarih bekleniyor")
 
 
-def _ciro_period_controls(key_prefix: str) -> tuple[str, DateWindow]:
-    """Ciro dönem seçici. Varsayılan: bu ay."""
+def _ciro_period_controls(*, show_picker: bool = True) -> tuple[str, DateWindow]:
+    """Ciro dönem seçici. Varsayılan: bu ay. Tek widget, tek session key."""
     today = datetime.now(_TZ).date()
     labels = [label for _key, label in CIRO_PERIODS]
     keys = [key for key, _label in CIRO_PERIODS]
-    choice = st.selectbox(
-        "Dönem",
-        labels,
-        index=0,
-        key=f"{key_prefix}_ciro_donem",
-    )
+    if show_picker:
+        choice = st.selectbox(
+            "Dönem",
+            labels,
+            index=0,
+            key="ciro_donem",
+        )
+    else:
+        choice = st.session_state.get("ciro_donem", labels[0])
     period = keys[labels.index(str(choice))]
     custom_start: date | None = None
     custom_end: date | None = None
     if period == "ozel":
-        raw = st.date_input(
-            "Aralık",
-            value=(month_first(today), today),
-            min_value=REAL_SALES_START,
-            max_value=today,
-            key=f"{key_prefix}_ciro_aralik",
-        )
+        if show_picker:
+            raw = st.date_input(
+                "Aralık",
+                value=(month_first(today), today),
+                min_value=REAL_SALES_START,
+                max_value=today,
+                key="ciro_aralik",
+            )
+        else:
+            raw = st.session_state.get(
+                "ciro_aralik", (month_first(today), today)
+            )
         if isinstance(raw, (tuple, list)) and len(raw) == 2:
             custom_start = _as_date(raw[0])
             custom_end = _as_date(raw[1])
@@ -1395,7 +1403,7 @@ def _render_ciro_pace() -> None:
 
 def _render_ciro_yonetici(rep_id: str | None) -> None:
     st.subheader("Ciro", help=HELP_CIRO)
-    period, window = _ciro_period_controls("yon")
+    period, window = _ciro_period_controls(show_picker=True)
     st.caption(fmt_window(window))
     start, end = _keys(window)
     sales_id = rep_id if rep_id in SALES_TEAM_IDS else None
@@ -1453,9 +1461,9 @@ def _render_ciro_yonetici(rep_id: str | None) -> None:
     _deal_caption()
 
 
-def _render_ciro_temsilci(rep_id: str) -> None:
+def _render_ciro_temsilci(rep_id: str, *, show_period: bool = True) -> None:
     st.subheader("Ciro", help=HELP_CIRO)
-    period, window = _ciro_period_controls("tem")
+    period, window = _ciro_period_controls(show_picker=show_period)
     st.caption(fmt_window(window))
     start, end = _keys(window)
     ytd = [
@@ -1987,7 +1995,7 @@ def render_temsilci(
     _show_reach_break(_reach_break(start, end, rep_id, False), named=False)
 
     st.divider()
-    _render_ciro_temsilci(rep_id)
+    _render_ciro_temsilci(rep_id, show_period=locked_rep_id is not None)
     st.divider()
 
     _heading("Haftalık gelişim", window=window)
