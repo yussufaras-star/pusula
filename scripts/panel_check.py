@@ -946,6 +946,8 @@ def main() -> int:
     print("  probe (UTC, tum owner) ayni aylar:")
     for row in probe:
         ay = row.get("ay")
+        if isinstance(ay, datetime):
+            ay = ay.date()
         if not isinstance(ay, date):
             continue
         label = f"{_month_tr[ay.month - 1]} {ay.year}"

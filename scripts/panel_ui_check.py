@@ -395,14 +395,13 @@ def main() -> int:
         errors.append("izdusum (?) balonunda yontem yok")
     if "Beş aylık veriyle hesaplanır" not in iz_help and "Bes aylik" not in iz_help:
         errors.append("izdusum (?) balonunda bes ay yok")
-    donem_widget = next(
-        (s for s in at_admin.selectbox if str(s.label) == "Dönem"),
-        None,
-    )
-    if donem_widget is not None:
-        opts = [str(o) for o in donem_widget.options]
+    donem_widgets = [s for s in at_admin.selectbox if str(s.label) == "Dönem"]
+    if donem_widgets:
+        opts = [str(o) for o in donem_widgets[0].options]
         if "Tüm zamanlar" in opts:
-            donem_widget.select_index(opts.index("Tüm zamanlar"))
+            tum_i = opts.index("Tüm zamanlar")
+            for box in donem_widgets:
+                box.select_index(tum_i)
             at_admin.run()
             all_blob = _all_text(at_admin)
             print(_dump(at_admin, "yonetici tum zamanlar"))
@@ -412,13 +411,9 @@ def main() -> int:
                 errors.append("tum zamanlarda nisan oncesi ay var")
             if "Ay içi izdüşüm" in all_blob:
                 errors.append("tum zamanlarda izdusum gorunuyor")
-            donem2 = next(
-                (s for s in at_admin.selectbox if str(s.label) == "Dönem"),
-                None,
-            )
-            if donem2 is not None:
-                donem2.select_index(0)
-                at_admin.run()
+            for box in [s for s in at_admin.selectbox if str(s.label) == "Dönem"]:
+                box.select_index(0)
+            at_admin.run()
     help_blob = " ".join(_help_of(c) for c in at_admin.caption)
     help_blob += " ".join(_help_of(s) for s in at_admin.subheader)
     if "1 Mayıs 2026" not in help_blob and "1 Mayis 2026" not in help_blob:
