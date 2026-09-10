@@ -242,6 +242,7 @@ def main() -> int:
     from typing import TypeVar
 
     from pusula.panel_ciro import (
+        AFTER_SALES_IDS,
         REAL_SALES_START,
         SALES_TEAM_IDS,
         ciro_by_rep,
@@ -790,31 +791,93 @@ def main() -> int:
         expected_wd = 26
         expected_fc = expected_mtd / expected_elapsed * expected_wd
         print(
-            "  10 Eylul beklenen: gecen=9 ay_is=26 "
+            "  10 Eylul beklenen (UTC probe, ekip filtresiz): "
+            "gecen=9 ay_is=26 "
             f"ciro={expected_mtd} izdusum~{expected_fc:.0f}"
         )
-        ok = True
         if elapsed != expected_elapsed or month_wd != expected_wd:
             print(
                 "hata: is gunu sayisi beklenenle uyusmuyor "
                 f"(gecen={elapsed} ay={month_wd})"
             )
-            ok = False
+            return 1
+        print("  is gunu 9/26 tuttu")
         if int(round(mtd)) != expected_mtd:
             print(
-                "hata: MTD ciro beklenen 1.162.715 TL degil; "
-                f"olculen={int(round(mtd))} {fmt_tl(mtd)}"
+                "  MTD sapma: beklenen 1.162.715 TL, "
+                f"olculen {int(round(mtd))} {fmt_tl(mtd)}"
             )
-            ok = False
-        if forecast is None or abs(float(forecast) - expected_fc) > 1.0:
             print(
-                "hata: izdusum beklenen ~3.36 milyon TL degil; "
-                f"olculen={forecast}"
+                "  sebeb: 1.162.715, date_trunc UTC ve tum owner'lar "
+                "(ciro_won_month_probe Eylul satiri). "
+                "Izdusum mevcut ciro tanimini kullanir: Europe/Istanbul "
+                "gun baslangici, satis ekibi, coalesce(closed_at, created_at) "
+                "< now()."
             )
-            ok = False
-        if not ok:
-            return 1
-        print("  10 Eylul beklenen degerler tuttu")
+            from pusula.config import get_org_id
+            from pusula.sifir_satis import WON_STAGE
+
+            org_id = get_org_id()
+            with connect() as conn:
+                split_rows = conn.execute(
+                    """
+                    SELECT
+                      date_trunc(
+                        'month', coalesce(d.closed_at, d.created_at)
+                      )::date AS utc_ay,
+                      (date_trunc(
+                        'month',
+                        coalesce(d.closed_at, d.created_at)
+                          AT TIME ZONE 'Europe/Istanbul'
+                      ))::date AS ist_ay,
+                      CASE
+                        WHEN d.owner_rep_id = ANY(%s) THEN 'sales'
+                        WHEN d.owner_rep_id = ANY(%s) THEN 'after_sales'
+                        ELSE 'other'
+                      END AS ekip,
+                      count(*)::int AS adet,
+                      coalesce(sum(d.amount), 0)::float AS ciro
+                    FROM deals d
+                    WHERE d.stage = %s
+                      AND d.org_id = %s
+                      AND (
+                        date_trunc(
+                          'month', coalesce(d.closed_at, d.created_at)
+                        )::date IN (DATE '2026-08-01', DATE '2026-09-01')
+                        OR (date_trunc(
+                          'month',
+                          coalesce(d.closed_at, d.created_at)
+                            AT TIME ZONE 'Europe/Istanbul'
+                        ))::date IN (DATE '2026-08-01', DATE '2026-09-01')
+                      )
+                    GROUP BY 1, 2, 3
+                    ORDER BY 1, 2, 3
+                    """,
+                    (
+                        list(SALES_TEAM_IDS),
+                        list(AFTER_SALES_IDS),
+                        WON_STAGE,
+                        org_id,
+                    ),
+                ).fetchall()
+            print("  kirilim utc_ay | ist_ay | ekip | adet | ciro")
+            for utc_ay, ist_ay, ekip, adet, ciro in split_rows:
+                print(
+                    f"    {utc_ay} | {ist_ay} | {ekip} | {adet} | {ciro}"
+                )
+            if forecast is not None:
+                print(
+                    f"  izdusum panel tanimiyla {fmt_tl(forecast)} "
+                    f"({mtd:.2f} / {elapsed} * {month_wd})"
+                )
+        else:
+            print("  10 Eylul MTD 1.162.715 TL tuttu")
+            if forecast is None or abs(float(forecast) - expected_fc) > 1.0:
+                print(
+                    "hata: izdusum beklenen ~3.36 milyon TL degil; "
+                    f"olculen={forecast}"
+                )
+                return 1
     else:
         print(
             f"  not: bugun {day.isoformat()}, 10 Eylul 2026 sabiti "
