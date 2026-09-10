@@ -33,18 +33,25 @@ from pusula.panel_auth import (
     resolve_user,
 )
 from pusula.panel_ciro import (
-    CIRO_START,
+    CIRO_PERIODS,
+    REAL_SALES_START,
     SALES_TEAM_IDS,
     closed_at_bos_ratio,
+    ciro_by_rep,
+    ciro_complete_months_avg,
+    ciro_month_forecast,
     ciro_monthly_by_rep,
     ciro_rep_monthly,
+    ciro_same_pace_compare,
     ciro_team_monthly,
     ciro_team_year_compare,
     ciro_won_month_probe,
-    ciro_ytd_by_rep,
     fmt_tl,
     has_prior_year_same_month,
     latest_deal_created_at,
+    month_first,
+    resolve_ciro_period,
+    with_monthly_team_totals,
 )
 from pusula.panel_data import (
     CRM_DK_PER_GORUSME,
@@ -224,6 +231,17 @@ HELP_CIRO = (
     "yapilmaz, hepsi sayilir."
 )
 HELP_CIRO_ORT = "Toplam ciro / satis adedi."
+HELP_IZDUSUM = (
+    "Gün başına ciro × ayın iş günü sayısı. "
+    "Gün başına ciro = ay başından bugüne ciro / geçen iş günü. "
+    "İş günü: pazar hariç her gün (cumartesi iş günüdür). "
+    "Mevsimsellik hesaba katılmaz. Beş aylık veriyle hesaplanır."
+)
+HELP_AYNI_GUN = (
+    "Bu ayın ilk N iş günündeki ciro ile önceki üç ayın "
+    "ilk N iş günündeki ciro. N = bu ayda geçen iş günü. "
+    "Geçen yıl aynı ay kıyası yok; 2025 verisi yok."
+)
 
 COL_HELP: dict[str, str] = {
     "arama": HELP_ARAMA,
@@ -280,6 +298,7 @@ COL_HELP: dict[str, str] = {
     "ciro": HELP_CIRO,
     "satış başına ortalama": HELP_CIRO_ORT,
     "ortalama tutar": HELP_CIRO_ORT,
+    "ay içi izdüşüm": HELP_IZDUSUM,
 }
 
 CHART_HELP: dict[str, str] = {
@@ -521,23 +540,47 @@ def _latest_deal() -> datetime | None:
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _ciro_ytd(kind: str) -> list[dict[str, Any]]:
-    return ciro_ytd_by_rep(kind)  # type: ignore[arg-type]
+def _ciro_period_rows(kind: str, start: str, end: str) -> list[dict[str, Any]]:
+    return ciro_by_rep(kind, date.fromisoformat(start), date.fromisoformat(end))  # type: ignore[arg-type]
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _ciro_monthly(kind: str, rep_id: str | None) -> list[dict[str, Any]]:
-    return ciro_monthly_by_rep(kind, rep_id=rep_id)  # type: ignore[arg-type]
+def _ciro_monthly(
+    kind: str, rep_id: str | None, start: str, end: str
+) -> list[dict[str, Any]]:
+    return ciro_monthly_by_rep(
+        kind,  # type: ignore[arg-type]
+        rep_id=rep_id,
+        start=date.fromisoformat(start),
+        end=date.fromisoformat(end),
+    )
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _ciro_team_months() -> list[dict[str, Any]]:
-    return ciro_team_monthly()
+def _ciro_team_months(start: str, end: str) -> list[dict[str, Any]]:
+    return ciro_team_monthly(date.fromisoformat(start), date.fromisoformat(end))
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _ciro_one(rep_id: str) -> list[dict[str, Any]]:
-    return ciro_rep_monthly(rep_id)
+def _ciro_one(rep_id: str, start: str, end: str) -> list[dict[str, Any]]:
+    return ciro_rep_monthly(
+        rep_id, date.fromisoformat(start), date.fromisoformat(end)
+    )
+
+
+@st.cache_data(ttl=CACHE_TTL)
+def _ciro_forecast() -> dict[str, Any] | None:
+    return ciro_month_forecast()
+
+
+@st.cache_data(ttl=CACHE_TTL)
+def _ciro_avg3() -> dict[str, Any]:
+    return ciro_complete_months_avg(3)
+
+
+@st.cache_data(ttl=CACHE_TTL)
+def _ciro_pace() -> dict[str, Any]:
+    return ciro_same_pace_compare()
 
 
 @st.cache_data(ttl=CACHE_TTL)
@@ -647,9 +690,41 @@ def _as_date(value: Any) -> date:
     raise TypeError("tarih bekleniyor")
 
 
-def _ciro_window() -> DateWindow:
+def _ciro_period_controls(key_prefix: str) -> tuple[str, DateWindow]:
+    """Ciro dönem seçici. Varsayılan: bu ay."""
     today = datetime.now(_TZ).date()
-    return DateWindow(CIRO_START.date(), today)
+    labels = [label for _key, label in CIRO_PERIODS]
+    keys = [key for key, _label in CIRO_PERIODS]
+    choice = st.selectbox(
+        "Dönem",
+        labels,
+        index=0,
+        key=f"{key_prefix}_ciro_donem",
+    )
+    period = keys[labels.index(str(choice))]
+    custom_start: date | None = None
+    custom_end: date | None = None
+    if period == "ozel":
+        raw = st.date_input(
+            "Aralık",
+            value=(month_first(today), today),
+            min_value=REAL_SALES_START,
+            max_value=today,
+            key=f"{key_prefix}_ciro_aralik",
+        )
+        if isinstance(raw, (tuple, list)) and len(raw) == 2:
+            custom_start = _as_date(raw[0])
+            custom_end = _as_date(raw[1])
+        elif isinstance(raw, date):
+            custom_start = raw
+            custom_end = today
+        else:
+            custom_start = month_first(today)
+            custom_end = today
+    start, end = resolve_ciro_period(
+        period, today, custom_start, custom_end
+    )
+    return period, DateWindow(start, end)
 
 
 def _render_block_day() -> date:
@@ -1268,19 +1343,76 @@ def _render_ciro_yoy() -> None:
         )
 
 
+def _render_ciro_pace() -> None:
+    """İzdüşüm ve aynı güne kadar kıyas. Yalnız ekip toplamı."""
+    fc = _ciro_forecast()
+    avg = _ciro_avg3()
+    pace = _ciro_pace()
+    left, right = st.columns(2)
+    with left:
+        shown = fmt_tl(fc.get("forecast")) if fc else "veri yetersiz"
+        st.metric("Ay içi izdüşüm", shown, help=HELP_IZDUSUM)
+        if fc:
+            st.caption(
+                f"geçen iş günü {fc['elapsed_workdays']} / "
+                f"ay iş günü {fc['month_workdays']}. "
+                f"ay başından bugüne {fmt_tl(fc['mtd_ciro'])}."
+            )
+    with right:
+        mean = avg.get("ortalama")
+        st.metric(
+            "Son 3 tam ay ortalaması",
+            fmt_tl(mean) if mean is not None else "veri yetersiz",
+        )
+        months = avg.get("aylar") or []
+        if months:
+            st.caption(
+                ", ".join(
+                    f"{row['ay_etiket']} {fmt_tl(row['ciro'])}" for row in months
+                )
+            )
+    n_wd = int(pace.get("n") or 0)
+    st.markdown(f"Aynı güne kadar (ilk {n_wd} iş günü)", help=HELP_AYNI_GUN)
+    rows: list[dict[str, Any]] = []
+    current = pace.get("bu_ay")
+    if isinstance(current, dict):
+        rows.append(current)
+    rows.extend(pace.get("onceki") or [])
+    if not rows:
+        st.caption("veri yetersiz")
+        return
+    show = pd.DataFrame(
+        {
+            "dönem": [r["ay_etiket"] for r in rows],
+            "aralık": [
+                fmt_window(DateWindow(r["start"], r["end"])) for r in rows
+            ],
+            "ciro": [fmt_tl(r["ciro"]) for r in rows],
+        }
+    )
+    _table(show)
+
+
 def _render_ciro_yonetici(rep_id: str | None) -> None:
-    _heading("Ciro", HELP_CIRO, _ciro_window())
-    st.markdown("2026 başından bugüne")
+    st.subheader("Ciro", help=HELP_CIRO)
+    period, window = _ciro_period_controls("yon")
+    st.caption(fmt_window(window))
+    start, end = _keys(window)
     sales_id = rep_id if rep_id in SALES_TEAM_IDS else None
-    ytd = _ciro_ytd("sales")
+    ytd = _ciro_period_rows("sales", start, end)
     if sales_id:
         ytd = [r for r in ytd if r["rep_id"] == sales_id]
     _ciro_ytd_table(ytd)
-    monthly = _ciro_monthly("sales", sales_id)
-    st.markdown("Aylık", help=HELP_CIRO_ORT)
+    monthly = _ciro_monthly("sales", sales_id, start, end)
+    if sales_id is None:
+        monthly = with_monthly_team_totals(monthly)
+    st.markdown(f"Aylık — {fmt_window(window)}", help=HELP_CIRO_ORT)
     _ciro_month_table(monthly, named=sales_id is None)
 
-    team_m = _ciro_team_months()
+    if period == "bu_ay":
+        _render_ciro_pace()
+
+    team_m = _ciro_team_months(start, end)
     team_df = _df(team_m)
     if not team_df.empty:
         t = team_df[["ay", "ciro"]].copy()
@@ -1289,7 +1421,7 @@ def _render_ciro_yonetici(rep_id: str | None) -> None:
         _line_chart(t, "ciro", "ciro", x_col="ay", x_title="ay")
 
     if sales_id:
-        one = _ciro_one(sales_id)
+        one = _ciro_one(sales_id, start, end)
         parts: list[pd.DataFrame] = []
         if one:
             r = _df(one)[["ay", "ciro"]].copy()
@@ -1312,18 +1444,31 @@ def _render_ciro_yonetici(rep_id: str | None) -> None:
 
     _render_ciro_yoy()
     st.markdown("Satış sonrası ekip", help=HELP_CIRO)
-    _ciro_ytd_table(_ciro_ytd("after_sales"))
-    _ciro_month_table(_ciro_monthly("after_sales", None), named=True)
+    after = _ciro_period_rows("after_sales", start, end)
+    _ciro_ytd_table(after)
+    after_m = with_monthly_team_totals(
+        _ciro_monthly("after_sales", None, start, end)
+    )
+    _ciro_month_table(after_m, named=True)
     _deal_caption()
 
 
 def _render_ciro_temsilci(rep_id: str) -> None:
-    _heading("Ciro", HELP_CIRO, _ciro_window())
-    ytd = [r for r in _ciro_ytd("sales") if r["rep_id"] == rep_id]
+    st.subheader("Ciro", help=HELP_CIRO)
+    period, window = _ciro_period_controls("tem")
+    st.caption(fmt_window(window))
+    start, end = _keys(window)
+    ytd = [
+        r
+        for r in _ciro_period_rows("sales", start, end)
+        if r["rep_id"] == rep_id
+    ]
     _ciro_ytd_table(ytd)
-    monthly = _ciro_one(rep_id)
-    st.markdown("Aylık", help=HELP_CIRO_ORT)
+    monthly = _ciro_one(rep_id, start, end)
+    st.markdown(f"Aylık — {fmt_window(window)}", help=HELP_CIRO_ORT)
     _ciro_month_table(monthly, named=False)
+    if period == "bu_ay":
+        _render_ciro_pace()
     if monthly:
         frame = _df(monthly)[["ay", "ciro"]].copy()
         frame["seri"] = "kendisi"

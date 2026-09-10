@@ -242,11 +242,22 @@ def main() -> int:
     from typing import TypeVar
 
     from pusula.panel_ciro import (
+        REAL_SALES_START,
         SALES_TEAM_IDS,
+        ciro_by_rep,
+        ciro_complete_months_avg,
+        ciro_month_forecast,
         ciro_monthly_by_rep,
         ciro_rep_monthly,
+        ciro_same_pace_compare,
         ciro_team_monthly,
         ciro_ytd_by_rep,
+        fmt_tl,
+        month_first,
+        resolve_ciro_period,
+        with_monthly_team_totals,
+        workdays_in_month,
+        workdays_inclusive,
     )
     from pusula.panel_data import (
         connect,
@@ -334,9 +345,22 @@ def main() -> int:
     _timed("path_take_rate", lambda: path_take_rate(window))
     _timed("funnel named", lambda: funnel(None, named=True, window=window))
     _timed("funnel unnamed", lambda: funnel(None, named=False, window=window))
+    bu_start, bu_end = resolve_ciro_period("bu_ay", day)
     _timed("ciro_ytd sales", lambda: ciro_ytd_by_rep("sales"))
+    _timed("ciro_by_rep bu ay", lambda: ciro_by_rep("sales", bu_start, bu_end))
     _timed("ciro_monthly sales", lambda: ciro_monthly_by_rep("sales"))
+    _timed(
+        "ciro_monthly bu ay",
+        lambda: ciro_monthly_by_rep("sales", start=bu_start, end=bu_end),
+    )
     _timed("ciro_team_monthly", lambda: ciro_team_monthly())
+    _timed(
+        "ciro_team_monthly bu ay",
+        lambda: ciro_team_monthly(bu_start, bu_end),
+    )
+    _timed("ciro_forecast", lambda: ciro_month_forecast(day))
+    _timed("ciro_avg3", lambda: ciro_complete_months_avg(3, day))
+    _timed("ciro_pace", lambda: ciro_same_pace_compare(day))
     _timed("ciro_ytd after_sales", lambda: ciro_ytd_by_rep("after_sales"))
     _timed(
         "ciro_monthly after_sales",
@@ -355,7 +379,9 @@ def main() -> int:
         "rep_snapshot",
         "weekly_series temsilci",
         "ciro_ytd sales",
+        "ciro_by_rep bu ay",
         "ciro_rep_monthly",
+        "ciro_forecast",
     )
     yon_keys = (
         "today_hours ekip",
@@ -371,8 +397,14 @@ def main() -> int:
         "funnel named",
         "funnel unnamed",
         "ciro_ytd sales",
+        "ciro_by_rep bu ay",
         "ciro_monthly sales",
+        "ciro_monthly bu ay",
         "ciro_team_monthly",
+        "ciro_team_monthly bu ay",
+        "ciro_forecast",
+        "ciro_avg3",
+        "ciro_pace",
         "ciro_ytd after_sales",
         "ciro_monthly after_sales",
         "weekly_team_series",
@@ -717,6 +749,155 @@ def main() -> int:
         break
     if not found_sparse:
         print("  bugun ve son 14 gunde payda<5 saat yok")
+
+    print("ciro donem dogrulama:")
+    print(f"  bugun={day.isoformat()}")
+    print(f"  REAL_SALES_START={REAL_SALES_START.isoformat()}")
+    elapsed = workdays_inclusive(month_first(day), day)
+    month_wd = workdays_in_month(day.year, day.month)
+    print(f"  gecen is gunu={elapsed}")
+    print(f"  ay is gunu={month_wd}")
+    fc = ciro_month_forecast(day)
+    if fc is None:
+        print("hata: izdusum hesaplanamadi")
+        return 1
+    mtd = float(fc["mtd_ciro"])
+    daily = fc["daily_ciro"]
+    forecast = fc["forecast"]
+    print("  elle hesap:")
+    print(f"    ay basindan bugune ciro={mtd:.2f} ({fmt_tl(mtd)})")
+    print(f"    gecen is gunu={fc['elapsed_workdays']}")
+    print(
+        f"    gun basina="
+        f"{(daily if daily is not None else None)}"
+    )
+    print(f"    toplam is gunu={fc['month_workdays']}")
+    print(
+        f"    izdusum="
+        f"{(forecast if forecast is not None else None)} "
+        f"({fmt_tl(forecast)})"
+    )
+    if daily is not None and forecast is not None:
+        recon = daily * float(fc["month_workdays"])
+        print(f"    yeniden={mtd} / {elapsed} * {month_wd} = {recon}")
+        if abs(recon - float(forecast)) > 0.5:
+            print("hata: izdusum yeniden hesapla uyusmuyor")
+            return 1
+    expected_day = date(2026, 9, 10)
+    if day == expected_day:
+        expected_mtd = 1_162_715
+        expected_elapsed = 9
+        expected_wd = 26
+        expected_fc = expected_mtd / expected_elapsed * expected_wd
+        print(
+            "  10 Eylul beklenen: gecen=9 ay_is=26 "
+            f"ciro={expected_mtd} izdusum~{expected_fc:.0f}"
+        )
+        ok = True
+        if elapsed != expected_elapsed or month_wd != expected_wd:
+            print(
+                "hata: is gunu sayisi beklenenle uyusmuyor "
+                f"(gecen={elapsed} ay={month_wd})"
+            )
+            ok = False
+        if int(round(mtd)) != expected_mtd:
+            print(
+                "hata: MTD ciro beklenen 1.162.715 TL degil; "
+                f"olculen={int(round(mtd))} {fmt_tl(mtd)}"
+            )
+            ok = False
+        if forecast is None or abs(float(forecast) - expected_fc) > 1.0:
+            print(
+                "hata: izdusum beklenen ~3.36 milyon TL degil; "
+                f"olculen={forecast}"
+            )
+            ok = False
+        if not ok:
+            return 1
+        print("  10 Eylul beklenen degerler tuttu")
+    else:
+        print(
+            f"  not: bugun {day.isoformat()}, 10 Eylul 2026 sabiti "
+            "karsilastirmasi atlandi"
+        )
+
+    all_start, all_end = resolve_ciro_period("tum_zamanlar", day)
+    monthly_all = ciro_monthly_by_rep(
+        "sales", start=all_start, end=all_end
+    )
+    print("  aylik tablo (tum zamanlar):")
+    seen_months: list[str] = []
+    for row in monthly_all:
+        ay = row.get("ay")
+        label = str(row.get("ay_etiket") or "")
+        if label not in seen_months:
+            seen_months.append(label)
+        if ay is None:
+            continue
+        ay_d = ay.date() if isinstance(ay, datetime) else ay
+        if isinstance(ay_d, date) and ay_d < REAL_SALES_START:
+            print(f"hata: nisan oncesi ay tabloda {label} {ay_d}")
+            return 1
+    print(f"    aylar={seen_months}")
+    if any("2025" in m for m in seen_months):
+        print("hata: 2025 ayi tabloda")
+        return 1
+    if any(m.startswith("Ocak ") or m.startswith("Şubat ") or m.startswith("Mart ") for m in seen_months):
+        print(f"hata: nisan oncesi etiket {seen_months}")
+        return 1
+    totals = with_monthly_team_totals(monthly_all)
+    n_tot = sum(1 for r in totals if r.get("temsilci") == "Ekip toplamı")
+    print(f"    ekip toplami satir={n_tot} ay_sayisi={len(seen_months)}")
+    if seen_months and n_tot != len(seen_months):
+        print("hata: ekip toplami satiri ay sayisiyla uyusmuyor")
+        return 1
+
+    avg = ciro_complete_months_avg(3, day)
+    print("  son 3 tam ay:")
+    for row in avg.get("aylar") or []:
+        print(
+            f"    {row['ay_etiket']} ciro={row['ciro']:.2f} "
+            f"({fmt_tl(row['ciro'])}) satis={row['satis']}"
+        )
+    print(f"    ortalama={avg.get('ortalama')} ({fmt_tl(avg.get('ortalama'))})")
+    expected_m = {
+        "Haziran 2026": 2.56,
+        "Temmuz 2026": 2.09,
+        "Ağustos 2026": 2.18,
+    }
+    got_m = {
+        str(r["ay_etiket"]): round(float(r["ciro"]) / 1_000_000.0, 2)
+        for r in (avg.get("aylar") or [])
+    }
+    print(f"    milyon yuvarlak={got_m}")
+    if day.year == 2026 and day.month >= 9:
+        if list(got_m.keys()) != list(expected_m.keys()):
+            print(
+                "hata: son 3 tam ay etiketleri beklenen Haziran-Temmuz-Agustos degil"
+            )
+            return 1
+        for label, exp in expected_m.items():
+            got = got_m.get(label)
+            if got != exp:
+                print(
+                    f"hata: {label} beklenen {exp}M, olculen {got}M "
+                    f"({fmt_tl(next(r['ciro'] for r in avg['aylar'] if r['ay_etiket']==label))})"
+                )
+                return 1
+        print("  son 3 tam ay milyon yuvarlak tuttu")
+
+    pace = ciro_same_pace_compare(day)
+    print(f"  ayni gune kadar N={pace.get('n')}")
+    bu = pace.get("bu_ay") or {}
+    print(
+        f"    bu ay {bu.get('ay_etiket')} "
+        f"{bu.get('start')}..{bu.get('end')} {fmt_tl(bu.get('ciro'))}"
+    )
+    for row in pace.get("onceki") or []:
+        print(
+            f"    {row['ay_etiket']} {row['start']}..{row['end']} "
+            f"{fmt_tl(row['ciro'])}"
+        )
 
     print("panel_check: ok")
     return 0

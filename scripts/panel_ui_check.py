@@ -153,18 +153,29 @@ def _dump(at: Any, title: str) -> str:
     if len(at.caption) > 80:
         lines.append(f"  ... +{len(at.caption) - 80} caption")
     lines.append("markdown:")
-    for md in at.markdown[:40]:
+    for md in at.markdown[:80]:
         lines.append(f"  {md.value}")
-    if len(at.markdown) > 40:
-        lines.append(f"  ... +{len(at.markdown) - 40} markdown")
+    if len(at.markdown) > 80:
+        lines.append(f"  ... +{len(at.markdown) - 80} markdown")
     lines.append("dataframes:")
-    for i, frame in enumerate(at.dataframe[:6]):
+    for i, frame in enumerate(at.dataframe[:12]):
         try:
             value = frame.value
             lines.append(f"  df{i} cols={list(value.columns)} rows={len(value)}")
             lines.append(str(value)[:1200])
         except Exception as exc:
             lines.append(f"  df{i} hata={exc}")
+    lines.append("ciro dataframes:")
+    for i, frame in enumerate(at.dataframe):
+        try:
+            value = frame.value
+            cols = [str(c).lower() for c in value.columns]
+            blob = str(value)
+            if any("ciro" in c for c in cols) or "Ekip toplamı" in blob:
+                lines.append(f"  ciro_df{i} cols={list(value.columns)} rows={len(value)}")
+                lines.append(blob[:2000])
+        except Exception as exc:
+            lines.append(f"  ciro_df{i} hata={exc}")
     ekip_lines = [
         c.value for c in at.caption if "ekip " in str(c.value)
     ]
@@ -304,6 +315,8 @@ def main() -> int:
         errors.append("temsilcide ekip ortalamasi yok")
     if "gün doluluk oranı" not in blob:
         errors.append("temsilcide gun doluluk orani yok")
+    if "Ay içi izdüşüm" not in blob:
+        errors.append("temsilcide izdusum yok")
     if "ekip ortalaması" not in blob:
         errors.append("temsilcide ekip doluluk kiyasi yok")
     if "ekip doluluk oranı" in blob:
@@ -316,8 +329,14 @@ def main() -> int:
     leaked = [name for name in others if name and name in blob]
     if leaked:
         errors.append(f"baska temsilci adi: {leaked}")
-    if at_rep.selectbox:
-        errors.append("temsilcide selectbox var")
+    donem_boxes = [s for s in at_rep.selectbox if str(s.label) == "Dönem"]
+    other_boxes = [s.label for s in at_rep.selectbox if str(s.label) != "Dönem"]
+    if other_boxes:
+        errors.append(f"temsilcide selectbox var: {other_boxes}")
+    if not donem_boxes:
+        errors.append("temsilcide Donem secici yok")
+    elif str(donem_boxes[0].value) != "Bu ay":
+        errors.append(f"temsilci varsayilan donem {donem_boxes[0].value}")
 
     t0 = time.perf_counter()
     at_admin = _run_app(
@@ -341,6 +360,65 @@ def main() -> int:
         errors.append("yoneticide CRM ulasilamayan satiri yok")
     if "ölçülen" not in admin_blob or "varsayım" not in admin_blob:
         errors.append("yoneticide olculen/varsayim ayrimi yok")
+    if "2026 başından bugüne" in admin_blob:
+        errors.append("eski ytd basligi duruyor")
+    if "Ay içi izdüşüm" not in admin_blob:
+        errors.append("yoneticide izdusum yok")
+    if "Aynı güne kadar" not in admin_blob:
+        errors.append("yoneticide ayni gune kadar yok")
+    if "Ekip toplamı" not in admin_blob:
+        errors.append("yoneticide ekip toplami yok")
+    if "Ekim 2025" in admin_blob or "Kasım 2025" in admin_blob:
+        errors.append("aylik tabloda 2025 bos ay duruyor")
+    if "Mart 2026" in admin_blob:
+        errors.append("aylik tabloda nisan oncesi ay duruyor")
+    admin_donem = [s for s in at_admin.selectbox if str(s.label) == "Dönem"]
+    if not admin_donem:
+        errors.append("yoneticide Donem secici yok")
+    else:
+        opts = [str(o) for o in admin_donem[0].options]
+        needed = [
+            "Bu ay",
+            "Geçen ay",
+            "Son 3 ay",
+            "Son 6 ay",
+            "Tüm zamanlar",
+            "Özel aralık",
+        ]
+        missing = [n for n in needed if n not in opts]
+        if missing:
+            errors.append(f"donem secenek eksik: {missing}")
+        if str(admin_donem[0].value) != "Bu ay":
+            errors.append(f"yonetici varsayilan donem {admin_donem[0].value}")
+    iz_help = " ".join(_help_of(m) for m in getattr(at_admin, "metric", []))
+    if "Mevsimsellik hesaba katılmaz" not in iz_help:
+        errors.append("izdusum (?) balonunda yontem yok")
+    if "Beş aylık veriyle hesaplanır" not in iz_help and "Bes aylik" not in iz_help:
+        errors.append("izdusum (?) balonunda bes ay yok")
+    donem_widget = next(
+        (s for s in at_admin.selectbox if str(s.label) == "Dönem"),
+        None,
+    )
+    if donem_widget is not None:
+        opts = [str(o) for o in donem_widget.options]
+        if "Tüm zamanlar" in opts:
+            donem_widget.select_index(opts.index("Tüm zamanlar"))
+            at_admin.run()
+            all_blob = _all_text(at_admin)
+            print(_dump(at_admin, "yonetici tum zamanlar"))
+            if "Ekim 2025" in all_blob or "Kasım 2025" in all_blob:
+                errors.append("tum zamanlarda 2025 bos ay var")
+            if "Mart 2026" in all_blob:
+                errors.append("tum zamanlarda nisan oncesi ay var")
+            if "Ay içi izdüşüm" in all_blob:
+                errors.append("tum zamanlarda izdusum gorunuyor")
+            donem2 = next(
+                (s for s in at_admin.selectbox if str(s.label) == "Dönem"),
+                None,
+            )
+            if donem2 is not None:
+                donem2.select_index(0)
+                at_admin.run()
     help_blob = " ".join(_help_of(c) for c in at_admin.caption)
     help_blob += " ".join(_help_of(s) for s in at_admin.subheader)
     if "1 Mayıs 2026" not in help_blob and "1 Mayis 2026" not in help_blob:
@@ -504,6 +582,12 @@ def _shots(person: dict[str, str]) -> int:
             open_s = time.perf_counter() - t_open
             print(f"sayfa acilis (Ciro gorundu): {open_s:.2f}s")
             page.wait_for_timeout(3000)
+            ciro_head = page.get_by_text("Ciro", exact=True).first
+            ciro_head.scroll_into_view_if_needed()
+            page.wait_for_timeout(1000)
+            page.screenshot(
+                path=str(SHOT_DIR / "ciro-eylul.png"), full_page=True
+            )
             print(
                 "grup yontemi: pandas MultiIndex ust baslik "
                 "(arama / toplantı); ikon yok"
