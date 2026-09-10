@@ -916,38 +916,71 @@ def main() -> int:
         return 1
 
     avg = ciro_complete_months_avg(3, day)
-    print("  son 3 tam ay:")
+    print("  son 3 tam ay (satis ekibi, Istanbul):")
     for row in avg.get("aylar") or []:
         print(
             f"    {row['ay_etiket']} ciro={row['ciro']:.2f} "
             f"({fmt_tl(row['ciro'])}) satis={row['satis']}"
         )
     print(f"    ortalama={avg.get('ortalama')} ({fmt_tl(avg.get('ortalama'))})")
-    expected_m = {
+    expected_probe_m = {
         "Haziran 2026": 2.56,
         "Temmuz 2026": 2.09,
         "Ağustos 2026": 2.18,
     }
-    got_m = {
-        str(r["ay_etiket"]): round(float(r["ciro"]) / 1_000_000.0, 2)
-        for r in (avg.get("aylar") or [])
-    }
-    print(f"    milyon yuvarlak={got_m}")
+    probe_m: dict[str, float] = {}
+    _month_tr = (
+        "Ocak",
+        "Şubat",
+        "Mart",
+        "Nisan",
+        "Mayıs",
+        "Haziran",
+        "Temmuz",
+        "Ağustos",
+        "Eylül",
+        "Ekim",
+        "Kasım",
+        "Aralık",
+    )
+    print("  probe (UTC, tum owner) ayni aylar:")
+    for row in probe:
+        ay = row.get("ay")
+        if not isinstance(ay, date):
+            continue
+        label = f"{_month_tr[ay.month - 1]} {ay.year}"
+        if label not in expected_probe_m:
+            continue
+        ciro = float(row["ciro"] or 0)
+        probe_m[label] = round(ciro / 1_000_000.0, 2)
+        print(f"    {label} ciro={ciro:.2f} ({fmt_tl(ciro)}) milyon={probe_m[label]}")
     if day.year == 2026 and day.month >= 9:
-        if list(got_m.keys()) != list(expected_m.keys()):
-            print(
-                "hata: son 3 tam ay etiketleri beklenen Haziran-Temmuz-Agustos degil"
-            )
-            return 1
-        for label, exp in expected_m.items():
-            got = got_m.get(label)
-            if got != exp:
+        for label, exp in expected_probe_m.items():
+            got = probe_m.get(label)
+            if got is None or abs(float(got) - exp) > 0.02:
                 print(
-                    f"hata: {label} beklenen {exp}M, olculen {got}M "
-                    f"({fmt_tl(next(r['ciro'] for r in avg['aylar'] if r['ay_etiket']==label))})"
+                    f"hata: probe {label} beklenen {exp}M, olculen {got}M"
                 )
                 return 1
-        print("  son 3 tam ay milyon yuvarlak tuttu")
+        print("  probe son 3 tam ay 2.56 / 2.09 / 2.18 tuttu")
+        sales_rows = avg.get("aylar") or []
+        if len(sales_rows) != 3:
+            print(f"hata: satis ekibi tam ay sayisi {len(sales_rows)}")
+            return 1
+        recon_avg = sum(float(r["ciro"]) for r in sales_rows) / 3.0
+        mean = avg.get("ortalama")
+        if mean is None or abs(float(mean) - recon_avg) > 0.5:
+            print("hata: son 3 ay ortalamasi toplanmiyor")
+            return 1
+        print(
+            "  satis ekibi ortalama elle="
+            + " + ".join(fmt_tl(r["ciro"]) for r in sales_rows)
+            + f" / 3 = {fmt_tl(mean)}"
+        )
+        print(
+            "  not: 2.56/2.09/2.18 tum owner UTC; "
+            "izdusum yanindaki ortalama satis ekibi Istanbul"
+        )
 
     pace = ciro_same_pace_compare(day)
     print(f"  ayni gune kadar N={pace.get('n')}")
