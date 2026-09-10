@@ -10,9 +10,10 @@ Kullanım (scripts/ingest_sales_cycle.py üzerinden).
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from pusula.config import get_org_id
 from pusula.db import client
@@ -40,6 +41,9 @@ _DEAL_FIELDS = [
 # Nisan 2026 CRM taşıma penceresi (lead Zoho Created_Time).
 _MIGRATION_START = date(2026, 4, 1)
 _MIGRATION_END = date(2026, 5, 1)
+# Geriye dönük yazıda 2026 panel tarihli kayıt atlanır.
+_BACKFILL_CUTOFF = date(2026, 1, 1)
+_TZ = ZoneInfo("Europe/Istanbul")
 
 
 def sync_deals(*, since: datetime, dry_run: bool = False) -> dict[str, int]:
@@ -218,6 +222,248 @@ def sync_deals(*, since: datetime, dry_run: bool = False) -> dict[str, int]:
     return stats
 
 
+def backfill_deals(
+    *,
+    start: date,
+    until: date,
+    apply: bool = False,
+) -> dict[str, Any]:
+    """[start, until] Created_Time penceresi. apply yoksa yazmaz.
+
+    Mevcut satırlara dokunmaz (ON CONFLICT DO NOTHING). Panel tarihi
+    2026-01-01 ve sonrası olan kayıtlar yazılmaz.
+    """
+    stats: dict[str, Any] = {
+        "fetched": 0,
+        "in_window": 0,
+        "skipped_2026": 0,
+        "new": 0,
+        "already": 0,
+        "written": 0,
+        "amount_empty": 0,
+        "ownerless": 0,
+        "unmatched_count": 0,
+        "unmatched_names": [],
+        "monthly": [],
+        "errors": 0,
+        "applied": False,
+        "start": start.isoformat(),
+        "until": until.isoformat(),
+    }
+    if until < start:
+        stats["errors"] += 1
+        logger.error("backfill until < start")
+        return stats
+
+    start_ts = datetime.combine(start, time.min, tzinfo=_TZ)
+    end_ts = datetime.combine(
+        until + timedelta(days=1), time.min, tzinfo=_TZ
+    )
+    start_str = _format_zoho_dt(start_ts)
+    end_str = _format_zoho_dt(end_ts)
+    query = (
+        "select " + ", ".join(_DEAL_FIELDS) + " from Deals "
+        f"where Created_Time >= '{start_str}' "
+        f"and Created_Time < '{end_str}' "
+        "order by Created_Time asc"
+    )
+
+    records: list[dict[str, Any]] = []
+    try:
+        for record in coql(query):
+            stats["fetched"] += 1
+            records.append(record)
+    except Exception:
+        logger.exception("Deals backfill COQL başarısız")
+        stats["errors"] += 1
+        return stats
+
+    org_id = get_org_id()
+    ids = [
+        did
+        for did in (_as_str(r.get("id")) for r in records)
+        if did
+    ]
+    with client.transaction() as conn:
+        existing = _existing_deal_ids(ids, conn)
+        rep_ids, _rep_names = _load_rep_ids(conn)
+
+    monthly: dict[tuple[date, str], dict[str, Any]] = {}
+    unmatched: dict[str, str] = {}
+    to_insert: list[tuple[Any, ...]] = []
+
+    for record in records:
+        try:
+            deal_id = _as_str(record.get("id"))
+            if deal_id is None:
+                stats["errors"] += 1
+                continue
+            panel_dt = _panel_dt(record)
+            if panel_dt is None:
+                stats["errors"] += 1
+                continue
+            panel_day = to_istanbul(panel_dt).date()
+            stage = _as_str(record.get("Stage")) or ""
+            amount = _parse_amount(record.get("Amount"))
+            if amount is None:
+                stats["amount_empty"] += 1
+            owner_id, owner_name = _owner_fields(record.get("Owner"))
+            if owner_id is None:
+                stats["ownerless"] += 1
+            elif owner_id not in rep_ids:
+                unmatched[owner_id] = owner_name or owner_id
+
+            month_key = date(panel_day.year, panel_day.month, 1)
+            bucket = monthly.setdefault(
+                (month_key, stage),
+                {
+                    "ay": month_key,
+                    "stage": stage,
+                    "adet": 0,
+                    "yeni": 0,
+                    "mevcut": 0,
+                    "sahipsiz": 0,
+                    "tutar": Decimal("0"),
+                },
+            )
+            bucket["adet"] += 1
+            if amount is not None:
+                bucket["tutar"] += amount
+            if owner_id is None:
+                bucket["sahipsiz"] += 1
+
+            if panel_day >= _BACKFILL_CUTOFF:
+                stats["skipped_2026"] += 1
+                continue
+
+            stats["in_window"] += 1
+            already = deal_id in existing
+            if already:
+                stats["already"] += 1
+                bucket["mevcut"] += 1
+                continue
+
+            stats["new"] += 1
+            bucket["yeni"] += 1
+            to_insert.append(
+                (
+                    org_id,
+                    deal_id,
+                    _lookup_id(record.get("Contact_Name")),
+                    None,
+                    None,
+                    stage or None,
+                    amount,
+                    _parse_dt(record.get("Created_Time")),
+                    _parse_date_as_dt(record.get("Closing_Date")),
+                    owner_id,
+                    _as_str(record.get("Lead_Source")),
+                    None,
+                    False,
+                )
+            )
+        except Exception:
+            logger.exception("backfill kayıt işlenemedi")
+            stats["errors"] += 1
+
+    names = sorted(set(unmatched.values()))
+    stats["unmatched_count"] = len(unmatched)
+    stats["unmatched_names"] = names
+    stats["monthly"] = [
+        {
+            **row,
+            "tutar": float(row["tutar"]) if row["tutar"] else None,
+        }
+        for _, row in sorted(monthly.items(), key=lambda item: (item[0][0], item[0][1]))
+    ]
+
+    if not apply:
+        stats["written"] = 0
+        return stats
+
+    if not to_insert:
+        stats["applied"] = True
+        stats["written"] = 0
+        return stats
+
+    with client.transaction() as conn:
+        still = _existing_deal_ids([str(row[1]) for row in to_insert], conn)
+        rows = [row for row in to_insert if str(row[1]) not in still]
+        if not rows:
+            stats["applied"] = True
+            stats["written"] = 0
+            stats["already"] += len(to_insert)
+            stats["new"] = 0
+            return stats
+        contact_ids = [cid for _, _, cid, *_rest in rows if cid]
+        contact_map = _load_contacts(conn, contact_ids)
+        lead_ids = {
+            row["lead_id"]
+            for row in contact_map.values()
+            if row.get("lead_id")
+        }
+        lead_starts = _load_lead_starts(conn, list(lead_ids))
+        filled: list[tuple[Any, ...]] = []
+        for row in rows:
+            org, deal_id, contact_id, _lead, _thread, stage, amount, created_at, closed_at, owner_id, source, _cycle, _rel = row
+            lead_id = None
+            thread_id = None
+            contact = contact_map.get(contact_id or "")
+            if contact:
+                lead_id = contact.get("lead_id")
+                thread_id = contact.get("thread_id")
+            if contact_id and (thread_id is None or lead_id is None):
+                tid, lid = _resolve_from_identity(conn, contact_id)
+                thread_id = thread_id or tid
+                lead_id = lead_id or lid
+            cycle_start_at = lead_starts.get(lead_id) if lead_id else None
+            reliable = False
+            if cycle_start_at is not None:
+                reliable = not _is_migration_lead(cycle_start_at)
+            filled.append(
+                (
+                    org,
+                    deal_id,
+                    contact_id,
+                    lead_id,
+                    thread_id,
+                    stage,
+                    amount,
+                    created_at,
+                    closed_at,
+                    owner_id,
+                    source,
+                    cycle_start_at,
+                    reliable,
+                )
+            )
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO deals (
+                    org_id, deal_id, contact_id, lead_id, thread_id,
+                    stage, amount, created_at, closed_at,
+                    owner_rep_id, source, cycle_start_at,
+                    cycle_start_reliable
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s
+                )
+                ON CONFLICT (org_id, deal_id) DO NOTHING
+                """,
+                filled,
+            )
+            rowcount = cur.rowcount
+        stats["written"] = (
+            int(rowcount) if rowcount is not None and rowcount >= 0
+            else len(filled)
+        )
+    stats["applied"] = True
+    return stats
+
+
 def _dry_run_counts(records: list[dict[str, Any]]) -> dict[str, int]:
     """Yazmadan: yeni / mevcut / amount boş. Amount = Zoho Amount."""
     ids: list[str] = []
@@ -335,6 +581,41 @@ def _lookup_id(value: Any) -> str | None:
     if isinstance(value, dict) and value.get("id"):
         return str(value["id"])
     return None
+
+
+def _owner_fields(owner: Any) -> tuple[str | None, str | None]:
+    """Zoho Owner lookup → (id, name)."""
+    if not isinstance(owner, dict):
+        return None, None
+    oid = str(owner["id"]) if owner.get("id") else None
+    name = str(owner["name"]).strip() if owner.get("name") else None
+    return oid, (name or None)
+
+
+def _panel_dt(record: dict[str, Any]) -> datetime | None:
+    """Panel tarihi: coalesce(Closing_Date, Created_Time)."""
+    closed = _parse_date_as_dt(record.get("Closing_Date"))
+    if closed is not None:
+        return closed
+    return _parse_dt(record.get("Created_Time"))
+
+
+def _load_rep_ids(conn: Any) -> tuple[set[str], dict[str, str]]:
+    rows = conn.execute(
+        """
+        SELECT rep_id, full_name FROM reps
+        WHERE org_id = %s
+        """,
+        (get_org_id(),),
+    ).fetchall()
+    ids: set[str] = set()
+    names: dict[str, str] = {}
+    for rid, name in rows:
+        key = str(rid)
+        ids.add(key)
+        if name:
+            names[key] = str(name)
+    return ids, names
 
 
 def _parse_amount(value: Any) -> Decimal | None:
