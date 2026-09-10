@@ -143,10 +143,27 @@ def _first_filled_id(api_name: str) -> str | None:
     return None
 
 
+def _lookup_module(field: dict[str, Any]) -> str | None:
+    lookup = field.get("lookup")
+    if not isinstance(lookup, dict):
+        return None
+    module = lookup.get("module")
+    if isinstance(module, dict):
+        name = str(module.get("api_name") or "")
+        return name or None
+    if isinstance(module, str) and module:
+        return module
+    return None
+
+
 def _coql_counts(api_names: Sequence[str]) -> dict[str, list[tuple[str, int]]]:
     counters: dict[str, Counter[str]] = {name: Counter() for name in api_names}
     select_list = ", ".join(["id", *api_names])
-    query = f"select {select_list} from Deals order by Created_Time asc"
+    # COQL where zorunlu; lookup nesnesi id+name olarak gelir.
+    query = (
+        f"select {select_list} from Deals "
+        "where id is not null order by Created_Time asc"
+    )
     for record in coql(query):
         for name in api_names:
             counters[name][_display_value(record.get(name))] += 1
@@ -161,7 +178,11 @@ def _fetch_related(deal_id: str, related: str) -> list[dict[str, Any]]:
             response = _request(
                 "GET",
                 f"/crm/v7/Deals/{deal_id}/{related}",
-                params={"page": page, "per_page": 200},
+                params={
+                    "page": page,
+                    "per_page": 200,
+                    "fields": "id,Product_Name,Product_Code",
+                },
             )
         except ZohoCrmError as exc:
             print(f"iliskili {related} HATA: {exc}")
@@ -199,6 +220,9 @@ def main() -> int:
         print(f"{api_name} | {label} | {data_type} | {custom}")
         if _name_hit(api_name, label):
             name_hits.append(api_name)
+            module = _lookup_module(field)
+            if module:
+                print(f"  lookup modul: {module}")
         picks = _picklist_values(field)
         if picks:
             joined = " / ".join(picks)
@@ -275,7 +299,10 @@ def main() -> int:
         for row in rows[:3]:
             print(f"HAM {related}={json.dumps(row, ensure_ascii=False, default=str)}")
 
-    count_fields = [name for name in dict.fromkeys(pick_hits + hits + name_hits) if name in by_api]
+    # Deal_Name icindeki Premium eslesmesi sayima girmez; aday alanlar.
+    count_fields = [
+        name for name in dict.fromkeys(pick_hits + name_hits) if name in by_api
+    ]
     if not count_fields:
         print("sayilacak urun alani yok")
         return 0
@@ -291,7 +318,40 @@ def main() -> int:
             print(f"  {value} | {n}")
             total += n
         print(f"  toplam={total}")
+        module = _lookup_module(by_api[api_name])
+        if not module:
+            continue
+        try:
+            _print_lookup_catalog(module)
+        except (ZohoAuthError, ZohoCrmError, ValueError) as exc:
+            print(f"katalog {module} HATA: {exc}")
     return 0
+
+
+def _print_lookup_catalog(module: str) -> None:
+    response = _request(
+        "GET", "/crm/v7/settings/fields", params={"module": module}
+    )
+    if response.status_code == 204:
+        print(f"katalog {module}: metadata bos")
+        return
+    api_names = {
+        str(f.get("api_name") or "")
+        for f in (response.json().get("fields") or [])
+        if f.get("api_name")
+    }
+    name_field = "Product_Name" if "Product_Name" in api_names else "Name"
+    if name_field not in api_names:
+        print(f"katalog {module}: isim alani yok {sorted(api_names)[:12]}")
+        return
+    query = f"select id, {name_field} from {module} where id is not null"
+    print(f"katalog {module} alan={name_field}:")
+    n = 0
+    for record in coql(query):
+        n += 1
+        name = _display_value(record.get(name_field))
+        print(f"  {name} | id={record.get('id')}")
+    print(f"  katalog_toplam={n}")
 
 
 if __name__ == "__main__":
