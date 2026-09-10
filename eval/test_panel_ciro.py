@@ -26,13 +26,12 @@ def test_september_2026_workdays() -> None:
 
 
 def test_forecast_formula_sep_10() -> None:
-    mtd = 1_162_715.0
+    mtd = 1_196_874.0
     elapsed = 9
     month_wd = 26
     daily = mtd / elapsed
     forecast = daily * month_wd
-    assert round(forecast) == 3_358_954
-    assert abs(forecast - 3_360_000) < 20_000
+    assert round(forecast) == 3_457_636
 
 
 def test_bu_ay_default_window() -> None:

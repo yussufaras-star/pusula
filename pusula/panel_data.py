@@ -47,6 +47,7 @@ from pusula.temas import (
 )
 
 _TZ = ZoneInfo("Europe/Istanbul")
+ISTANBUL_TZ = "Europe/Istanbul"
 WINDOW_DAYS = 90
 WEEK_COUNT = 12
 CONV_START = datetime(2026, 5, 1, tzinfo=_TZ)
@@ -124,7 +125,14 @@ _DUR_E = duration_sec("e")
 _WON_D = won_stage_sql("d")
 _LEAD_PAYDA_E = distinct_attempted_leads_sql("e")
 _LEAD_PAY_E = distinct_reached_leads_sql("e")
-_DAY_IST = "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date"
+
+
+def istanbul_sql(expr: str) -> str:
+    """timestamptz ifadesini Europe/Istanbul yerel saatine çevirir."""
+    return f"({expr} AT TIME ZONE '{ISTANBUL_TZ}')"
+
+
+_DAY_IST = f"{istanbul_sql('e.occurred_at')}::date"
 
 
 def _reach_pay(ulasilan_giden: int, donus: int) -> int:
@@ -297,7 +305,7 @@ def load_rep_by_email(email: str) -> Rep | None:
 
 
 def _hour_expr(alias: str = "e") -> str:
-    return f"extract(hour FROM {alias}.occurred_at AT TIME ZONE 'Europe/Istanbul')::int"
+    return f"extract(hour FROM {istanbul_sql(f'{alias}.occurred_at')})::int"
 
 
 def hourly_table(
@@ -622,7 +630,7 @@ def _saturday_data_days(
     """90 günde 09-15 arası olayı olan geçmiş cumartesi sayısı."""
     org_id = get_org_id()
     hour = _hour_expr("e")
-    day_col = "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date"
+    day_col = _DAY_IST
     sql = f"""
         SELECT count(DISTINCT {day_col})::int
         FROM events e
@@ -654,8 +662,7 @@ def today_arama_count(rep_id: str | None = None) -> int:
           AND {_sales_rep_sql()}
           AND e.channel = 'call' AND e.direction = 'outbound'
           AND {_CEVIRME_E}
-          AND (e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date
-                = (now() AT TIME ZONE 'Europe/Istanbul')::date
+          AND {_DAY_IST} = {istanbul_sql('now()')}::date
           {extra}
     """
     with connect() as conn:
@@ -679,7 +686,7 @@ def today_blocks(
     hour = _hour_expr("e")
     chosen = day or datetime.now(_TZ).date()
     planned_blocks = blocks_for(chosen)
-    day_col = "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date"
+    day_col = _DAY_IST
     today = f"{day_col} = p.gun"
     weekday = chosen.weekday()
     if weekday == 5:
@@ -854,7 +861,7 @@ def today_blocks(
         CROSS JOIN (SELECT %s::date AS gun) p
         WHERE e.org_id = %s
           AND {_sales_rep_sql()}
-          AND (e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date
+          AND {_DAY_IST}
                 >= p.gun - interval '{WINDOW_DAYS} days'
           AND e.occurred_at <= now()
           {extra}
@@ -1060,7 +1067,7 @@ def today_hours(
             JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
             WHERE e.org_id = %s
               AND {_sales_rep_sql()}
-              AND (e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date = %s
+              AND {_DAY_IST} = %s
               AND e.occurred_at <= now()
               {extra}
             GROUP BY 1
@@ -1158,7 +1165,7 @@ def hour_history(
         return {}
     hour_start, hour_end = wanted[0], wanted[-1]
     weekday = chosen.weekday()
-    day_col = "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date"
+    day_col = _DAY_IST
     if weekday == 5:
         hist_dow = f"extract(isodow FROM {day_col}) = 6"
         days = max(_hist_isodow(chosen, 6), 1)
@@ -1352,9 +1359,9 @@ def _workdays() -> int:
             f"""
             SELECT count(*)::int
             FROM generate_series(
-                (now() AT TIME ZONE 'Europe/Istanbul')::date
+                {istanbul_sql("now()")}::date
                   - interval '{WINDOW_DAYS} days',
-                (now() AT TIME ZONE 'Europe/Istanbul')::date,
+                {istanbul_sql("now()")}::date,
                 interval '1 day'
             ) AS d
             WHERE extract(isodow FROM d) < 6
@@ -1372,9 +1379,9 @@ def _workday_split() -> tuple[int, int]:
               count(*) FILTER (WHERE extract(isodow FROM d) < 6)::int,
               count(*) FILTER (WHERE extract(isodow FROM d) = 6)::int
             FROM generate_series(
-                (now() AT TIME ZONE 'Europe/Istanbul')::date
+                {istanbul_sql("now()")}::date
                   - interval '{WINDOW_DAYS} days',
-                (now() AT TIME ZONE 'Europe/Istanbul')::date,
+                {istanbul_sql("now()")}::date,
                 interval '1 day'
             ) AS d
             """
@@ -1473,21 +1480,19 @@ def occupancy_breakdown(
     meet_dk = _meeting_duration_min_sql("e")
     connected = _call_connected_sql("e")
     sunday = (
-        "extract(isodow FROM e.occurred_at AT TIME ZONE 'Europe/Istanbul') <> 7"
+        f"extract(isodow FROM {istanbul_sql('e.occurred_at')}) <> 7"
     )
     if day is not None:
         window_sql = (
-            "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date = %s"
+            f"{_DAY_IST} = %s"
         )
         window_params: tuple[Any, ...] = (day,)
         wd = day.weekday()
         n_wd, n_sat = (1, 0) if wd < 5 else ((0, 1) if wd == 5 else (0, 0))
     else:
-        window_sql = (
-            f"e.occurred_at >= now() - interval '{WINDOW_DAYS} days' "
-            f"AND e.occurred_at <= now()"
-        )
-        window_params = ()
+        start_ts, end_ts = _bounds()
+        window_sql = "e.occurred_at >= %s AND e.occurred_at <= %s"
+        window_params = (start_ts, end_ts)
         n_wd, n_sat = _workday_split()
     sql = f"""
         SELECT
@@ -1581,6 +1586,7 @@ def daily_workload() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
     """Kişi başı günlük iş yükü + ulaşılamayan ort. / ulaşılan medyan süre."""
     org_id = get_org_id()
     days = max(_workdays(), 1)
+    start_ts, end_ts = _bounds()
     meet_dk = f"""
         COALESCE(
             NULLIF(regexp_replace(e.meta->>'duration', '[^0-9]', '', 'g'), '')
@@ -1625,14 +1631,14 @@ def daily_workload() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
         FROM reps r
         LEFT JOIN events e
           ON e.org_id = r.org_id AND e.rep_id = r.rep_id
-         AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
-         AND e.occurred_at <= now()
+         AND e.occurred_at >= %s
+         AND e.occurred_at <= %s
         WHERE r.org_id = %s AND {_sales_rep_sql()}
         GROUP BY r.full_name
         ORDER BY r.full_name
     """
     with connect() as conn:
-        rows = conn.execute(sql, (org_id,)).fetchall()
+        rows = conn.execute(sql, (start_ts, end_ts, org_id)).fetchall()
         dur = conn.execute(
             f"""
             SELECT
@@ -1646,10 +1652,10 @@ def daily_workload() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
             WHERE e.org_id = %s
               AND {_sales_rep_sql()}
               AND e.channel = 'call' AND e.direction = 'outbound'
-              AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
-              AND e.occurred_at <= now()
+              AND e.occurred_at >= %s
+              AND e.occurred_at <= %s
             """,
-            (org_id,),
+            (org_id, start_ts, end_ts),
         ).fetchone()
     out: list[dict[str, Any]] = []
     for name, arama, ulasilan, randevu, katildi, arama_sn, temas_sn, randevu_dk, katildi_dk in rows:
@@ -1711,6 +1717,7 @@ def workload_board(
     if not rep_id:
         n_reps = max(len(load_reps()), 1)
     occ = occupancy_breakdown(rep_id)
+    start_ts, end_ts = _bounds()
 
     sql = f"""
         SELECT
@@ -1742,9 +1749,9 @@ def workload_board(
         JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
         WHERE e.org_id = %s
           AND {_sales_rep_sql()}
-          AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
-          AND e.occurred_at <= now()
-          AND extract(isodow FROM e.occurred_at AT TIME ZONE 'Europe/Istanbul') <> 7
+          AND e.occurred_at >= %s
+          AND e.occurred_at <= %s
+          AND extract(isodow FROM {istanbul_sql("e.occurred_at")}) <> 7
           {extra}
     """
     lead_sql = f"""
@@ -1753,13 +1760,15 @@ def workload_board(
         JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
         WHERE l.org_id = %s
           AND {_sales_rep_sql()}
-          AND coalesce(l.assigned_at, l.created_at)
-                >= now() - interval '{WINDOW_DAYS} days'
+          AND coalesce(l.assigned_at, l.created_at) >= %s
+          AND coalesce(l.assigned_at, l.created_at) <= %s
           {extra_l}
     """
     with connect() as conn:
-        row = conn.execute(sql, (org_id, *params)).fetchone()
-        lead_row = conn.execute(lead_sql, (org_id, *params_l)).fetchone()
+        row = conn.execute(sql, (org_id, start_ts, end_ts, *params)).fetchone()
+        lead_row = conn.execute(
+            lead_sql, (org_id, start_ts, end_ts, *params_l)
+        ).fetchone()
 
     arama_t = int(row[0] or 0) if row else 0
     ulasilan_t = int(row[1] or 0) if row else 0
@@ -2309,7 +2318,7 @@ def first_meeting_week() -> dict[str, datetime | None]:
         SELECT r.full_name,
           date_trunc(
             'week',
-            min(e.occurred_at AT TIME ZONE 'Europe/Istanbul')
+            min({istanbul_sql("e.occurred_at")})
           )
         FROM events e
         JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
@@ -2340,15 +2349,15 @@ def weekly_series(
     sql = f"""
         WITH weeks AS (
             SELECT generate_series(
-                date_trunc('week', %s AT TIME ZONE 'Europe/Istanbul'),
-                date_trunc('week', %s AT TIME ZONE 'Europe/Istanbul'),
+                date_trunc('week', {istanbul_sql("%s")}),
+                date_trunc('week', {istanbul_sql("%s")}),
                 interval '1 week'
             ) AS week_start
         ),
         call_w AS (
             SELECT
               date_trunc(
-                'week', e.occurred_at AT TIME ZONE 'Europe/Istanbul'
+                'week', {istanbul_sql("e.occurred_at")}
               ) AS week_start,
               count(*) FILTER (
                 WHERE e.direction = 'outbound' AND {_CEVIRME_E}
@@ -2374,7 +2383,7 @@ def weekly_series(
         meet_w AS (
             SELECT
               date_trunc(
-                'week', e.occurred_at AT TIME ZONE 'Europe/Istanbul'
+                'week', {istanbul_sql("e.occurred_at")}
               ) AS week_start,
               count(*) FILTER (
                 WHERE e.meta->>'randevu_durumu' IN ('katildi', 'katilmadi')
@@ -2397,8 +2406,7 @@ def weekly_series(
             SELECT
               date_trunc(
                 'week',
-                coalesce(l.assigned_at, l.created_at)
-                    AT TIME ZONE 'Europe/Istanbul'
+                {istanbul_sql("coalesce(l.assigned_at, l.created_at)")}
               ) AS week_start,
               count(*)::int AS leads,
               count(*) FILTER (WHERE {_has_contact_sql()})::int AS contacts,

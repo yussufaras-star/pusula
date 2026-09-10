@@ -19,6 +19,7 @@ from pusula.panel_data import (
     RATE_MIN_N,
     SAT_SAAT,
     all_data_window,
+    istanbul_sql,
     per_person_metrics,
     rate_cell,
     sum_hour_rows,
@@ -236,3 +237,13 @@ def test_occupancy_pay_no_double_count() -> None:
     assert mesai_avail_dk(0, 1, 1) == 5.0 * 60.0
     assert _cap_doluluk(80.0, detail="ok") == 80.0
     assert _cap_doluluk(140.0, detail="test asim") == 100.0
+
+
+def test_istanbul_sql_wraps_timestamptz_expr() -> None:
+    assert istanbul_sql("e.occurred_at") == (
+        "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')"
+    )
+    assert istanbul_sql("coalesce(closed_at, created_at)") == (
+        "(coalesce(closed_at, created_at) AT TIME ZONE 'Europe/Istanbul')"
+    )
+    assert istanbul_sql("now()") == "(now() AT TIME ZONE 'Europe/Istanbul')"

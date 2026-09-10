@@ -12,7 +12,7 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from pusula.config import get_org_id
-from pusula.panel_data import connect
+from pusula.panel_data import connect, istanbul_sql
 from pusula.sifir_satis import WON_STAGE
 
 _TZ = ZoneInfo("Europe/Istanbul")
@@ -352,11 +352,9 @@ def _ciro_monthly_filled(
     sql = f"""
         WITH months AS (
             SELECT generate_series(
-                date_trunc(
-                    'month',
-                    (now() AT TIME ZONE 'Europe/Istanbul')
-                ) - interval '{MONTH_COUNT - 1} months',
-                date_trunc('month', (now() AT TIME ZONE 'Europe/Istanbul')),
+                date_trunc('month', {istanbul_sql("now()")})
+                    - interval '{MONTH_COUNT - 1} months',
+                date_trunc('month', {istanbul_sql("now()")}),
                 interval '1 month'
             ) AS month_start
         ),
@@ -370,7 +368,7 @@ def _ciro_monthly_filled(
               d.owner_rep_id AS rep_id,
               date_trunc(
                 'month',
-                {_deal_at_sql("d")} AT TIME ZONE 'Europe/Istanbul'
+                {istanbul_sql(_deal_at_sql("d"))}
               ) AS month_start,
               count(*)::int AS satis,
               coalesce(sum(d.amount), 0)::float AS ciro
@@ -414,7 +412,7 @@ def _ciro_monthly_windowed(
               d.owner_rep_id AS rep_id,
               date_trunc(
                 'month',
-                {_deal_at_sql("d")} AT TIME ZONE 'Europe/Istanbul'
+                {istanbul_sql(_deal_at_sql("d"))}
               ) AS month_start,
               count(*)::int AS satis,
               coalesce(sum(d.amount), 0)::float AS ciro
@@ -661,8 +659,9 @@ def ciro_same_pace_compare(
 
 def ciro_won_month_probe() -> list[dict[str, Any]]:
     """Kazanılan anlaşmalar, ay ay. Doğrulama sorgusu; ekip filtresi yok."""
-    sql = """
-        SELECT date_trunc('month', coalesce(closed_at, created_at))::date AS ay,
+    deal_at = istanbul_sql("coalesce(closed_at, created_at)")
+    sql = f"""
+        SELECT date_trunc('month', {deal_at})::date AS ay,
                count(*)::int AS adet,
                count(*) FILTER (WHERE closed_at IS NULL)::int AS closed_at_bos,
                sum(amount) AS ciro
@@ -717,7 +716,7 @@ def ciro_team_year_compare() -> list[dict[str, Any]]:
         SELECT
           date_trunc(
             'month',
-            {_deal_at_sql("d")} AT TIME ZONE 'Europe/Istanbul'
+            {istanbul_sql(_deal_at_sql("d"))}
           )::date AS ay,
           coalesce(sum(d.amount), 0)::float AS ciro,
           count(*)::int AS adet
@@ -785,11 +784,9 @@ def ciro_weekly_by_rep(rep_id: str | None) -> list[dict[str, float | None | date
     sql = f"""
         WITH weeks AS (
             SELECT generate_series(
-                date_trunc(
-                    'week',
-                    (now() AT TIME ZONE 'Europe/Istanbul')
-                ) - interval '11 weeks',
-                date_trunc('week', (now() AT TIME ZONE 'Europe/Istanbul')),
+                date_trunc('week', {istanbul_sql("now()")})
+                    - interval '11 weeks',
+                date_trunc('week', {istanbul_sql("now()")}),
                 interval '1 week'
             ) AS week_start
         ),
@@ -797,7 +794,7 @@ def ciro_weekly_by_rep(rep_id: str | None) -> list[dict[str, float | None | date
             SELECT
               date_trunc(
                 'week',
-                {_deal_at_sql("d")} AT TIME ZONE 'Europe/Istanbul'
+                {istanbul_sql(_deal_at_sql("d"))}
               ) AS week_start,
               coalesce(sum(d.amount), 0)::float AS ciro,
               count(*)::int AS satis
