@@ -277,6 +277,13 @@ def main() -> int:
         team_reach_and_join,
         today_blocks,
         today_hours,
+        fmt_clock_span,
+        fmt_duration,
+        fmt_meet_minutes,
+        parse_meet_duration_min,
+        get_org_id,
+        _sales_rep_sql,
+        _hour_expr,
         GUN_SAAT,
         SAT_SAAT,
         MESAI_WD_SAAT,
@@ -527,6 +534,146 @@ def main() -> int:
             if left != right:
                 ok = False
             print(f"    {key}: onceki_ham={left} sonra_ekran={right} {mark}")
+        gorusme = _leaf_val(last, "görüşme süresi")
+        toplanti_sure = _leaf_val(last, "toplantı süresi")
+        print(f"  gun toplami gorusme suresi={gorusme}")
+        print(f"  gun toplami toplanti suresi={toplanti_sure}")
+        if "toplantı süresi" not in blob:
+            print("  HATA: toplantı süresi sutunu yok")
+            ok = False
+        if " sn" in gorusme or gorusme.endswith("sn"):
+            print("  HATA: gun toplaminda gorusme suresi saniye iceriyor")
+            ok = False
+        if " sn" in toplanti_sure or toplanti_sure.endswith("sn"):
+            print("  HATA: gun toplaminda toplanti suresi saniye iceriyor")
+            ok = False
+        return ok
+
+    def _print_sure_check(
+        label: str, rows: list[dict[str, Any]], probe_day: date
+    ) -> bool:
+        """Görüşme süresi ham saniye aynı kalsın. Toplantı süresi katıldı x duration."""
+        from app.panel import COL_HELP, _hour_table_frame
+        from pusula.temas import duration_sec, is_temas_sql
+
+        ham = sum_hour_rows(rows)
+        raw = ham.get("sure_toplam")
+        raw_sn = float(raw or 0)
+        frame = _hour_table_frame(rows, probe_day)
+        last = frame.iloc[-1]
+        gorusme = _leaf_val(last, "görüşme süresi")
+        toplanti_sure = _leaf_val(last, "toplantı süresi")
+        onceki_bicim = (
+            "veri yetersiz" if raw is None else f"toplam {fmt_duration(raw_sn)}"
+        )
+        sonra_bicim = (
+            "veri yetersiz"
+            if raw is None
+            else f"toplam {fmt_clock_span(raw_sn, day_total=True)}"
+        )
+        print(f"sure dogrulama ({label}):")
+        print(f"  gorusme suresi ham sn onceki=sonra={raw_sn}")
+        print(f"  onceki bicim={onceki_bicim}")
+        print(f"  sonra gun toplami ekran={gorusme}")
+        print(f"  beklenen sonra bicim={sonra_bicim}")
+        ok = True
+        if gorusme != sonra_bicim:
+            print("  HATA: gun toplami gorusme suresi bicimi")
+            ok = False
+        wanted = list(display_hours(probe_day))
+        hour = _hour_expr("e")
+        day_ist = f"{istanbul_sql('e.occurred_at')}::date"
+        dur = duration_sec("e")
+        temas = is_temas_sql("e")
+        org_id = get_org_id()
+        with connect() as conn:
+            direct = conn.execute(
+                f"""
+                SELECT coalesce(sum({dur}) FILTER (
+                    WHERE e.channel = 'call'
+                      AND e.direction = 'outbound'
+                      AND {temas}
+                ), 0)::float
+                FROM events e
+                JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+                WHERE e.org_id = %s
+                  AND {_sales_rep_sql()}
+                  AND {day_ist} = %s
+                  AND e.occurred_at <= now()
+                  AND {hour} = ANY(%s)
+                """,
+                (org_id, probe_day, wanted),
+            ).fetchone()
+            dur_rows = conn.execute(
+                f"""
+                SELECT
+                  coalesce(nullif(btrim(e.meta->>'duration'), ''), '<bos>') AS deger,
+                  count(*)::int AS adet
+                FROM events e
+                JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+                WHERE e.org_id = %s
+                  AND {_sales_rep_sql()}
+                  AND e.channel = 'meeting'
+                  AND e.meta->>'randevu_durumu' = 'katildi'
+                  AND {day_ist} = %s
+                  AND e.occurred_at <= now()
+                  AND {hour} = ANY(%s)
+                GROUP BY 1
+                ORDER BY 2 DESC
+                """,
+                (org_id, probe_day, wanted),
+            ).fetchall()
+        direct_sn = float(direct[0] or 0) if direct else 0.0
+        mark = "ok" if abs(direct_sn - raw_sn) < 0.05 else "HATA"
+        if mark != "ok":
+            ok = False
+        print(
+            "  gorusme suresi toplam "
+            f"dogrudan_sql_sn={direct_sn} saatlik_sn={raw_sn} {mark}"
+        )
+        parsed_dk = 0
+        fail = 0
+        attended = 0
+        print("  katildi duration dagilimi:")
+        for deger, adet in dur_rows:
+            attended += int(adet)
+            minutes = None if deger == "<bos>" else parse_meet_duration_min(str(deger))
+            if minutes is None:
+                fail += int(adet)
+                print(f"    deger={deger} adet={adet} cevrim=HATA")
+            else:
+                parsed_dk += int(minutes) * int(adet)
+                print(f"    deger={deger} adet={adet} dk={minutes}")
+        katildi = int(ham.get("katildi") or 0)
+        sutun_dk = float(ham.get("toplanti_dk") or 0)
+        hata = int(ham.get("toplanti_dk_hata") or 0)
+        carpim = katildi * 30
+        carpim_mark = "ok" if sutun_dk == float(carpim) else "FARK"
+        print(
+            f"  katildi={katildi} x 30 dk={carpim} "
+            f"sutun_dk={sutun_dk} {carpim_mark}"
+        )
+        print(f"  cevrim_hata kayit={hata} python={fail}")
+        print(f"  gun toplami toplanti suresi ekran={toplanti_sure}")
+        if abs(sutun_dk - float(parsed_dk)) > 0.05 or hata != fail or katildi != attended:
+            print(
+                "  HATA: toplantı süresi "
+                f"python_dk={parsed_dk} sutun_dk={sutun_dk} "
+                f"katildi_sql={attended} katildi_satir={katildi}"
+            )
+            ok = False
+        elif toplanti_sure != fmt_meet_minutes(sutun_dk, day_total=True):
+            print("  HATA: toplantı süresi ekran bicimi")
+            ok = False
+        help_text = COL_HELP.get("toplantı süresi", "")
+        print(f"  balon={help_text}")
+        if (
+            "Planlanan süre" not in help_text
+            or "katılınan" not in help_text
+            or "Bookings" not in help_text
+        ):
+            print("  HATA: toplantı süresi balonu eksik")
+            ok = False
         return ok
 
     def _compare_before_after(
@@ -588,6 +735,15 @@ def main() -> int:
     ) and display_ok
     if not display_ok:
         print("hata: saatlik tablo ekraninda kiyas gostergesi duruyor")
+        return 1
+    sure_ok = _print_sure_check(
+        f"ekip cuma {friday.isoformat()}", fri_rows, friday
+    )
+    sure_ok = _print_sure_check(
+        f"ekip cumartesi {sat.isoformat()}", sat_rows, sat
+    ) and sure_ok
+    if not sure_ok:
+        print("hata: sure sutunu veya gorusme suresi toplami")
         return 1
     fri_total = sum_hour_rows(fri_rows)
     sat_total = sum_hour_rows(sat_rows)

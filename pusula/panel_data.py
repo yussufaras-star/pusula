@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -1010,6 +1011,53 @@ def today_blocks(
     return {"blocks": blocks, "workdays": days, "hist_n": hist_n}
 
 
+_MEET_HOUR_RE = re.compile(r"([0-9]+)\s*hour", re.IGNORECASE)
+_MEET_MIN_RE = re.compile(r"([0-9]+)\s*min", re.IGNORECASE)
+
+
+def parse_meet_duration_min(raw: str | None) -> int | None:
+    """'30 mins' → 30. Boş veya birimsiz metin çevrilemez (None).
+
+    Planlanan süre. Katılmayan kayıt bu fonksiyona gelmez.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    hour_m = _MEET_HOUR_RE.search(text)
+    min_m = _MEET_MIN_RE.search(text)
+    if hour_m is None and min_m is None:
+        return None
+    hours = int(hour_m.group(1)) if hour_m else 0
+    mins = int(min_m.group(1)) if min_m else 0
+    return hours * 60 + mins
+
+
+def _meet_duration_parsed_sql(alias: str = "e") -> str:
+    """meta.duration → dakika. Çevrilemezse NULL. Doluluk SQL'ine dokunmaz.
+
+    '30 mins' ve '1 hour 30 mins'. Birimsiz rakam çevrim sayılmaz.
+    """
+    raw = f"nullif(btrim(coalesce({alias}.meta->>'{MEET_DURATION_KEY}', '')), '')"
+    hours = (
+        f"coalesce(NULLIF(regexp_replace("
+        f"substring({raw} from '([0-9]+)\\s*hour'), '[^0-9]', '', 'g'), '')"
+        f"::numeric, 0)"
+    )
+    mins = (
+        f"coalesce(NULLIF(regexp_replace("
+        f"substring({raw} from '([0-9]+)\\s*min'), '[^0-9]', '', 'g'), '')"
+        f"::numeric, 0)"
+    )
+    ok = (
+        f"{raw} IS NOT NULL AND ("
+        f"{raw} ~* '[0-9]+[[:space:]]*hour' OR "
+        f"{raw} ~* '[0-9]+[[:space:]]*min')"
+    )
+    return f"CASE WHEN {ok} THEN {hours} * 60 + {mins} ELSE NULL END"
+
+
 def today_hours(
     rep_id: str | None,
     day: date | None = None,
@@ -1027,6 +1075,7 @@ def today_hours(
     hour_start, hour_end = wanted[0], wanted[-1]
     is_call = "e.channel = 'call' AND e.direction = 'outbound'"
     is_meet = "e.channel = 'meeting'"
+    meet_parsed = _meet_duration_parsed_sql("e")
     sql = f"""
         WITH hours AS (
             SELECT h FROM generate_series({hour_start}, {hour_end}) AS h
@@ -1062,7 +1111,15 @@ def today_hours(
                 WHERE {is_call} AND {_TEMAS_E}
               ) AS sure_ort,
               percentile_cont(0.5) WITHIN GROUP (ORDER BY {_DUR_E})
-                FILTER (WHERE {is_call} AND {_TEMAS_E}) AS sure_tipik
+                FILTER (WHERE {is_call} AND {_TEMAS_E}) AS sure_tipik,
+              coalesce(sum({meet_parsed}) FILTER (
+                WHERE {is_meet} AND e.meta->>'randevu_durumu' = 'katildi'
+              ), 0)::float AS toplanti_dk,
+              count(*) FILTER (
+                WHERE {is_meet}
+                  AND e.meta->>'randevu_durumu' = 'katildi'
+                  AND ({meet_parsed}) IS NULL
+              )::int AS toplanti_dk_hata
             FROM events e
             JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
             WHERE e.org_id = %s
@@ -1086,7 +1143,9 @@ def today_hours(
           coalesce(s.sonuc, 0)::int,
           s.sure_toplam,
           s.sure_ort,
-          s.sure_tipik
+          s.sure_tipik,
+          coalesce(s.toplanti_dk, 0)::float,
+          coalesce(s.toplanti_dk_hata, 0)::int
         FROM hours
         LEFT JOIN slots s ON s.saat = hours.h
         ORDER BY hours.h
@@ -1109,6 +1168,8 @@ def today_hours(
         sure_toplam,
         sure_ort,
         sure_tipik,
+        toplanti_dk,
+        toplanti_dk_hata,
     ) in rows:
         t_u = int(ulasilan_giden)
         t_d = int(donus)
@@ -1139,8 +1200,16 @@ def today_hours(
                 "sonuc_girilmedi": int(sonuc),
                 "katilim_orani": _ratio(int(katildi), katilim_payda),
                 "katilim_payda": katilim_payda,
+                "toplanti_dk": float(toplanti_dk or 0),
+                "toplanti_dk_hata": int(toplanti_dk_hata or 0),
                 **sure,
             }
+        )
+    failed = sum(int(row["toplanti_dk_hata"]) for row in out)
+    if failed:
+        logger.warning(
+            "toplantı süresi çevrilemedi: %s kayıt (katildi, meta.duration)",
+            failed,
         )
     return out
 
@@ -1321,6 +1390,8 @@ def sum_hour_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if r.get("sure_toplam") is not None
     ]
     sure_toplam = sum(sure_vals) if sure_vals else None
+    toplanti_dk = sum(float(r.get("toplanti_dk") or 0) for r in rows)
+    toplanti_dk_hata = sum(int(r.get("toplanti_dk_hata") or 0) for r in rows)
     return {
         "saat": None,
         "arama": arama,
@@ -1339,6 +1410,8 @@ def sum_hour_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "sure_toplam": sure_toplam,
         "sure_ort": None,
         "sure_tipik": None,
+        "toplanti_dk": toplanti_dk,
+        "toplanti_dk_hata": toplanti_dk_hata,
     }
 
 
@@ -2724,6 +2797,45 @@ def _ratio(num: int | float | None, den: int | float | None) -> float | None:
     if float(den) == 0:
         return None
     return round(100.0 * float(num) / float(den), 1)
+
+
+def fmt_clock_span(sec: float | int | None, *, day_total: bool = False) -> str:
+    """Saat satırı dk/sn. Gün toplamı ve 60 dk üstü: '2 sa 21 dk', saniye yok.
+
+    Gün toplamında saniye yuvarlanmaz, atılır.
+    """
+    if sec is None:
+        return "—"
+    try:
+        total = int(round(float(sec)))
+    except (TypeError, ValueError):
+        return "—"
+    if total < 0:
+        total = 0
+    if day_total or total > 60 * 60:
+        minutes = total // 60
+        hours, mins = divmod(minutes, 60)
+        if hours <= 0:
+            return f"{mins} dk"
+        if mins == 0:
+            return f"{hours} sa"
+        return f"{hours} sa {mins} dk"
+    return fmt_duration(total)
+
+
+def fmt_meet_minutes(
+    minutes: float | int | None, *, day_total: bool = False
+) -> str:
+    """Planlanan toplantı dakikası. Sıfır '0 dk'."""
+    if minutes is None:
+        return "—"
+    try:
+        value = float(minutes)
+    except (TypeError, ValueError):
+        return "—"
+    if value == 0:
+        return "0 dk"
+    return fmt_clock_span(value * 60.0, day_total=day_total)
 
 
 def fmt_duration(sec: float | int | None) -> str:

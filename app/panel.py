@@ -6,6 +6,7 @@ Giriş: st.session_state + st.secrets[passwords]. Salt okuma.
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import urllib.error
@@ -19,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 import pandas as pd
 import streamlit as st
@@ -68,8 +71,10 @@ from pusula.panel_data import (
     arrow,
     conv_window,
     default_window,
+    fmt_clock_span,
     fmt_day,
     fmt_duration,
+    fmt_meet_minutes,
     fmt_num,
     fmt_pct,
     fmt_window,
@@ -256,6 +261,11 @@ COL_HELP: dict[str, str] = {
     "ulaşma %": HELP_ULASMA,
     "ulaşma oranı": HELP_ULASMA,
     "görüşme süresi": HELP_SURE,
+    "toplantı süresi": (
+        "Planlanan süre. Yalnız katılınan toplantılar. "
+        "Kaynak events.meta.duration. "
+        "Gerçekleşen süre Bookings'te tutulmuyor."
+    ),
     "katıldı": HELP_KATILIM,
     "oran": HELP_ULASMA,
     "aranan lead": HELP_ARANAN_LEAD,
@@ -614,6 +624,7 @@ HOUR_COL_GROUPS: tuple[tuple[str, str], ...] = (
     ("toplantı", "toplantı"),
     ("toplantı", "katıldı"),
     ("toplantı", "sonuç girilmedi"),
+    ("toplantı", "toplantı süresi"),
 )
 
 
@@ -844,16 +855,21 @@ def _rate_cell_text(
     return cell
 
 
-def _sure_cell_text(row: dict[str, Any]) -> str:
-    pair = _fmt_ortalama_tipik(row.get("sure_ort"), row.get("sure_tipik"))
+def _sure_cell_text(row: dict[str, Any], *, day_total: bool = False) -> str:
+    def _fmt(sec: float | None) -> str:
+        return fmt_clock_span(sec, day_total=day_total)
+
+    pair = _fmt_ortalama_tipik(
+        row.get("sure_ort"), row.get("sure_tipik"), fmt=_fmt
+    )
     toplam = row.get("sure_toplam")
     if pair is None and toplam is None:
         return "veri yetersiz"
     if pair is None:
-        return f"toplam {fmt_duration(toplam)}"
+        return f"toplam {_fmt(toplam)}"
     shown = pair
     if toplam is not None:
-        shown = f"{shown} (toplam {fmt_duration(toplam)})"
+        shown = f"{shown} (toplam {_fmt(toplam)})"
     return shown
 
 
@@ -869,6 +885,7 @@ def _hour_display_row(
     toplanti: str,
     katildi: str,
     sonuc: str,
+    toplanti_sure: str,
 ) -> dict[str, Any]:
     return {
         "saat": saat,
@@ -881,6 +898,7 @@ def _hour_display_row(
         "toplantı": toplanti,
         "katıldı": katildi,
         "sonuç girilmedi": sonuc,
+        "toplantı süresi": toplanti_sure,
     }
 
 
@@ -908,6 +926,7 @@ def _hour_table_frame(
                     toplanti="",
                     katildi="",
                     sonuc="",
+                    toplanti_sure="",
                 )
             )
             continue
@@ -925,6 +944,7 @@ def _hour_table_frame(
                 toplanti=_count_cell(row.get("randevu")),
                 katildi=_count_cell(row.get("katildi")),
                 sonuc=_count_cell(row.get("sonuc_girilmedi")),
+                toplanti_sure=fmt_meet_minutes(row.get("toplanti_dk")),
             )
         )
     total = sum_hour_rows(rows)
@@ -938,10 +958,13 @@ def _hour_table_frame(
             ulasma=_rate_cell_text(
                 total, key="ulasma_orani", payda_key="lead_payda",
             ),
-            sure=_sure_cell_text(total),
+            sure=_sure_cell_text(total, day_total=True),
             toplanti=_count_cell(total.get("randevu")),
             katildi=_count_cell(total.get("katildi")),
             sonuc=_count_cell(total.get("sonuc_girilmedi")),
+            toplanti_sure=fmt_meet_minutes(
+                total.get("toplanti_dk"), day_total=True
+            ),
         )
     )
     return _with_hour_groups(pd.DataFrame(records))
@@ -966,6 +989,13 @@ def _render_bugun(
         st.caption("saatler 09:00-15:00 · doluluk 6 saat üzerinden")
     else:
         st.caption("saatler 09:00-18:00 · doluluk 9 saat üzerinden")
+    failed = sum(int(row.get("toplanti_dk_hata") or 0) for row in hour_rows)
+    if failed:
+        logger.warning(
+            "toplantı süresi çevrilemedi: %s kayıt (katildi, meta.duration)",
+            failed,
+        )
+        st.caption(f"toplantı süresi çevrilemedi: {failed} kayıt")
     frame = _hour_table_frame(hour_rows, day)
     _table(frame)
 
@@ -1060,13 +1090,14 @@ def _week_delta(rows: list[dict[str, Any]], key: str) -> str:
 
 
 def _fmt_ortalama_tipik(
-    avg_sec: float | None, tipik_sec: float | None
+    avg_sec: float | None,
+    tipik_sec: float | None,
+    *,
+    fmt: Any = fmt_duration,
 ) -> str | None:
     if avg_sec is None and tipik_sec is None:
         return None
-    return (
-        f"ortalama {fmt_duration(avg_sec)}, tipik {fmt_duration(tipik_sec)}"
-    )
+    return f"ortalama {fmt(avg_sec)}, tipik {fmt(tipik_sec)}"
 
 
 def _compare(
