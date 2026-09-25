@@ -46,6 +46,7 @@ SALES_TEAM_IDS: tuple[str, ...] = (
     "6847331000013134001",  # Serkan Şahin
     "6847331000013140001",  # Ayşe Kar
     "6847331000049858071",  # Abdullah Benli
+    "6847331000057509001",  # Beytullah Aras
 )
 AFTER_SALES_IDS: tuple[str, ...] = (
     "6847331000000615001",  # Nihat Kemer
