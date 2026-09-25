@@ -1101,6 +1101,9 @@ def today_hours(
                 WHERE {is_meet} AND e.meta->>'randevu_durumu' = 'katilmadi'
               )::int AS katilmadi,
               count(*) FILTER (
+                WHERE {is_meet} AND e.meta->>'randevu_durumu' = 'iptal_edildi'
+              )::int AS iptal,
+              count(*) FILTER (
                 WHERE {is_meet}
                   AND e.meta->>'randevu_durumu' = 'sonuc_girilmedi'
               )::int AS sonuc,
@@ -1140,6 +1143,7 @@ def today_hours(
           coalesce(s.randevu, 0)::int,
           coalesce(s.katildi, 0)::int,
           coalesce(s.katilmadi, 0)::int,
+          coalesce(s.iptal, 0)::int,
           coalesce(s.sonuc, 0)::int,
           s.sure_toplam,
           s.sure_ort,
@@ -1164,6 +1168,7 @@ def today_hours(
         randevu,
         katildi,
         katilmadi,
+        iptal,
         sonuc,
         sure_toplam,
         sure_ort,
@@ -1197,6 +1202,7 @@ def today_hours(
                 "randevu": int(randevu),
                 "katildi": int(katildi),
                 "katilmadi": int(katilmadi),
+                "iptal_edildi": int(iptal),
                 "sonuc_girilmedi": int(sonuc),
                 "katilim_orani": _ratio(int(katildi), katilim_payda),
                 "katilim_payda": katilim_payda,
@@ -1380,6 +1386,7 @@ def sum_hour_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     randevu = sum((r.get("randevu") or 0) for r in rows)
     katildi = sum((r.get("katildi") or 0) for r in rows)
     katilmadi = sum((r.get("katilmadi") or 0) for r in rows)
+    iptal = sum((r.get("iptal_edildi") or 0) for r in rows)
     sonuc = sum((r.get("sonuc_girilmedi") or 0) for r in rows)
     lead_payda = sum((r.get("lead_payda") or 0) for r in rows)
     lead_pay = sum((r.get("lead_pay") or 0) for r in rows)
@@ -1404,6 +1411,7 @@ def sum_hour_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "randevu": randevu,
         "katildi": katildi,
         "katilmadi": katilmadi,
+        "iptal_edildi": iptal,
         "sonuc_girilmedi": sonuc,
         "katilim_orani": _ratio(katildi, katilim_payda),
         "katilim_payda": katilim_payda,

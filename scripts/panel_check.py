@@ -512,12 +512,15 @@ def main() -> int:
             "gelen": _leaf_val(last, "gelen arama"),
             "randevu": _leaf_val(last, "toplantı"),
             "katildi": _leaf_val(last, "katıldı"),
+            "katilmadi": _leaf_val(last, "katılmadı"),
+            "iptal_edildi": _leaf_val(last, "iptal edildi"),
             "sonuc_girilmedi": _leaf_val(last, "sonuç girilmedi"),
         }
         print(
             f"  gun toplami ham arama={ham['arama']} ulasilan={ham['ulasilan']} "
             f"donus={ham['donus']} gelen={ham['gelen']} "
             f"randevu={ham['randevu']} katildi={ham['katildi']} "
+            f"katilmadi={ham.get('katilmadi')} iptal={ham.get('iptal_edildi')} "
             f"sonuc_girilmedi={ham['sonuc_girilmedi']}"
         )
         print(
@@ -525,9 +528,36 @@ def main() -> int:
             f"arama={shown['arama']} ulasilan={shown['ulasilan']} "
             f"donus={shown['donus']} gelen={shown['gelen']} "
             f"randevu={shown['randevu']} katildi={shown['katildi']} "
+            f"katilmadi={shown['katilmadi']} iptal={shown['iptal_edildi']} "
             f"sonuc_girilmedi={shown['sonuc_girilmedi']}"
         )
-        for key in ("arama", "ulasilan", "donus", "gelen", "randevu", "katildi", "sonuc_girilmedi"):
+        kirilim = (
+            int(ham.get("katildi") or 0)
+            + int(ham.get("katilmadi") or 0)
+            + int(ham.get("iptal_edildi") or 0)
+            + int(ham.get("sonuc_girilmedi") or 0)
+        )
+        toplanti_n = int(ham.get("randevu") or 0)
+        split_mark = "ok" if kirilim == toplanti_n else "HATA"
+        print(
+            "  toplanti kirilim "
+            f"katildi={ham.get('katildi')} katilmadi={ham.get('katilmadi')} "
+            f"iptal={ham.get('iptal_edildi')} sonuc={ham.get('sonuc_girilmedi')} "
+            f"toplam={kirilim} toplanti={toplanti_n} {split_mark}"
+        )
+        if kirilim != toplanti_n:
+            print("  toplantı kırılımı toplantı sayısına eşit değil")
+        for key in (
+            "arama",
+            "ulasilan",
+            "donus",
+            "gelen",
+            "randevu",
+            "katildi",
+            "katilmadi",
+            "iptal_edildi",
+            "sonuc_girilmedi",
+        ):
             left = str(ham.get(key) if ham.get(key) is not None else "—")
             right = shown[key]
             mark = "ok" if left == right else "HATA"

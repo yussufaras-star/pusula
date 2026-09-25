@@ -31,6 +31,34 @@ ROOT = Path(__file__).resolve().parent.parent
 PANEL = ROOT / "app" / "panel.py"
 SHOT_DIR = Path("/tmp/pusula-panel-shots")
 VERIFY_PASSWORD = "verify-ci"
+# Toplantı grubu yaprak sırası. Mevcut kolonların ardına eklenir.
+MEETING_LEAVES: tuple[str, ...] = (
+    "toplantı",
+    "katıldı",
+    "katılmadı",
+    "iptal edildi",
+    "sonuç girilmedi",
+    "toplantı süresi",
+)
+# Glide iç kaydırma ölçümünde kenar payı.
+_SCROLL_TOL_PX = 6
+
+
+def _ordered_leaves(frame: pd.DataFrame) -> list[str]:
+    """Kolon sırasını koru. AppTest MultiIndex'i bazen string yazar."""
+    leaves: list[str] = []
+    for col in frame.columns:
+        if isinstance(col, tuple):
+            leaves.append(str(col[-1]))
+            continue
+        text = str(col)
+        if text.startswith("(") and "," in text:
+            inner = text.strip("()").replace("'", "").replace('"', "")
+            parts = [part.strip() for part in inner.split(",") if part.strip()]
+            leaves.append(parts[-1] if parts else text)
+            continue
+        leaves.append(text)
+    return leaves
 
 
 def _leaf_names(frame: pd.DataFrame) -> set[str]:
@@ -290,6 +318,13 @@ def _assert_common(at: Any, *, admin: bool) -> list[str]:
         hour_blob = str(hour_df)
         if any(mark in hour_blob for mark in ("↑", "↓", " · ekip ")):
             errors.append("saatlik tabloda kiyas gostergesi duruyor")
+        meeting = [
+            name
+            for name in _ordered_leaves(hour_df)
+            if name in MEETING_LEAVES
+        ]
+        if meeting != list(MEETING_LEAVES):
+            errors.append(f"toplanti kolon sirasi {meeting}")
     if "kıyas son 90 günün hafta içi aynı saatine göre" in captions:
         errors.append("saatlik kiyas caption duruyor")
     if any("kıyas geçmiş cumartesi" in c for c in captions):
@@ -519,6 +554,107 @@ def _write_ci_secrets(person: dict[str, str]) -> Path:
     return home
 
 
+def _assert_hour_dataframe_scroll(page: Any) -> bool:
+    """gün toplamı dataframe'inde dikey iç kaydırma olmasın.
+
+    Yatay kaydırma beklenir; sayı yazılır, tek başına hata sayılmaz.
+    Dış kutu kaydırmıyorsa ölçü iç scroller'dan alınır.
+    """
+    try:
+        info = page.evaluate(
+            """(tol) => {
+              const frames = Array.from(
+                document.querySelectorAll('[data-testid="stDataFrame"]')
+              );
+              const target = frames.find((el) =>
+                (el.textContent || '').includes('gün toplamı')
+              ) || null;
+              if (!target) {
+                return {found: false, frameCount: frames.length};
+              }
+              function metrics(el) {
+                return {
+                  scrollHeight: el.scrollHeight,
+                  clientHeight: el.clientHeight,
+                  scrollWidth: el.scrollWidth,
+                  clientWidth: el.clientWidth,
+                };
+              }
+              const outer = metrics(target);
+              const innerEl = target.querySelector('.dvn-scroller');
+              const inner = innerEl ? metrics(innerEl) : null;
+              const outerV = outer.scrollHeight > outer.clientHeight + tol;
+              const outerH = outer.scrollWidth > outer.clientWidth + tol;
+              let used = 'stDataFrame';
+              let measured = outer;
+              if (!outerV && !outerH && inner) {
+                used = 'dvn-scroller';
+                measured = inner;
+              }
+              return {found: true, used, outer, inner, measured};
+            }""",
+            _SCROLL_TOL_PX,
+        )
+    except Exception as exc:
+        print(f"saatlik kaydirma olcumu hata: {exc}")
+        return False
+    print(f"saatlik dataframe kaydirma={info}")
+    if not info.get("found"):
+        print("saatlik dataframe (gun toplami) bulunamadi")
+        return False
+    inner = info.get("inner") if isinstance(info.get("inner"), dict) else None
+    outer = info.get("outer") if isinstance(info.get("outer"), dict) else None
+    # Glide kaydırması iç scroller'da. Dış kutu çoğu zaman kaydırmaz.
+    if inner is not None:
+        measured = inner
+        used = "dvn-scroller"
+    else:
+        measured = dict(info.get("measured") or {})
+        used = str(info.get("used") or "stDataFrame")
+    sh = int(measured.get("scrollHeight") or 0)
+    ch = int(measured.get("clientHeight") or 0)
+    sw = int(measured.get("scrollWidth") or 0)
+    cw = int(measured.get("clientWidth") or 0)
+    vertical = sh > ch + _SCROLL_TOL_PX
+    if outer is not None:
+        o_sh = int(outer.get("scrollHeight") or 0)
+        o_ch = int(outer.get("clientHeight") or 0)
+        if o_sh > o_ch + _SCROLL_TOL_PX:
+            vertical = True
+    horizontal = sw > cw + _SCROLL_TOL_PX
+    print(
+        f"saatlik dikey scrollHeight={sh} clientHeight={ch} "
+        f"fark={sh - ch} dikey_kaydirma={'var' if vertical else 'yok'} "
+        f"kutu={used}"
+    )
+    print(
+        f"saatlik yatay scrollWidth={sw} clientWidth={cw} "
+        f"fark={sw - cw} yatay_kaydirma={'gerekli' if horizontal else 'yok'}"
+    )
+    shot = SHOT_DIR / "saatlik-dataframe.png"
+    saved = False
+    try:
+        frames = page.locator('[data-testid="stDataFrame"]')
+        for i in range(frames.count()):
+            box = frames.nth(i)
+            text = box.evaluate("el => el.textContent || ''")
+            if "gün toplamı" not in text:
+                continue
+            box.scroll_into_view_if_needed()
+            box.screenshot(path=str(shot))
+            saved = True
+            print(f"saatlik dataframe goruntu={shot} {shot.stat().st_size}")
+            break
+    except Exception as exc:
+        print(f"saatlik dataframe goruntu hata: {exc}")
+    if not saved:
+        print("saatlik dataframe goruntusu alinamadi")
+    if vertical:
+        print("saatlik tablo dikey kaydirma: HATA")
+        return False
+    return True
+
+
 def _shots(person: dict[str, str]) -> int:
     try:
         from playwright.sync_api import sync_playwright
@@ -571,6 +707,7 @@ def _shots(person: dict[str, str]) -> int:
         proc.kill()
         return 0
     time.sleep(2)
+    scroll_ok = True
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch()
@@ -616,6 +753,7 @@ def _shots(person: dict[str, str]) -> int:
                 f"{page.get_by_text('sonuç girilmedi').count()}"
             )
             print(f"gun toplami adet={page.get_by_text('gün toplamı').count()}")
+            scroll_ok = _assert_hour_dataframe_scroll(page)
             sat_label = page.get_by_text("09:00-15:00")
             print(f"09:00-15:00 etiket adet={sat_label.count()}")
             weekday_blk = page.get_by_text("09-11 arama blogu")
@@ -638,6 +776,8 @@ def _shots(person: dict[str, str]) -> int:
     print("shots:")
     for path in sorted(SHOT_DIR.glob("*.png")):
         print(f"  {path} {path.stat().st_size}")
+    if not scroll_ok:
+        return 1
     return 0
 
 
