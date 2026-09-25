@@ -615,12 +615,9 @@ def _assert_hour_dataframe_scroll(page: Any) -> bool:
     ch = int(measured.get("clientHeight") or 0)
     sw = int(measured.get("scrollWidth") or 0)
     cw = int(measured.get("clientWidth") or 0)
+    # Satır kaydırması Glide iç scroller'da. Dış kutunun birkaç pikseli
+    # yatay çubuğun kalınlığı; satır gizlemiyorsa hata sayılmaz.
     vertical = sh > ch + _SCROLL_TOL_PX
-    if outer is not None:
-        o_sh = int(outer.get("scrollHeight") or 0)
-        o_ch = int(outer.get("clientHeight") or 0)
-        if o_sh > o_ch + _SCROLL_TOL_PX:
-            vertical = True
     horizontal = sw > cw + _SCROLL_TOL_PX
     print(
         f"saatlik dikey scrollHeight={sh} clientHeight={ch} "

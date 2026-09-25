@@ -673,9 +673,13 @@ def _col_config(frame: pd.DataFrame) -> dict[str, Any] | None:
     return cfg or None
 
 
+# Yatay kaydırma çubuğu dış kutuyu ~9px taşırıyordu. Pay onu da içine alır.
+_HOUR_HEIGHT_PAD = 40
+
+
 def hour_table_height(n_rows: int) -> int:
     """Tüm saat satırları ve gün toplamı sığsın. İç kaydırma olmasın."""
-    return (n_rows + _HOUR_HEADER_ROWS) * _HOUR_ROW_PX + 8
+    return (n_rows + _HOUR_HEADER_ROWS) * _HOUR_ROW_PX + _HOUR_HEIGHT_PAD
 
 
 def _hour_col_config(frame: pd.DataFrame) -> dict[str, Any] | None:
