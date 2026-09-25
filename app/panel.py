@@ -114,6 +114,10 @@ from pusula.temas import RETURN_CALL_LOOKBACK_DAYS
 
 CACHE_TTL = 15 * 60
 _TZ = ZoneInfo("Europe/Istanbul")
+logger = logging.getLogger(__name__)
+# Glide satır yüksekliği. Başlık iki satır: grup + metrik.
+_HOUR_ROW_PX = 35
+_HOUR_HEADER_ROWS = 2
 
 # Tanım balonları — metin birebir.
 HELP_ULASMA = (
@@ -275,6 +279,12 @@ COL_HELP: dict[str, str] = {
     "randevu": HELP_RANDEVU,
     "toplantı": HELP_RANDEVU,
     "randevu/gün": HELP_RANDEVU,
+    "katılmadı": (
+        "randevu_durumu katilmadi. Toplantı sayısının içinde."
+    ),
+    "iptal edildi": (
+        "randevu_durumu iptal_edildi. Toplantı sayısının içinde."
+    ),
     "sonuç girilmedi": HELP_KATILIM,
     "katılım %": HELP_KATILIM,
     "ortalama": HELP_SURE,
@@ -623,9 +633,28 @@ HOUR_COL_GROUPS: tuple[tuple[str, str], ...] = (
     ("arama", "görüşme süresi"),
     ("toplantı", "toplantı"),
     ("toplantı", "katıldı"),
+    ("toplantı", "katılmadı"),
+    ("toplantı", "iptal edildi"),
     ("toplantı", "sonuç girilmedi"),
     ("toplantı", "toplantı süresi"),
 )
+
+# Tek satır kalsın diye piksel. Toplam sayfa genişliğini aşar.
+_HOUR_COL_WIDTHS: dict[str, int] = {
+    "saat": 108,
+    "giden arama": 108,
+    "ulaşılan görüşme": 140,
+    "dönüş araması": 120,
+    "gelen arama": 110,
+    "ulaşma oranı": 110,
+    "görüşme süresi": 480,
+    "toplantı": 90,
+    "katıldı": 84,
+    "katılmadı": 100,
+    "iptal edildi": 110,
+    "sonuç girilmedi": 130,
+    "toplantı süresi": 140,
+}
 
 
 def _col_leaf(col: Any) -> str:
@@ -642,6 +671,44 @@ def _col_config(frame: pd.DataFrame) -> dict[str, Any] | None:
         if text:
             cfg[leaf] = st.column_config.Column(leaf, help=text)
     return cfg or None
+
+
+# Yatay kaydırma çubuğu dış kutuyu ~9px taşırıyordu. Pay onu da içine alır.
+_HOUR_HEIGHT_PAD = 40
+
+
+def hour_table_height(n_rows: int) -> int:
+    """Tüm saat satırları ve gün toplamı sığsın. İç kaydırma olmasın."""
+    return (n_rows + _HOUR_HEADER_ROWS) * _HOUR_ROW_PX + _HOUR_HEIGHT_PAD
+
+
+def _hour_col_config(frame: pd.DataFrame) -> dict[str, Any] | None:
+    cfg: dict[str, Any] = {}
+    for col in frame.columns:
+        leaf = _col_leaf(col)
+        text = COL_HELP.get(leaf)
+        width = _HOUR_COL_WIDTHS.get(leaf)
+        if text is None and width is None:
+            continue
+        cfg[leaf] = st.column_config.TextColumn(
+            leaf,
+            help=text,
+            width=width,
+        )
+    return cfg or None
+
+
+def _hour_table(frame: pd.DataFrame) -> None:
+    """Saatlik tablo. Yükseklik içeriğe göre; sayfa kaydırılır."""
+    st.dataframe(
+        frame,
+        hide_index=True,
+        use_container_width=False,
+        width=sum(_HOUR_COL_WIDTHS.values()),
+        height=hour_table_height(len(frame)),
+        row_height=_HOUR_ROW_PX,
+        column_config=_hour_col_config(frame),
+    )
 
 
 def _with_hour_groups(frame: pd.DataFrame) -> pd.DataFrame:
@@ -884,6 +951,8 @@ def _hour_display_row(
     sure: str,
     toplanti: str,
     katildi: str,
+    katilmadi: str,
+    iptal: str,
     sonuc: str,
     toplanti_sure: str,
 ) -> dict[str, Any]:
@@ -897,9 +966,47 @@ def _hour_display_row(
         "görüşme süresi": sure,
         "toplantı": toplanti,
         "katıldı": katildi,
+        "katılmadı": katilmadi,
+        "iptal edildi": iptal,
         "sonuç girilmedi": sonuc,
         "toplantı süresi": toplanti_sure,
     }
+
+
+def _meeting_parts(row: dict[str, Any]) -> tuple[int, int]:
+    """Toplantı sayısı ve dört kırılımın toplamı."""
+    total = int(row.get("randevu") or 0)
+    parts = (
+        int(row.get("katildi") or 0)
+        + int(row.get("katilmadi") or 0)
+        + int(row.get("iptal_edildi") or 0)
+        + int(row.get("sonuc_girilmedi") or 0)
+    )
+    return total, parts
+
+
+def _report_meeting_split(rows: list[dict[str, Any]]) -> None:
+    """Dört kırılım toplantıya eşit değilse logla ve ekrana yaz."""
+    gaps: list[str] = []
+    for row in rows:
+        total, parts = _meeting_parts(row)
+        if parts == total:
+            continue
+        saat = int(row["saat"])
+        msg = f"{saat:02d}:00 toplantı {total}, kırılım {parts}"
+        gaps.append(msg)
+        logger.warning("toplantı kırılımı tutmuyor: %s", msg)
+    summed = sum_hour_rows(rows)
+    total, parts = _meeting_parts(summed)
+    if parts != total:
+        msg = f"gün toplamı toplantı {total}, kırılım {parts}"
+        gaps.append(msg)
+        logger.warning("toplantı kırılımı tutmuyor: %s", msg)
+    if gaps:
+        st.caption(
+            "toplantı kırılımı toplantı sayısına eşit değil: "
+            + "; ".join(gaps)
+        )
 
 
 def _hour_table_frame(
@@ -925,6 +1032,8 @@ def _hour_table_frame(
                     sure="",
                     toplanti="",
                     katildi="",
+                    katilmadi="",
+                    iptal="",
                     sonuc="",
                     toplanti_sure="",
                 )
@@ -943,6 +1052,8 @@ def _hour_table_frame(
                 sure=_sure_cell_text(row),
                 toplanti=_count_cell(row.get("randevu")),
                 katildi=_count_cell(row.get("katildi")),
+                katilmadi=_count_cell(row.get("katilmadi")),
+                iptal=_count_cell(row.get("iptal_edildi")),
                 sonuc=_count_cell(row.get("sonuc_girilmedi")),
                 toplanti_sure=fmt_meet_minutes(row.get("toplanti_dk")),
             )
@@ -961,6 +1072,8 @@ def _hour_table_frame(
             sure=_sure_cell_text(total, day_total=True),
             toplanti=_count_cell(total.get("randevu")),
             katildi=_count_cell(total.get("katildi")),
+            katilmadi=_count_cell(total.get("katilmadi")),
+            iptal=_count_cell(total.get("iptal_edildi")),
             sonuc=_count_cell(total.get("sonuc_girilmedi")),
             toplanti_sure=fmt_meet_minutes(
                 total.get("toplanti_dk"), day_total=True
@@ -997,7 +1110,8 @@ def _render_bugun(
         )
         st.caption(f"toplantı süresi çevrilemedi: {failed} kayıt")
     frame = _hour_table_frame(hour_rows, day)
-    _table(frame)
+    _report_meeting_split(hour_rows)
+    _hour_table(frame)
 
 
 def _share_send_error(exc: BaseException) -> None:

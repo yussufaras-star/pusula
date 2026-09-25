@@ -170,6 +170,7 @@ def test_sum_hour_rows_counts_and_pooled_rates() -> None:
     assert total["sonuc_girilmedi"] == 0
     assert total["toplanti_dk"] == 0.0
     assert total["toplanti_dk_hata"] == 0
+    assert total["iptal_edildi"] == 0
 
 
 def test_hour_table_frame_has_no_compare_marks() -> None:
@@ -188,9 +189,11 @@ def test_hour_table_frame_has_no_compare_marks() -> None:
             "sure_ort": 90.0,
             "sure_tipik": 80.0,
             "sure_toplam": 180.0,
-            "randevu": 1,
+            "randevu": 4,
             "katildi": 1,
-            "sonuc_girilmedi": 0,
+            "katilmadi": 1,
+            "iptal_edildi": 1,
+            "sonuc_girilmedi": 1,
             "toplanti_dk": 90.0,
             "toplanti_dk_hata": 0,
         }
@@ -213,10 +216,16 @@ def test_hour_table_frame_has_no_compare_marks() -> None:
     assert str(leaves["gelen arama"]) == str(ham["gelen"])
     assert str(leaves["toplantı"]) == str(ham["randevu"])
     assert str(leaves["katıldı"]) == str(ham["katildi"])
+    assert str(leaves["katılmadı"]) == str(ham["katilmadi"])
+    assert str(leaves["iptal edildi"]) == str(ham["iptal_edildi"])
     assert str(leaves["sonuç girilmedi"]) == str(ham["sonuc_girilmedi"])
     assert leaves["toplantı süresi"] == "1 sa 30 dk"
     assert " sn" not in str(leaves["görüşme süresi"])
     assert " sn" not in str(leaves["toplantı süresi"])
+    kirilim = (
+        ham["katildi"] + ham["katilmadi"] + ham["iptal_edildi"] + ham["sonuc_girilmedi"]
+    )
+    assert kirilim == ham["randevu"]
     first = frame.iloc[0]
     hour_leaves = {
         (col[-1] if isinstance(col, tuple) else str(col)): first[col]
@@ -313,12 +322,22 @@ def test_hour_col_groups_arama_toplanti() -> None:
         "görüşme süresi",
         "toplantı",
         "katıldı",
+        "katılmadı",
+        "iptal edildi",
         "sonuç girilmedi",
         "toplantı süresi",
     ]
     groups = [group for group, _leaf in HOUR_COL_GROUPS[1:]]
     assert groups[:6] == ["arama"] * 6
-    assert groups[6:] == ["toplantı"] * 4
+    assert groups[6:] == ["toplantı"] * 6
+
+
+def test_hour_table_height_fits_every_row() -> None:
+    from app.panel import _HOUR_HEADER_ROWS, _HOUR_ROW_PX, hour_table_height
+
+    for n_rows in (7, 10):
+        height = hour_table_height(n_rows)
+        assert height >= (n_rows + _HOUR_HEADER_ROWS) * _HOUR_ROW_PX
 
 
 def test_occupancy_hours_constants() -> None:
