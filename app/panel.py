@@ -639,22 +639,28 @@ HOUR_COL_GROUPS: tuple[tuple[str, str], ...] = (
     ("toplantı", "toplantı süresi"),
 )
 
-# Tek satır kalsın diye piksel. Toplam sayfa genişliğini aşar.
+# Başlık ve hücre metni + kenar payı. Gruplar ayrı tablo; sayfa genişliğini aşmaz.
 _HOUR_COL_WIDTHS: dict[str, int] = {
-    "saat": 108,
-    "giden arama": 108,
-    "ulaşılan görüşme": 140,
-    "dönüş araması": 120,
-    "gelen arama": 110,
-    "ulaşma oranı": 110,
-    "görüşme süresi": 480,
-    "toplantı": 90,
-    "katıldı": 84,
-    "katılmadı": 100,
-    "iptal edildi": 110,
-    "sonuç girilmedi": 130,
-    "toplantı süresi": 140,
+    "saat": 112,
+    "giden arama": 116,
+    "ulaşılan görüşme": 147,
+    "dönüş araması": 131,
+    "gelen arama": 116,
+    "ulaşma oranı": 118,
+    "görüşme süresi": 427,
+    "toplantı": 81,
+    "katıldı": 70,
+    "katılmadı": 92,
+    "iptal edildi": 101,
+    "sonuç girilmedi": 135,
+    "toplantı süresi": 127,
 }
+_ARAMA_LEAVES: tuple[str, ...] = ("saat",) + tuple(
+    leaf for group, leaf in HOUR_COL_GROUPS if group == "arama"
+)
+_TOPLANTI_LEAVES: tuple[str, ...] = ("saat",) + tuple(
+    leaf for group, leaf in HOUR_COL_GROUPS if group == "toplantı"
+)
 
 
 def _col_leaf(col: Any) -> str:
@@ -698,13 +704,26 @@ def _hour_col_config(frame: pd.DataFrame) -> dict[str, Any] | None:
     return cfg or None
 
 
+def _hour_width(frame: pd.DataFrame) -> int:
+    return sum(_HOUR_COL_WIDTHS[_col_leaf(col)] for col in frame.columns)
+
+
+def _hour_slice(frame: pd.DataFrame, leaves: tuple[str, ...]) -> pd.DataFrame:
+    """Grup tablosu. Saat kolonu her iki tabloda durur."""
+    chosen: list[Any] = []
+    for leaf in leaves:
+        match = next(col for col in frame.columns if _col_leaf(col) == leaf)
+        chosen.append(match)
+    return frame.loc[:, chosen]
+
+
 def _hour_table(frame: pd.DataFrame) -> None:
-    """Saatlik tablo. Yükseklik içeriğe göre; sayfa kaydırılır."""
+    """Saatlik tablo. Genişlik metne göre; yatay kaydırma yok."""
     st.dataframe(
         frame,
         hide_index=True,
         use_container_width=False,
-        width=sum(_HOUR_COL_WIDTHS.values()),
+        width=_hour_width(frame),
         height=hour_table_height(len(frame)),
         row_height=_HOUR_ROW_PX,
         column_config=_hour_col_config(frame),
@@ -1111,7 +1130,8 @@ def _render_bugun(
         st.caption(f"toplantı süresi çevrilemedi: {failed} kayıt")
     frame = _hour_table_frame(hour_rows, day)
     _report_meeting_split(hour_rows)
-    _hour_table(frame)
+    _hour_table(_hour_slice(frame, _ARAMA_LEAVES))
+    _hour_table(_hour_slice(frame, _TOPLANTI_LEAVES))
 
 
 def _share_send_error(exc: BaseException) -> None:

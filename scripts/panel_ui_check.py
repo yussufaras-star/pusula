@@ -250,24 +250,33 @@ def _run_app(session: dict[str, Any], timeout: float = 240.0) -> Any:
     return at
 
 
-def _hour_frame(at: Any) -> Any | None:
-    wanted = {
-        "saat",
-        "giden arama",
-        "ulaşılan görüşme",
-        "toplantı",
-        "katıldı",
-        "sonuç girilmedi",
-        "toplantı süresi",
-        "arama",
-    }
+def _hour_frames(at: Any) -> list[Any]:
+    """Arama ve toplantı ayrı dataframe. İkisinde de saat kolonu var."""
+    found: list[Any] = []
     for frame in at.dataframe:
         try:
             cols = _leaf_names(frame.value)
         except Exception:
             continue
-        if wanted.issubset(cols):
-            return frame.value
+        if "saat" in cols and (
+            "giden arama" in cols or "toplantı" in cols
+        ):
+            found.append(frame.value)
+    return found
+
+
+def _hour_frame(at: Any) -> Any | None:
+    """Saat satırları arama tablosundan okunur."""
+    for frame in _hour_frames(at):
+        if "giden arama" in _leaf_names(frame):
+            return frame
+    return None
+
+
+def _meeting_frame(at: Any) -> Any | None:
+    for frame in _hour_frames(at):
+        if "toplantı" in _leaf_names(frame):
+            return frame
     return None
 
 
@@ -309,18 +318,19 @@ def _assert_common(at: Any, *, admin: bool) -> list[str]:
     if "09-11 arama blogu" in blob or "blok kart" in lower:
         errors.append("blok karti ifadesi duruyor")
     hour_df = _hour_frame(at)
-    if hour_df is None:
+    meet_df = _meeting_frame(at)
+    if hour_df is None or meet_df is None:
         errors.append("saatlik tablo kolonlari yok")
     else:
-        cols = _leaf_names(hour_df)
+        cols = _leaf_names(hour_df) | _leaf_names(meet_df)
         if "randevu" in cols and "toplantı" not in cols:
             errors.append("saatlik tabloda randevu basligi duruyor, toplantı olmali")
-        hour_blob = str(hour_df)
+        hour_blob = str(hour_df) + str(meet_df)
         if any(mark in hour_blob for mark in ("↑", "↓", " · ekip ")):
             errors.append("saatlik tabloda kiyas gostergesi duruyor")
         meeting = [
             name
-            for name in _ordered_leaves(hour_df)
+            for name in _ordered_leaves(meet_df)
             if name in MEETING_LEAVES
         ]
         if meeting != list(MEETING_LEAVES):
@@ -555,23 +565,13 @@ def _write_ci_secrets(person: dict[str, str]) -> Path:
 
 
 def _assert_hour_dataframe_scroll(page: Any) -> bool:
-    """gün toplamı dataframe'inde dikey iç kaydırma olmasın.
-
-    Yatay kaydırma beklenir; sayı yazılır, tek başına hata sayılmaz.
-    Dış kutu kaydırmıyorsa ölçü iç scroller'dan alınır.
-    """
+    """Arama ve toplantı tablolarında iç kaydırma olmasın."""
     try:
         info = page.evaluate(
             """(tol) => {
               const frames = Array.from(
                 document.querySelectorAll('[data-testid="stDataFrame"]')
               );
-              const target = frames.find((el) =>
-                (el.textContent || '').includes('gün toplamı')
-              ) || null;
-              if (!target) {
-                return {found: false, frameCount: frames.length};
-              }
               function metrics(el) {
                 return {
                   scrollHeight: el.scrollHeight,
@@ -580,18 +580,19 @@ def _assert_hour_dataframe_scroll(page: Any) -> bool:
                   clientWidth: el.clientWidth,
                 };
               }
-              const outer = metrics(target);
-              const innerEl = target.querySelector('.dvn-scroller');
-              const inner = innerEl ? metrics(innerEl) : null;
-              const outerV = outer.scrollHeight > outer.clientHeight + tol;
-              const outerH = outer.scrollWidth > outer.clientWidth + tol;
-              let used = 'stDataFrame';
-              let measured = outer;
-              if (!outerV && !outerH && inner) {
-                used = 'dvn-scroller';
-                measured = inner;
-              }
-              return {found: true, used, outer, inner, measured};
+              const targets = frames.filter((el) =>
+                (el.textContent || '').includes('gün toplamı')
+              );
+              return {
+                found: targets.length,
+                tables: targets.map((target) => {
+                  const innerEl = target.querySelector('.dvn-scroller');
+                  return {
+                    outer: metrics(target),
+                    inner: innerEl ? metrics(innerEl) : null,
+                  };
+                }),
+              };
             }""",
             _SCROLL_TOL_PX,
         )
@@ -599,57 +600,51 @@ def _assert_hour_dataframe_scroll(page: Any) -> bool:
         print(f"saatlik kaydirma olcumu hata: {exc}")
         return False
     print(f"saatlik dataframe kaydirma={info}")
-    if not info.get("found"):
-        print("saatlik dataframe (gun toplami) bulunamadi")
+    tables = info.get("tables") if isinstance(info.get("tables"), list) else []
+    if len(tables) != 2:
+        print(f"saatlik dataframe adet={len(tables)} beklenen=2")
         return False
-    inner = info.get("inner") if isinstance(info.get("inner"), dict) else None
-    outer = info.get("outer") if isinstance(info.get("outer"), dict) else None
-    # Glide kaydırması iç scroller'da. Dış kutu çoğu zaman kaydırmaz.
-    if inner is not None:
-        measured = inner
-        used = "dvn-scroller"
-    else:
-        measured = dict(info.get("measured") or {})
-        used = str(info.get("used") or "stDataFrame")
-    sh = int(measured.get("scrollHeight") or 0)
-    ch = int(measured.get("clientHeight") or 0)
-    sw = int(measured.get("scrollWidth") or 0)
-    cw = int(measured.get("clientWidth") or 0)
-    # Satır kaydırması Glide iç scroller'da. Dış kutunun birkaç pikseli
-    # yatay çubuğun kalınlığı; satır gizlemiyorsa hata sayılmaz.
-    vertical = sh > ch + _SCROLL_TOL_PX
-    horizontal = sw > cw + _SCROLL_TOL_PX
-    print(
-        f"saatlik dikey scrollHeight={sh} clientHeight={ch} "
-        f"fark={sh - ch} dikey_kaydirma={'var' if vertical else 'yok'} "
-        f"kutu={used}"
-    )
-    print(
-        f"saatlik yatay scrollWidth={sw} clientWidth={cw} "
-        f"fark={sw - cw} yatay_kaydirma={'gerekli' if horizontal else 'yok'}"
-    )
-    shot = SHOT_DIR / "saatlik-dataframe.png"
-    saved = False
+    ok = True
+    for index, table in enumerate(tables):
+        inner = table.get("inner") if isinstance(table.get("inner"), dict) else None
+        measured = inner if inner is not None else dict(table.get("outer") or {})
+        used = "dvn-scroller" if inner is not None else "stDataFrame"
+        sh = int(measured.get("scrollHeight") or 0)
+        ch = int(measured.get("clientHeight") or 0)
+        sw = int(measured.get("scrollWidth") or 0)
+        cw = int(measured.get("clientWidth") or 0)
+        vertical = sh > ch + _SCROLL_TOL_PX
+        horizontal = sw > cw + _SCROLL_TOL_PX
+        print(
+            f"saatlik tablo {index} dikey scrollHeight={sh} clientHeight={ch} "
+            f"fark={sh - ch} dikey_kaydirma={'var' if vertical else 'yok'} "
+            f"kutu={used}"
+        )
+        print(
+            f"saatlik tablo {index} yatay scrollWidth={sw} clientWidth={cw} "
+            f"fark={sw - cw} yatay_kaydirma={'var' if horizontal else 'yok'}"
+        )
+        if vertical or horizontal:
+            ok = False
     try:
         frames = page.locator('[data-testid="stDataFrame"]')
+        shot_i = 0
         for i in range(frames.count()):
             box = frames.nth(i)
             text = box.evaluate("el => el.textContent || ''")
             if "gün toplamı" not in text:
                 continue
+            shot = SHOT_DIR / f"saatlik-dataframe-{shot_i}.png"
             box.scroll_into_view_if_needed()
             box.screenshot(path=str(shot))
-            saved = True
             print(f"saatlik dataframe goruntu={shot} {shot.stat().st_size}")
-            break
+            shot_i += 1
     except Exception as exc:
         print(f"saatlik dataframe goruntu hata: {exc}")
-    if not saved:
-        print("saatlik dataframe goruntusu alinamadi")
-    if vertical:
-        print("saatlik tablo dikey kaydirma: HATA")
-        return False
-    return True
+        ok = False
+    if not ok:
+        print("saatlik tablo kaydirma: HATA")
+    return ok
 
 
 def _shots(person: dict[str, str]) -> int:
