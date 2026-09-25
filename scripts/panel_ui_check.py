@@ -230,6 +230,7 @@ def _hour_frame(at: Any) -> Any | None:
         "toplantı",
         "katıldı",
         "sonuç girilmedi",
+        "toplantı süresi",
         "arama",
     }
     for frame in at.dataframe:

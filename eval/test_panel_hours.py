@@ -168,6 +168,8 @@ def test_sum_hour_rows_counts_and_pooled_rates() -> None:
     assert total["ulasma_orani"] == 50.0
     assert total["katilim_orani"] == 50.0
     assert total["sonuc_girilmedi"] == 0
+    assert total["toplanti_dk"] == 0.0
+    assert total["toplanti_dk_hata"] == 0
 
 
 def test_hour_table_frame_has_no_compare_marks() -> None:
@@ -189,6 +191,8 @@ def test_hour_table_frame_has_no_compare_marks() -> None:
             "randevu": 1,
             "katildi": 1,
             "sonuc_girilmedi": 0,
+            "toplanti_dk": 90.0,
+            "toplanti_dk_hata": 0,
         }
     ]
     ham = sum_hour_rows(rows)
@@ -210,6 +214,89 @@ def test_hour_table_frame_has_no_compare_marks() -> None:
     assert str(leaves["toplantı"]) == str(ham["randevu"])
     assert str(leaves["katıldı"]) == str(ham["katildi"])
     assert str(leaves["sonuç girilmedi"]) == str(ham["sonuc_girilmedi"])
+    assert leaves["toplantı süresi"] == "1 sa 30 dk"
+    assert " sn" not in str(leaves["görüşme süresi"])
+    assert " sn" not in str(leaves["toplantı süresi"])
+    first = frame.iloc[0]
+    hour_leaves = {
+        (col[-1] if isinstance(col, tuple) else str(col)): first[col]
+        for col in first.index
+    }
+    assert " sn" in str(hour_leaves["görüşme süresi"])
+    assert hour_leaves["toplantı süresi"] == "1 sa 30 dk"
+
+
+def test_day_total_duration_uses_hours() -> None:
+    from app.panel import _hour_table_frame
+    from pusula.panel_data import (
+        fmt_clock_span,
+        fmt_duration,
+        fmt_meet_minutes,
+        parse_meet_duration_min,
+    )
+
+    assert parse_meet_duration_min("30 mins") == 30
+    assert parse_meet_duration_min("1 hour") == 60
+    assert parse_meet_duration_min("1 hour 30 mins") == 90
+    assert parse_meet_duration_min("") is None
+    assert parse_meet_duration_min(None) is None
+    assert parse_meet_duration_min("abc") is None
+    assert parse_meet_duration_min("30") is None
+
+    raw_sn = 141 * 60 + 5
+    assert fmt_duration(raw_sn) == "141 dk 5 sn"
+    assert fmt_clock_span(raw_sn, day_total=True) == "2 sa 21 dk"
+    assert fmt_clock_span(47 * 60 + 35) == "47 dk 35 sn"
+    assert fmt_clock_span(48) == "48 sn"
+    assert fmt_meet_minutes(30) == "30 dk"
+    assert fmt_meet_minutes(90) == "1 sa 30 dk"
+    assert fmt_meet_minutes(0) == "0 dk"
+    assert fmt_meet_minutes(90, day_total=True) == "1 sa 30 dk"
+
+    rows = [
+        {
+            "saat": 11,
+            "arama": 2,
+            "ulasilan": 1,
+            "donus": 0,
+            "gelen": 0,
+            "ulasma_orani": None,
+            "lead_payda": 1,
+            "lead_pay": 0,
+            "sure_ort": None,
+            "sure_tipik": None,
+            "sure_toplam": float(raw_sn),
+            "randevu": 4,
+            "katildi": 3,
+            "katilmadi": 1,
+            "sonuc_girilmedi": 0,
+            "toplanti_dk": 90.0,
+            "toplanti_dk_hata": 1,
+        }
+    ]
+    ham = sum_hour_rows(rows)
+    assert ham["sure_toplam"] == float(raw_sn)
+    assert ham["toplanti_dk"] == 90.0
+    assert ham["toplanti_dk_hata"] == 1
+    frame = _hour_table_frame(rows, date(2026, 9, 18))
+    hour = frame.iloc[0]
+    total = frame.iloc[-1]
+
+    def leaf(series: object, name: str) -> str:
+        index = getattr(series, "index")
+        for col in index:
+            label = col[-1] if isinstance(col, tuple) else str(col)
+            if label == name:
+                return str(series[col])  # type: ignore[index]
+        raise AssertionError(name)
+
+    assert leaf(hour, "görüşme süresi") == "toplam 2 sa 21 dk"
+    assert " sn" not in leaf(hour, "görüşme süresi")
+    assert leaf(hour, "toplantı süresi") == "1 sa 30 dk"
+    assert leaf(total, "görüşme süresi") == "toplam 2 sa 21 dk"
+    assert leaf(total, "toplantı süresi") == "1 sa 30 dk"
+    assert " sn" not in leaf(total, "görüşme süresi")
+    assert "gerçekleşen" not in leaf(total, "toplantı süresi")
 
 
 def test_hour_col_groups_arama_toplanti() -> None:
@@ -227,10 +314,11 @@ def test_hour_col_groups_arama_toplanti() -> None:
         "toplantı",
         "katıldı",
         "sonuç girilmedi",
+        "toplantı süresi",
     ]
     groups = [group for group, _leaf in HOUR_COL_GROUPS[1:]]
     assert groups[:6] == ["arama"] * 6
-    assert groups[6:] == ["toplantı"] * 3
+    assert groups[6:] == ["toplantı"] * 4
 
 
 def test_occupancy_hours_constants() -> None:
