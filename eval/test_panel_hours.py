@@ -332,6 +332,56 @@ def test_hour_col_groups_arama_toplanti() -> None:
     assert groups[6:] == ["toplantı"] * 6
 
 
+def test_hour_group_tables_fit_without_horizontal_scroll() -> None:
+    from app.panel import (
+        _ARAMA_LEAVES,
+        _HOUR_COL_WIDTHS,
+        _TOPLANTI_LEAVES,
+        _hour_slice,
+        _hour_table_frame,
+        _hour_width,
+    )
+
+    arama = sum(_HOUR_COL_WIDTHS[leaf] for leaf in _ARAMA_LEAVES)
+    toplanti = sum(_HOUR_COL_WIDTHS[leaf] for leaf in _TOPLANTI_LEAVES)
+    assert arama <= 1200
+    assert toplanti <= 800
+    assert max(arama, toplanti) < sum(_HOUR_COL_WIDTHS.values())
+    rows = [
+        {
+            "saat": 9,
+            "arama": 1,
+            "ulasilan": 1,
+            "donus": 0,
+            "gelen": 0,
+            "ulasma_orani": 10.0,
+            "lead_payda": 1,
+            "lead_pay": 1,
+            "sure_ort": 60.0,
+            "sure_tipik": 60.0,
+            "sure_toplam": 60.0,
+            "randevu": 1,
+            "katildi": 1,
+            "katilmadi": 0,
+            "iptal_edildi": 0,
+            "sonuc_girilmedi": 0,
+            "toplanti_dk": 30.0,
+        }
+    ]
+    frame = _hour_table_frame(rows, date(2026, 9, 18))
+    arama_frame = _hour_slice(frame, _ARAMA_LEAVES)
+    toplanti_frame = _hour_slice(frame, _TOPLANTI_LEAVES)
+    assert _hour_width(arama_frame) == arama
+    assert _hour_width(toplanti_frame) == toplanti
+    assert "toplantı" not in {
+        col[-1] if isinstance(col, tuple) else str(col) for col in arama_frame.columns
+    }
+    assert "giden arama" not in {
+        col[-1] if isinstance(col, tuple) else str(col)
+        for col in toplanti_frame.columns
+    }
+
+
 def test_hour_table_height_fits_every_row() -> None:
     from app.panel import _HOUR_HEADER_ROWS, _HOUR_ROW_PX, hour_table_height
 
