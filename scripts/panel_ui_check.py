@@ -286,6 +286,15 @@ def _assert_common(at: Any, *, admin: bool) -> list[str]:
         cols = _leaf_names(hour_df)
         if "randevu" in cols and "toplantı" not in cols:
             errors.append("saatlik tabloda randevu basligi duruyor, toplantı olmali")
+        hour_blob = str(hour_df)
+        if any(mark in hour_blob for mark in ("↑", "↓", " · ekip ")):
+            errors.append("saatlik tabloda kiyas gostergesi duruyor")
+    if "kıyas son 90 günün hafta içi aynı saatine göre" in captions:
+        errors.append("saatlik kiyas caption duruyor")
+    if any("kıyas geçmiş cumartesi" in c for c in captions):
+        errors.append("cumartesi kiyas caption duruyor")
+    if "kıyas — veri yetersiz" in captions:
+        errors.append("saatlik kiyas veri yetersiz caption duruyor")
     return errors
 
 

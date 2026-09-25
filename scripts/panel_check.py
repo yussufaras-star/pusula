@@ -475,6 +475,60 @@ def main() -> int:
             print(f"    {key}: satir_toplam={row_sum} gun_toplami={tot} {mark}")
         return total if ok else {}
 
+    def _leaf_val(series: object, leaf: str) -> str:
+        index = getattr(series, "index", ())
+        for col in index:
+            name = col[-1] if isinstance(col, tuple) else col
+            if name == leaf:
+                return str(series[col])  # type: ignore[index]
+        return ""
+
+    def _print_hour_display(label: str, rows: list[dict[str, Any]], probe_day: date) -> bool:
+        from app.panel import _hour_table_frame
+
+        frame = _hour_table_frame(rows, probe_day)
+        blob = frame.to_string()
+        print(f"saatlik tablo ekran ({label}):")
+        print(blob)
+        ok = True
+        if any(mark in blob for mark in ("↑", "↓", " · ekip ")):
+            print("  HATA: hucrede ok veya ekip ikincil deger var")
+            ok = False
+        else:
+            print("  hucrelerde ok ve ikincil deger yok")
+        ham = sum_hour_rows(rows)
+        last = frame.iloc[-1]
+        shown = {
+            "arama": _leaf_val(last, "giden arama"),
+            "ulasilan": _leaf_val(last, "ulaşılan görüşme"),
+            "donus": _leaf_val(last, "dönüş araması"),
+            "gelen": _leaf_val(last, "gelen arama"),
+            "randevu": _leaf_val(last, "toplantı"),
+            "katildi": _leaf_val(last, "katıldı"),
+            "sonuc_girilmedi": _leaf_val(last, "sonuç girilmedi"),
+        }
+        print(
+            f"  gun toplami ham arama={ham['arama']} ulasilan={ham['ulasilan']} "
+            f"donus={ham['donus']} gelen={ham['gelen']} "
+            f"randevu={ham['randevu']} katildi={ham['katildi']} "
+            f"sonuc_girilmedi={ham['sonuc_girilmedi']}"
+        )
+        print(
+            "  gun toplami ekran "
+            f"arama={shown['arama']} ulasilan={shown['ulasilan']} "
+            f"donus={shown['donus']} gelen={shown['gelen']} "
+            f"randevu={shown['randevu']} katildi={shown['katildi']} "
+            f"sonuc_girilmedi={shown['sonuc_girilmedi']}"
+        )
+        for key in ("arama", "ulasilan", "donus", "gelen", "randevu", "katildi", "sonuc_girilmedi"):
+            left = str(ham.get(key) if ham.get(key) is not None else "—")
+            right = shown[key]
+            mark = "ok" if left == right else "HATA"
+            if left != right:
+                ok = False
+            print(f"    {key}: onceki_ham={left} sonra_ekran={right} {mark}")
+        return ok
+
     def _compare_before_after(
         owner: str | None, label: str, probe_day: date
     ) -> bool:
@@ -525,6 +579,15 @@ def main() -> int:
         return 1
     if tuple(int(r["saat"]) for r in fri_rows) != tuple(range(9, 18)):
         print("hata: cuma tablo saatleri 09-18 (9-17) degil")
+        return 1
+    display_ok = _print_hour_display(
+        f"ekip cuma {friday.isoformat()}", fri_rows, friday
+    )
+    display_ok = _print_hour_display(
+        f"ekip cumartesi {sat.isoformat()}", sat_rows, sat
+    ) and display_ok
+    if not display_ok:
+        print("hata: saatlik tablo ekraninda kiyas gostergesi duruyor")
         return 1
     fri_total = sum_hour_rows(fri_rows)
     sat_total = sum_hour_rows(sat_rows)

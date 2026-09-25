@@ -82,7 +82,6 @@ from pusula.panel_data import (
     load_reps,
     mean,
     path_take_rate,
-    per_person_metrics,
     rate_cell,
     rep_snapshot,
     sales_cycle,
@@ -221,8 +220,6 @@ HELP_SOURCE = (
 )
 HELP_BUGUN = (
     "Seçilen günün saatlik dökümü. Her satır bir saat. "
-    "Kıyas, aynı saatin son 90 gündeki günlük ortalamasına göre. "
-    "Cumartesi yalnız geçmiş cumartesilerle kıyaslanır. "
     "Payda 5'in altındaysa oran yerine veri yetersiz."
 )
 HELP_CIRO = (
@@ -526,6 +523,7 @@ def _today_hours_team(day: str) -> list[dict[str, Any]]:
 
 @st.cache_data(ttl=CACHE_TTL)
 def _hour_history(rep_id: str | None, day: str) -> dict[int, dict[str, Any]]:
+    """90 gün saat kıyası. Saatlik tablo göstermez; hesap durur."""
     return hour_history(rep_id, date.fromisoformat(day))
 
 
@@ -794,18 +792,6 @@ def _delta_markup(cur: float | None, prev: float | None) -> str:
     return f":red[↓ {abs(diff):.1f}]"
 
 
-def _plain_delta(cur: float | None, prev: float | None) -> str:
-    """Saat tablosu kıyası. Dataframe markdown işlemez."""
-    if cur is None or prev is None:
-        return ""
-    diff = float(cur) - float(prev)
-    if abs(diff) < 0.05:
-        return " → 0"
-    if diff > 0:
-        return f" ↑ {diff:.1f}"
-    return f" ↓ {abs(diff):.1f}"
-
-
 def _stat_row(items: list[dict[str, Any]]) -> None:
     """Karsilastirmasiz metrikler; ayni 4 kolon ızgarasi."""
     cols = st.columns(4)
@@ -842,91 +828,32 @@ def _fmt_event_ts(value: datetime | None) -> str:
     return dt.astimezone(_TZ).strftime("%d.%m.%Y %H:%M")
 
 
-def _hour_done(saat: int, day: date) -> bool:
-    """Saat dilimi [saat, saat+1) bitti mi."""
-    now = datetime.now(_TZ)
-    if day < now.date():
-        return True
-    if day > now.date():
-        return False
-    return now.hour > saat
-
-
-def _count_cell(
-    cur: Any,
-    prev: Any,
-    *,
-    badges: bool,
-    team: Any = None,
-    show_team: bool = False,
-) -> str:
-    shown = fmt_num(cur)
-    if badges:
-        delta = _plain_delta(
-            float(cur) if isinstance(cur, (int, float)) else None,
-            float(prev) if isinstance(prev, (int, float)) else None,
-        )
-        if delta:
-            shown = f"{shown}{delta}"
-    if show_team:
-        shown = f"{shown} · ekip {fmt_num(team)}"
-    return shown
+def _count_cell(cur: Any) -> str:
+    return fmt_num(cur)
 
 
 def _rate_cell_text(
     row: dict[str, Any],
-    avg: dict[str, Any],
     *,
     key: str,
     payda_key: str,
-    badges: bool,
-    team: dict[str, Any] | None,
 ) -> str:
     cell = rate_cell(row.get(key), row.get(payda_key))
     if cell == "veri yetersiz":
-        shown = "veri yetersiz"
-    else:
-        shown = cell
-        if badges:
-            delta = _plain_delta(row.get(key), avg.get(key))
-            if delta:
-                shown = f"{shown}{delta}"
-    if team is not None:
-        team_cell = rate_cell(team.get(key), team.get(payda_key))
-        if team_cell == "veri yetersiz":
-            shown = f"{shown} · ekip veri yetersiz"
-        else:
-            shown = f"{shown} · ekip {team_cell}"
-    return shown
+        return "veri yetersiz"
+    return cell
 
 
-def _sure_cell_text(
-    row: dict[str, Any],
-    avg: dict[str, Any],
-    *,
-    badges: bool,
-    team: dict[str, Any] | None,
-) -> str:
+def _sure_cell_text(row: dict[str, Any]) -> str:
     pair = _fmt_ortalama_tipik(row.get("sure_ort"), row.get("sure_tipik"))
     toplam = row.get("sure_toplam")
     if pair is None and toplam is None:
-        shown = "veri yetersiz"
-    elif pair is None:
-        shown = f"toplam {fmt_duration(toplam)}"
-    else:
-        shown = pair
-        if toplam is not None:
-            shown = f"{shown} (toplam {fmt_duration(toplam)})"
-        if badges:
-            delta = _plain_delta(row.get("sure_ort"), avg.get("sure_ort"))
-            if delta:
-                shown = f"{shown}{delta}"
-    if team is not None:
-        t_pair = _fmt_ortalama_tipik(team.get("sure_ort"), team.get("sure_tipik"))
-        if t_pair is not None:
-            shown = f"{shown} · ekip {t_pair}"
-        else:
-            shown = f"{shown} · ekip veri yetersiz"
+        return "veri yetersiz"
+    if pair is None:
+        return f"toplam {fmt_duration(toplam)}"
+    shown = pair
+    if toplam is not None:
+        shown = f"{shown} (toplam {fmt_duration(toplam)})"
     return shown
 
 
@@ -959,20 +886,13 @@ def _hour_display_row(
 
 def _hour_table_frame(
     rows: list[dict[str, Any]],
-    hist: dict[int, dict[str, Any]],
     day: date,
-    *,
-    team_hours: dict[int, dict[str, Any]] | None,
-    badge_ok: bool,
 ) -> pd.DataFrame:
+    """Saatlik tablo. Hücrede yalnız o saatin değeri; kıyas gösterilmez."""
     records: list[dict[str, Any]] = []
     now = datetime.now(_TZ)
     for row in rows:
         saat = int(row["saat"])
-        avg = hist.get(saat) or {}
-        team = None if team_hours is None else team_hours.get(saat)
-        show_team = team is not None
-        badges = badge_ok and _hour_done(saat, day)
         future = day == now.date() and now.hour < saat
         label = f"{saat:02d}:00"
         if future:
@@ -994,101 +914,34 @@ def _hour_table_frame(
         records.append(
             _hour_display_row(
                 saat=label,
-                giden=_count_cell(
-                    row.get("arama"), avg.get("arama"),
-                    badges=badges, team=None if team is None else team.get("arama"),
-                    show_team=show_team,
-                ),
-                ulasilan=_count_cell(
-                    row.get("ulasilan"), avg.get("ulasilan"),
-                    badges=badges, team=None if team is None else team.get("ulasilan"),
-                    show_team=show_team,
-                ),
-                donus=_count_cell(
-                    row.get("donus"), avg.get("donus"),
-                    badges=badges, team=None if team is None else team.get("donus"),
-                    show_team=show_team,
-                ),
-                gelen=_count_cell(
-                    row.get("gelen"), avg.get("gelen"),
-                    badges=badges, team=None if team is None else team.get("gelen"),
-                    show_team=show_team,
-                ),
+                giden=_count_cell(row.get("arama")),
+                ulasilan=_count_cell(row.get("ulasilan")),
+                donus=_count_cell(row.get("donus")),
+                gelen=_count_cell(row.get("gelen")),
                 ulasma=_rate_cell_text(
-                    row, avg, key="ulasma_orani", payda_key="lead_payda",
-                    badges=badges, team=team,
+                    row, key="ulasma_orani", payda_key="lead_payda",
                 ),
-                sure=_sure_cell_text(
-                    row, avg, badges=badges, team=team,
-                ),
-                toplanti=_count_cell(
-                    row.get("randevu"), avg.get("randevu"),
-                    badges=badges, team=None if team is None else team.get("randevu"),
-                    show_team=show_team,
-                ),
-                katildi=_count_cell(
-                    row.get("katildi"), avg.get("katildi"),
-                    badges=badges, team=None if team is None else team.get("katildi"),
-                    show_team=show_team,
-                ),
-                sonuc=_count_cell(
-                    row.get("sonuc_girilmedi"), avg.get("sonuc_girilmedi"),
-                    badges=badges,
-                    team=None if team is None else team.get("sonuc_girilmedi"),
-                    show_team=show_team,
-                ),
+                sure=_sure_cell_text(row),
+                toplanti=_count_cell(row.get("randevu")),
+                katildi=_count_cell(row.get("katildi")),
+                sonuc=_count_cell(row.get("sonuc_girilmedi")),
             )
         )
     total = sum_hour_rows(rows)
-    empty_avg: dict[str, Any] = {}
-    team_total = None
-    if team_hours:
-        team_total = sum_hour_rows(list(team_hours.values()))
     records.append(
         _hour_display_row(
             saat="gün toplamı",
-            giden=_count_cell(
-                total.get("arama"), None, badges=False,
-                team=None if team_total is None else team_total.get("arama"),
-                show_team=team_total is not None,
-            ),
-            ulasilan=_count_cell(
-                total.get("ulasilan"), None, badges=False,
-                team=None if team_total is None else team_total.get("ulasilan"),
-                show_team=team_total is not None,
-            ),
-            donus=_count_cell(
-                total.get("donus"), None, badges=False,
-                team=None if team_total is None else team_total.get("donus"),
-                show_team=team_total is not None,
-            ),
-            gelen=_count_cell(
-                total.get("gelen"), None, badges=False,
-                team=None if team_total is None else team_total.get("gelen"),
-                show_team=team_total is not None,
-            ),
+            giden=_count_cell(total.get("arama")),
+            ulasilan=_count_cell(total.get("ulasilan")),
+            donus=_count_cell(total.get("donus")),
+            gelen=_count_cell(total.get("gelen")),
             ulasma=_rate_cell_text(
-                total, empty_avg, key="ulasma_orani", payda_key="lead_payda",
-                badges=False, team=team_total,
+                total, key="ulasma_orani", payda_key="lead_payda",
             ),
-            sure=_sure_cell_text(
-                total, empty_avg, badges=False, team=team_total,
-            ),
-            toplanti=_count_cell(
-                total.get("randevu"), None, badges=False,
-                team=None if team_total is None else team_total.get("randevu"),
-                show_team=team_total is not None,
-            ),
-            katildi=_count_cell(
-                total.get("katildi"), None, badges=False,
-                team=None if team_total is None else team_total.get("katildi"),
-                show_team=team_total is not None,
-            ),
-            sonuc=_count_cell(
-                total.get("sonuc_girilmedi"), None, badges=False,
-                team=None if team_total is None else team_total.get("sonuc_girilmedi"),
-                show_team=team_total is not None,
-            ),
+            sure=_sure_cell_text(total),
+            toplanti=_count_cell(total.get("randevu")),
+            katildi=_count_cell(total.get("katildi")),
+            sonuc=_count_cell(total.get("sonuc_girilmedi")),
         )
     )
     return _with_hour_groups(pd.DataFrame(records))
@@ -1101,6 +954,7 @@ def _render_bugun(
     with_team: bool = False,
     scope: str = "gun",
 ) -> None:
+    del with_team
     del scope
     hours = display_hours(day)
     _heading(f"Bugün - {fmt_day(day)}", HELP_BUGUN)
@@ -1108,36 +962,11 @@ def _render_bugun(
         st.caption("pazar mesai yok")
         return
     hour_rows = _today_hours(rep_id, day.isoformat())
-    hist = _hour_history(rep_id, day.isoformat())
-    hist_n = 0
-    if hist:
-        hist_n = int(next(iter(hist.values())).get("hist_n") or 0)
-    badge_ok = True
     if day.weekday() == 5:
-        badge_ok = hist_n >= 4
         st.caption("saatler 09:00-15:00 · doluluk 6 saat üzerinden")
-        if not badge_ok:
-            st.caption("kıyas — veri yetersiz")
-        else:
-            st.caption("kıyas geçmiş cumartesilerin aynı saatine göre")
     else:
         st.caption("saatler 09:00-18:00 · doluluk 9 saat üzerinden")
-        st.caption("kıyas son 90 günün hafta içi aynı saatine göre")
-    team_hours_map: dict[int, dict[str, Any]] | None = None
-    n_team = max(len(SALES_TEAM_IDS), 1)
-    if with_team and rep_id is not None:
-        team_hours_map = {}
-        for row in _today_hours_team(day.isoformat()):
-            team_hours_map[int(row["saat"])] = per_person_metrics(
-                dict(row), n_team
-            )
-    frame = _hour_table_frame(
-        hour_rows,
-        hist,
-        day,
-        team_hours=team_hours_map,
-        badge_ok=badge_ok,
-    )
+    frame = _hour_table_frame(hour_rows, day)
     _table(frame)
 
 

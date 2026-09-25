@@ -170,6 +170,48 @@ def test_sum_hour_rows_counts_and_pooled_rates() -> None:
     assert total["sonuc_girilmedi"] == 0
 
 
+def test_hour_table_frame_has_no_compare_marks() -> None:
+    from app.panel import _hour_table_frame
+
+    rows = [
+        {
+            "saat": 10,
+            "arama": 5,
+            "ulasilan": 2,
+            "donus": 1,
+            "gelen": 0,
+            "ulasma_orani": 40.0,
+            "lead_payda": 10,
+            "lead_pay": 4,
+            "sure_ort": 90.0,
+            "sure_tipik": 80.0,
+            "sure_toplam": 180.0,
+            "randevu": 1,
+            "katildi": 1,
+            "sonuc_girilmedi": 0,
+        }
+    ]
+    ham = sum_hour_rows(rows)
+    frame = _hour_table_frame(rows, date(2026, 9, 18))
+    blob = frame.to_string()
+    assert "↑" not in blob
+    assert "↓" not in blob
+    assert "ekip" not in blob.lower()
+    last = frame.iloc[-1]
+    leaves = {
+        (col[-1] if isinstance(col, tuple) else str(col)): last[col]
+        for col in last.index
+    }
+    assert leaves["saat"] == "gün toplamı"
+    assert str(leaves["giden arama"]) == str(ham["arama"])
+    assert str(leaves["ulaşılan görüşme"]) == str(ham["ulasilan"])
+    assert str(leaves["dönüş araması"]) == str(ham["donus"])
+    assert str(leaves["gelen arama"]) == str(ham["gelen"])
+    assert str(leaves["toplantı"]) == str(ham["randevu"])
+    assert str(leaves["katıldı"]) == str(ham["katildi"])
+    assert str(leaves["sonuç girilmedi"]) == str(ham["sonuc_girilmedi"])
+
+
 def test_hour_col_groups_arama_toplanti() -> None:
     from app.panel import HOUR_COL_GROUPS
 
