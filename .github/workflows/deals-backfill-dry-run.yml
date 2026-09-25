@@ -1,0 +1,40 @@
+# Tek seferlik 2025 deals dry-run. ingest.yml / block-ingest.yml değişmez.
+# --apply bu işte yok.
+name: deals-2025-backfill-dry-run
+
+on:
+  push:
+    branches: [cursor/deals-2025-backfill-343a]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUNBUFFERED: "1"
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  DATABASE_URL_POOLED: ${{ secrets.DATABASE_URL_POOLED }}
+  ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
+  ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
+  ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
+  ZOHO_ACCOUNTS_DOMAIN: ${{ secrets.ZOHO_ACCOUNTS_DOMAIN }}
+  ZOHO_API_DOMAIN: ${{ secrets.ZOHO_API_DOMAIN }}
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Bağımlılıkları kur
+        run: python -m pip install -r requirements.txt
+      - name: Deals 2025 dry-run
+        run: >
+          python scripts/ingest_sales_cycle.py
+          --deals-only
+          --backfill-from 2025-09-01
+          --until 2025-12-31
