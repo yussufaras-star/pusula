@@ -357,6 +357,7 @@ def _apply_secrets() -> None:
     _apply_secret_key("DATABASE_URL_POOLED")
     _apply_secret_key("CLIQ_WEBHOOK_URL")
     _apply_secret_key("PUSULA_SHADOW_EMAIL")
+    _apply_secret_key("GITHUB_DISPATCH_TOKEN")
 
 
 def _passwords() -> dict[str, str]:
@@ -521,7 +522,12 @@ hr {
 [data-testid="stRadio"] [data-baseweb="radio"]:has(input:checked) {
   background: #1A1F26;
   border-color: #1A1F26;
-  color: #F3F0E8;
+}
+[data-testid="stRadio"] [data-baseweb="radio"]:has(input:checked),
+[data-testid="stRadio"] [data-baseweb="radio"]:has(input:checked) p,
+[data-testid="stRadio"] [data-baseweb="radio"]:has(input:checked) span,
+[data-testid="stRadio"] [data-baseweb="radio"]:has(input:checked) [data-testid="stMarkdownContainer"] {
+  color: #F3F0E8 !important;
 }
 </style>
 """
@@ -1033,7 +1039,32 @@ def _stat_row(items: list[dict[str, Any]]) -> None:
             )
 
 
-def _render_status_bar() -> None:
+def _render_refresh(user: AuthUser) -> None:
+    """Yönetici. Saatlik işe dokunmaz; günlük ingest akışını başlatır."""
+    if user.role != "admin":
+        return
+    from pusula.panel_dispatch import DispatchError, dispatch_ingest
+
+    if st.button("Güncelle", key="manual_ingest"):
+        token = os.environ.get("GITHUB_DISPATCH_TOKEN", "").strip()
+        if not token:
+            st.session_state["ingest_note"] = "güncelleme yapılandırması yok"
+        else:
+            try:
+                dispatch_ingest(token)
+            except DispatchError as exc:
+                st.session_state["ingest_note"] = str(exc)
+            else:
+                st.cache_data.clear()
+                st.session_state["ingest_note"] = (
+                    "güncelleme başladı. bitince sayfayı yenile"
+                )
+    note = st.session_state.get("ingest_note")
+    if note:
+        st.caption(str(note))
+
+
+def _render_status_bar(user: AuthUser) -> None:
     from pusula.panel_status import (
         format_block_line,
         format_impact_line,
@@ -1042,12 +1073,15 @@ def _render_status_bar() -> None:
     )
 
     ready = load_panel_readiness()
-    with st.container():
+    text_col, button_col = st.columns([6, 1])
+    with text_col:
         st.caption(format_block_line(ready))
         st.caption(format_source_line(ready), help=HELP_TAZELIK)
         impact = format_impact_line(ready)
         if impact:
             st.caption(impact)
+    with button_col:
+        _render_refresh(user)
 
 
 def _fmt_event_ts(value: datetime | None) -> str:
@@ -2245,7 +2279,7 @@ def main() -> None:
     _require_env()
     with st.container():
         _render_header(user)
-        _render_status_bar()
+        _render_status_bar(user)
         window = all_data_window()
         block_day = _render_block_day()
         if user.role == "admin":
