@@ -391,16 +391,139 @@ def _store_user(user: AuthUser) -> None:
     st.session_state["auth_name"] = user.full_name
 
 
+_CHROME = """
+<style>
+@import url("https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap");
+html, body, [class*="css"] {
+  font-family: "Source Sans 3", "Segoe UI", sans-serif;
+}
+.stApp {
+  background: #F3F0E8;
+}
+.block-container {
+  padding-top: 1.6rem;
+  padding-bottom: 3.2rem;
+  max-width: 1240px;
+}
+header[data-testid="stHeader"] {
+  background: transparent;
+}
+#MainMenu, footer { visibility: hidden; }
+.pusula-kicker {
+  margin: 0;
+  color: #6A6258;
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.pusula-mark {
+  margin: 0.1rem 0 0.35rem;
+  color: #1A1F26;
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 2.6rem;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+h1, h2, h3, [data-testid="stHeading"] {
+  font-family: "Source Serif 4", Georgia, serif;
+  letter-spacing: -0.02em;
+  font-weight: 500;
+  color: #1A1F26;
+}
+[data-testid="stCaption"] {
+  color: #6A6258;
+}
+hr {
+  margin: 1.5rem 0;
+  border: none;
+  border-top: 1px solid #DDD6C8;
+}
+[data-testid="stMetric"] {
+  background: #FBFAF6;
+  border: 1px solid #DDD6C8;
+  border-radius: 14px;
+  padding: 0.85rem 1rem 0.7rem;
+}
+[data-testid="stMetricLabel"] {
+  color: #6A6258;
+  font-size: 0.78rem;
+}
+[data-testid="stMetricValue"] {
+  font-family: "Source Serif 4", Georgia, serif;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+[data-testid="stForm"], [data-testid="stExpander"] {
+  background: #FBFAF6;
+  border: 1px solid #DDD6C8;
+  border-radius: 16px;
+}
+.stTabs [data-baseweb="tab-list"] {
+  gap: 1.25rem;
+  border-bottom: 1px solid #DDD6C8;
+}
+.stTabs [data-baseweb="tab"] {
+  background: transparent;
+  color: #6A6258;
+  font-weight: 600;
+  padding-left: 0;
+  padding-right: 0;
+}
+.stTabs [aria-selected="true"] {
+  color: #1A1F26;
+}
+.stButton > button, .stFormSubmitButton > button {
+  border-radius: 999px;
+  border: 1px solid #1A1F26;
+  background: #1A1F26;
+  color: #F3F0E8;
+  font-weight: 600;
+}
+.stButton > button:hover, .stFormSubmitButton > button:hover {
+  border-color: #1B365D;
+  background: #1B365D;
+  color: #F3F0E8;
+}
+[data-testid="stDataFrame"] {
+  border: 1px solid #DDD6C8;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #FBFAF6;
+}
+[data-testid="stSelectbox"] label, [data-testid="stDateInput"] label {
+  color: #6A6258;
+  font-size: 0.78rem;
+}
+</style>
+"""
+
+
+def _apply_chrome() -> None:
+    """Sayfa kabuğu. Metrik ve bölüm sırasına dokunmaz."""
+    st.markdown(_CHROME, unsafe_allow_html=True)
+
+
+def _mark() -> None:
+    st.markdown(
+        '<p class="pusula-kicker">Rexven satış operasyonu</p>'
+        '<p class="pusula-mark">Pusula</p>',
+        unsafe_allow_html=True,
+    )
+
+
 def _render_login() -> None:
     if _session_user() is not None:
         return
-    st.title("Pusula")
-    if not _passwords():
-        st.error("giriş yapılandırması yok")
-    with st.form("login"):
-        email = st.text_input("Kullanıcı adı")
-        password = st.text_input("Şifre", type="password")
-        submitted = st.form_submit_button("Giriş")
+    _, mid, _ = st.columns([1, 1.15, 1])
+    with mid:
+        _mark()
+        if not _passwords():
+            st.error("giriş yapılandırması yok")
+        with st.form("login"):
+            email = st.text_input("Kullanıcı adı")
+            password = st.text_input("Şifre", type="password")
+            submitted = st.form_submit_button("Giriş")
     if not submitted:
         return
     passwords = _passwords()
@@ -423,7 +546,7 @@ def _render_login() -> None:
 def _render_header(user: AuthUser) -> None:
     left, right = st.columns([6, 1])
     with left:
-        st.title("Pusula")
+        _mark()
     with right:
         st.caption(user.email)
         if st.button("Çıkış", use_container_width=True):
@@ -1183,14 +1306,36 @@ def _line_chart(
     x_label = x_title if x_title is not None else x_col
     chart = (
         alt.Chart(data)
-        .mark_line(point=True, invalid="break-paths-show-domains")
+        .mark_line(
+            point=alt.OverlayMarkDef(filled=True, size=40),
+            strokeWidth=2,
+            interpolate="monotone",
+            invalid="break-paths-show-domains",
+        )
         .encode(
             x=alt.X(f"{x_col}:T", title=x_label),
             y=y_enc,
-            color=alt.Color("seri:N", title=""),
+            color=alt.Color(
+                "seri:N",
+                title="",
+                scale=alt.Scale(
+                    range=["#1B365D", "#8A6232", "#3E5C4E", "#6B6258"]
+                ),
+            ),
             tooltip=[f"{x_col}:T", "seri:N", y_col],
         )
-        .properties(height=240)
+        .properties(height=220, background="transparent")
+        .configure_view(strokeWidth=0)
+        .configure_axis(
+            grid=False,
+            domain=False,
+            tickColor="#C9C2B4",
+            labelColor="#5E6670",
+            titleColor="#5E6670",
+            labelFontSize=12,
+            titleFontSize=12,
+        )
+        .configure_legend(orient="top", labelColor="#1A1F26", symbolType="circle")
     )
     st.altair_chart(chart, use_container_width=True)
 
@@ -1996,6 +2141,7 @@ def render_temsilci(
 
 def main() -> None:
     st.set_page_config(page_title="Pusula", page_icon="P", layout="wide")
+    _apply_chrome()
     _apply_secrets()
     user = _session_user()
     if user is None:
