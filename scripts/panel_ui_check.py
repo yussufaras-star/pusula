@@ -292,16 +292,19 @@ def _hour_frame(at: Any) -> Any | None:
     return None
 
 
-def _report_radio(at: Any) -> Any | None:
+def _report_radio(at: Any, *, admin: bool) -> Any | None:
+    """Yönetici ve temsilci sekmeleri birlikte çizilirse doğru seçiciyi al."""
+    wanted = list(_YON_REPORTS if admin else _TEM_REPORTS)
     radios = [r for r in at.radio if str(getattr(r, "label", "")) == "Rapor"]
-    if len(radios) != 1:
-        return None
-    return radios[0]
+    for radio in radios:
+        if [str(opt) for opt in radio.options] == wanted:
+            return radio
+    return None
 
 
-def _select_report(at: Any, name: str) -> str | None:
+def _select_report(at: Any, name: str, *, admin: bool) -> str | None:
     """Rapor seç ve yeniden çalıştır. Hata metni ya da None."""
-    radio = _report_radio(at)
+    radio = _report_radio(at, admin=admin)
     if radio is None:
         return "Rapor secici yok"
     options = [str(opt) for opt in radio.options]
@@ -309,7 +312,7 @@ def _select_report(at: Any, name: str) -> str | None:
         return f"rapor yok: {name} secenek={options}"
     radio.set_value(name)
     at.run()
-    radio = _report_radio(at)
+    radio = _report_radio(at, admin=admin)
     if radio is None or str(radio.value) != name:
         got = None if radio is None else radio.value
         return f"rapor secilemedi: {name} kalan={got}"
@@ -341,7 +344,7 @@ def _assert_common(at: Any, *, admin: bool) -> list[str]:
         errors.append(f"saatlik subheader {sub}")
     if any(s == "Ciro" for s in sub):
         errors.append(f"varsayilan raporda Ciro acik: {sub}")
-    radio = _report_radio(at)
+    radio = _report_radio(at, admin=admin)
     expected = list(_YON_REPORTS if admin else _TEM_REPORTS)
     if radio is None:
         errors.append(f"Rapor secici yok: {radio_labels}")
@@ -426,7 +429,7 @@ def main() -> int:
         labels = [s.label for s in at_rep.selectbox]
         errors.append(f"temsilcide bugun selectbox var: {labels}")
 
-    err = _select_report(at_rep, "Günlük özet")
+    err = _select_report(at_rep, "Günlük özet", admin=False)
     if err:
         errors.append(err)
     else:
@@ -445,7 +448,7 @@ def main() -> int:
             labels = [s.label for s in at_rep.selectbox]
             errors.append(f"temsilcide selectbox var: {labels}")
 
-    err = _select_report(at_rep, "Ciro")
+    err = _select_report(at_rep, "Ciro", admin=False)
     if err:
         errors.append(err)
     else:
@@ -492,7 +495,7 @@ def main() -> int:
     if "1 Mayıs 2026" not in help_blob and "1 Mayis 2026" not in help_blob:
         errors.append("tazelik (?) balonunda 1 Mayis yok")
 
-    err = _select_report(at_admin, "Ekip")
+    err = _select_report(at_admin, "Ekip", admin=True)
     if err:
         errors.append(err)
     else:
@@ -500,7 +503,7 @@ def main() -> int:
         if "ekip doluluk oranı" not in _all_text(at_admin):
             errors.append("yoneticide ekip doluluk orani yok")
 
-    err = _select_report(at_admin, "İş yükü")
+    err = _select_report(at_admin, "İş yükü", admin=True)
     if err:
         errors.append(err)
     else:
@@ -513,7 +516,7 @@ def main() -> int:
         if "ölçülen" not in admin_blob or "varsayım" not in admin_blob:
             errors.append("yoneticide olculen/varsayim ayrimi yok")
 
-    err = _select_report(at_admin, "Huni")
+    err = _select_report(at_admin, "Huni", admin=True)
     if err:
         errors.append(err)
     else:
@@ -521,7 +524,7 @@ def main() -> int:
         if "Ekip toplamı" not in _all_text(at_admin):
             errors.append("yoneticide ekip toplami yok")
 
-    err = _select_report(at_admin, "Ciro")
+    err = _select_report(at_admin, "Ciro", admin=True)
     if err:
         errors.append(err)
     else:
@@ -600,7 +603,7 @@ def main() -> int:
         box = at_admin.selectbox[0]
         if len(box.options) > 1:
             box.select_index(1)
-            radio = _report_radio(at_admin)
+            radio = _report_radio(at_admin, admin=True)
             if radio is not None:
                 radio.set_value("Ekip")
             at_admin.run()
@@ -608,7 +611,7 @@ def main() -> int:
             if "ekip " not in _all_text(at_admin):
                 errors.append("yonetici temsilci seciminde ekip yok")
 
-    err = _select_report(at_admin, "Bugün")
+    err = _select_report(at_admin, "Bugün", admin=True)
     if err:
         errors.append(err)
 
