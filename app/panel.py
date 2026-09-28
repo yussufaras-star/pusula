@@ -391,16 +391,167 @@ def _store_user(user: AuthUser) -> None:
     st.session_state["auth_name"] = user.full_name
 
 
+_CHROME = """
+<style>
+@import url("https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap");
+html, body, [class*="css"] {
+  font-family: "Source Sans 3", "Segoe UI", sans-serif;
+}
+.stApp {
+  background: #F3F0E8;
+}
+.block-container {
+  padding-top: 1.6rem;
+  padding-bottom: 3.2rem;
+  max-width: 1240px;
+}
+header[data-testid="stHeader"] {
+  background: transparent;
+}
+#MainMenu, footer { visibility: hidden; }
+.pusula-kicker {
+  margin: 0;
+  color: #6A6258;
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.pusula-mark {
+  margin: 0.1rem 0 0.35rem;
+  color: #1A1F26;
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 2.6rem;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+h1, h2, h3, [data-testid="stHeading"] {
+  font-family: "Source Serif 4", Georgia, serif;
+  letter-spacing: -0.02em;
+  font-weight: 500;
+  color: #1A1F26;
+}
+[data-testid="stCaption"] {
+  color: #6A6258;
+}
+hr {
+  margin: 1.5rem 0;
+  border: none;
+  border-top: 1px solid #DDD6C8;
+}
+[data-testid="stMetric"] {
+  background: #FBFAF6;
+  border: 1px solid #DDD6C8;
+  border-radius: 14px;
+  padding: 0.85rem 1rem 0.7rem;
+}
+[data-testid="stMetricLabel"] {
+  color: #6A6258;
+  font-size: 0.78rem;
+}
+[data-testid="stMetricValue"] {
+  font-family: "Source Serif 4", Georgia, serif;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+[data-testid="stForm"], [data-testid="stExpander"] {
+  background: #FBFAF6;
+  border: 1px solid #DDD6C8;
+  border-radius: 16px;
+}
+.stTabs [data-baseweb="tab-list"] {
+  gap: 1.25rem;
+  border-bottom: 1px solid #DDD6C8;
+}
+.stTabs [data-baseweb="tab"] {
+  background: transparent;
+  color: #6A6258;
+  font-weight: 600;
+  padding-left: 0;
+  padding-right: 0;
+}
+.stTabs [aria-selected="true"] {
+  color: #1A1F26;
+}
+.stButton > button, .stFormSubmitButton > button {
+  border-radius: 999px;
+  border: 1px solid #1A1F26;
+  background: #1A1F26;
+  color: #F3F0E8;
+  font-weight: 600;
+}
+.stButton > button:hover, .stFormSubmitButton > button:hover {
+  border-color: #1B365D;
+  background: #1B365D;
+  color: #F3F0E8;
+}
+[data-testid="stDataFrame"] {
+  border: 1px solid #DDD6C8;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #FBFAF6;
+}
+[data-testid="stSelectbox"] label, [data-testid="stDateInput"] label {
+  color: #6A6258;
+  font-size: 0.78rem;
+}
+[data-testid="stRadio"] [role="radiogroup"] {
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+[data-testid="stRadio"] [data-baseweb="radio"] {
+  position: relative;
+  background: transparent;
+  border: 1px solid #DDD6C8;
+  border-radius: 999px;
+  padding: 0.28rem 0.9rem;
+  margin: 0;
+  color: #1A1F26;
+}
+[data-testid="stRadio"] [data-baseweb="radio"] > div:first-child,
+[data-testid="stRadio"] [data-baseweb="radio"] input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+[data-testid="stRadio"] [data-baseweb="radio"]:has(input:checked) {
+  background: #1A1F26;
+  border-color: #1A1F26;
+  color: #F3F0E8;
+}
+</style>
+"""
+
+
+def _apply_chrome() -> None:
+    """Sayfa kabuğu. Metrik ve bölüm sırasına dokunmaz."""
+    st.markdown(_CHROME, unsafe_allow_html=True)
+
+
+def _mark() -> None:
+    st.markdown(
+        '<p class="pusula-kicker">Rexven satış operasyonu</p>'
+        '<p class="pusula-mark">Pusula</p>',
+        unsafe_allow_html=True,
+    )
+
+
 def _render_login() -> None:
     if _session_user() is not None:
         return
-    st.title("Pusula")
-    if not _passwords():
-        st.error("giriş yapılandırması yok")
-    with st.form("login"):
-        email = st.text_input("Kullanıcı adı")
-        password = st.text_input("Şifre", type="password")
-        submitted = st.form_submit_button("Giriş")
+    _, mid, _ = st.columns([1, 1.15, 1])
+    with mid:
+        _mark()
+        if not _passwords():
+            st.error("giriş yapılandırması yok")
+        with st.form("login"):
+            email = st.text_input("Kullanıcı adı")
+            password = st.text_input("Şifre", type="password")
+            submitted = st.form_submit_button("Giriş")
     if not submitted:
         return
     passwords = _passwords()
@@ -423,7 +574,7 @@ def _render_login() -> None:
 def _render_header(user: AuthUser) -> None:
     left, right = st.columns([6, 1])
     with left:
-        st.title("Pusula")
+        _mark()
     with right:
         st.caption(user.email)
         if st.button("Çıkış", use_container_width=True):
@@ -1183,14 +1334,36 @@ def _line_chart(
     x_label = x_title if x_title is not None else x_col
     chart = (
         alt.Chart(data)
-        .mark_line(point=True, invalid="break-paths-show-domains")
+        .mark_line(
+            point=alt.OverlayMarkDef(filled=True, size=40),
+            strokeWidth=2,
+            interpolate="monotone",
+            invalid="break-paths-show-domains",
+        )
         .encode(
             x=alt.X(f"{x_col}:T", title=x_label),
             y=y_enc,
-            color=alt.Color("seri:N", title=""),
+            color=alt.Color(
+                "seri:N",
+                title="",
+                scale=alt.Scale(
+                    range=["#1B365D", "#8A6232", "#3E5C4E", "#6B6258"]
+                ),
+            ),
             tooltip=[f"{x_col}:T", "seri:N", y_col],
         )
-        .properties(height=240)
+        .properties(height=220, background="transparent")
+        .configure_view(strokeWidth=0)
+        .configure_axis(
+            grid=False,
+            domain=False,
+            tickColor="#C9C2B4",
+            labelColor="#5E6670",
+            titleColor="#5E6670",
+            labelFontSize=12,
+            titleFontSize=12,
+        )
+        .configure_legend(orient="top", labelColor="#1A1F26", symbolType="circle")
     )
     st.altair_chart(chart, use_container_width=True)
 
@@ -1493,6 +1666,42 @@ def _render_profil(window: DateWindow) -> None:
             st.caption(" · ".join(card.get("kapsam") or []))
 
 
+_YON_REPORTS: tuple[str, ...] = (
+    "Bugün",
+    "Ekip",
+    "Ulaşma",
+    "İş yükü",
+    "Görüşme süresi",
+    "Satış döngüsü",
+    "Dönme oranı",
+    "Kaynak",
+    "Huni",
+    "Ciro",
+    "Profil",
+    "Haftalık",
+)
+_TEM_REPORTS: tuple[str, ...] = (
+    "Bugün",
+    "Günlük özet",
+    "Ulaşma",
+    "Ciro",
+    "Haftalık",
+)
+
+
+def _pick_report(options: tuple[str, ...], key: str) -> str:
+    """Rapor seçici. Detay hemen altında açılır, diğerleri çizilmez."""
+    choice = st.radio(
+        "Rapor",
+        options,
+        index=0,
+        horizontal=True,
+        label_visibility="collapsed",
+        key=key,
+    )
+    return str(choice)
+
+
 def render_yonetici(window: DateWindow, block_day: date) -> None:
     reps = _reps()
     options = [("tumu", "tümü")] + reps
@@ -1506,221 +1715,244 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
 
     start, end = _keys(window)
     conv = conv_window(window)
-    _render_bugun(
-        rep_id, block_day, with_team=rep_id is not None, scope="yon"
-    )
-    _render_block_share(block_day)
-
-    st.divider()
-    dip = _team_dip(start, end)
-    team_board = _board(
-        None, float(DEFAULT_ARAMA_PER_LEAD), float(DEFAULT_TOPLANTI_GUN)
-    )
-    with st.container(border=True):
-        _stat_row(
-            [
-                {
-                    "label": "ekip ulaşma oranı",
-                    "value": fmt_pct(dip.get("ulasma_orani")),
-                    "help": HELP_ULASMA,
-                },
-                {
-                    "label": "ekip katılım oranı",
-                    "value": fmt_pct(dip.get("katilim_orani")),
-                    "help": HELP_KATILIM,
-                },
-                {
-                    "label": "ekip dönüş araması",
-                    "value": fmt_num(dip.get("donus")),
-                    "help": HELP_DONUS,
-                },
-                {
-                    "label": "ekip gelen arama",
-                    "value": fmt_num(dip.get("gelen")),
-                    "help": HELP_GELEN,
-                },
-            ]
+    report = _pick_report(_YON_REPORTS, "yon_rapor")
+    if report == "Bugün":
+        _render_bugun(
+            rep_id, block_day, with_team=rep_id is not None, scope="yon"
         )
-        _stat_row(
-            [
-                {
-                    "label": "ekip doluluk oranı",
-                    "value": fmt_pct(team_board.get("doluluk")),
-                    "help": HELP_DOLULUK,
-                },
-            ]
-        )
+        _render_block_share(block_day)
+        return
 
-    _heading("Ulaşma oranı", HELP_ULASMA, window)
-    _show_reach_break(_reach_break(start, end, None, True), named=True)
-
-    _heading("Günlük iş yükü (kişi başı)", HELP_ISYUKU, default_window())
-    p1, p2 = st.columns(2)
-    arama_per_lead = p1.number_input(
-        "lead başına arama (plan)",
-        min_value=0.5,
-        max_value=20.0,
-        value=float(DEFAULT_ARAMA_PER_LEAD),
-        step=0.5,
-    )
-    toplanti_gun = p2.number_input(
-        "günde gerçekleşen toplantı (plan)",
-        min_value=0.0,
-        max_value=20.0,
-        value=float(DEFAULT_TOPLANTI_GUN),
-        step=0.5,
-    )
-    board = _board(rep_id, float(arama_per_lead), float(toplanti_gun))
-    bframe = _df(board["rows"]).rename(
-        columns={
-            "planlanan": "PLANLANAN",
-            "plan dk": "PLANLANAN dk",
-            "gerçekleşen": "GERÇEKLEŞEN",
-            "gerçek dk": "GERÇEKLEŞEN dk",
-        }
-    )
-    bframe["plan gerçekleşme"] = bframe["plan gerçekleşme"].map(fmt_pct)
-    _table(bframe)
-    with st.container(border=True):
-        _stat_row(
-            [
-                {
-                    "label": "planlanan toplam",
-                    "value": f"{board['plan_saat']} saat",
-                },
-                {
-                    "label": "gerçekleşen toplam",
-                    "value": f"{board['gercek_saat']} saat",
-                },
-                {
-                    "label": (
-                        "ekip doluluk oranı"
-                        if rep_id is None
-                        else "gün doluluk oranı"
-                    ),
-                    "value": fmt_pct(board.get("doluluk")),
-                    "help": HELP_DOLULUK,
-                },
-            ]
+    if report == "Ekip":
+        dip = _team_dip(start, end)
+        team_board = _board(
+            None, float(DEFAULT_ARAMA_PER_LEAD), float(DEFAULT_TOPLANTI_GUN)
         )
-    st.caption(
-        f"plan gerçekleşme (süre) {fmt_pct(board.get('toplam_oran'))} · "
-        f"ulaşılamayan arama ort. {fmt_duration(board.get('miss_sn'))} · "
-        f"ulaşılan görüşme ort. {fmt_duration(board.get('hit_sn'))} · "
-        f"toplantı plan {int(TOPLANTI_DK)} dk · "
-        f"CRM ulaşılamayan {int(CRM_SN_PER_ULASILAMAYAN)} sn · "
-        f"CRM ulaşılan {CRM_DK_PER_GORUSME} dk/görüşme · "
-        f"ölü zaman {fmt_duration(OLU_ZAMAN_SN)}/arama · "
-        f"{int(board.get('workdays') or 0)} iş günü · "
-        f"mesai hafta içi {MESAI_WD_SAAT:.0f} saat · "
-        f"cumartesi {MESAI_SAT_SAAT:.0f} saat"
-    )
+        with st.container(border=True):
+            _stat_row(
+                [
+                    {
+                        "label": "ekip ulaşma oranı",
+                        "value": fmt_pct(dip.get("ulasma_orani")),
+                        "help": HELP_ULASMA,
+                    },
+                    {
+                        "label": "ekip katılım oranı",
+                        "value": fmt_pct(dip.get("katilim_orani")),
+                        "help": HELP_KATILIM,
+                    },
+                    {
+                        "label": "ekip dönüş araması",
+                        "value": fmt_num(dip.get("donus")),
+                        "help": HELP_DONUS,
+                    },
+                    {
+                        "label": "ekip gelen arama",
+                        "value": fmt_num(dip.get("gelen")),
+                        "help": HELP_GELEN,
+                    },
+                ]
+            )
+            _stat_row(
+                [
+                    {
+                        "label": "ekip doluluk oranı",
+                        "value": fmt_pct(team_board.get("doluluk")),
+                        "help": HELP_DOLULUK,
+                    },
+                ]
+            )
+        return
 
-    _heading("Görüşme süresi", HELP_SURE, window)
-    talk = _df(_talk(start, end))
-    if not talk.empty:
-        talk_show = pd.DataFrame(
-            {
-                "temsilci": talk["temsilci"],
-                "ortalama": talk["ortalama_sn"].map(fmt_duration),
-                "tipik": talk["medyan_sn"].map(fmt_duration),
-                "görüşme": talk["n"],
-            }
-        )
-        _table(talk_show)
-    else:
-        st.caption("veri yetersiz")
+    if report == "Ulaşma":
+        _heading("Ulaşma oranı", HELP_ULASMA, window)
+        _show_reach_break(_reach_break(start, end, None, True), named=True)
+        return
 
-    _heading("Satış döngüsü (gün)", HELP_DONGU, conv)
-    cycle_rep, cycle_team = _cycle(start, end)
-    with st.container(border=True):
-        _stat_row(
-            [
-                {
-                    "label": "ortalama gün",
-                    "value": fmt_num(cycle_team.get("ortalama_gun")),
-                    "help": HELP_DONGU,
-                },
-                {
-                    "label": "tipik gün",
-                    "value": fmt_num(cycle_team.get("medyan_gun")),
-                    "help": HELP_TIPIK,
-                },
-                {
-                    "label": "kayıt sayısı",
-                    "value": str(cycle_team.get("n") or 0),
-                    "help": HELP_KAYIT,
-                },
-            ]
+    if report == "İş yükü":
+        _heading("Günlük iş yükü (kişi başı)", HELP_ISYUKU, default_window())
+        p1, p2 = st.columns(2)
+        arama_per_lead = p1.number_input(
+            "lead başına arama (plan)",
+            min_value=0.5,
+            max_value=20.0,
+            value=float(DEFAULT_ARAMA_PER_LEAD),
+            step=0.5,
         )
-    cyc = _df(cycle_rep)
-    if not cyc.empty:
-        cyc["ortalama_gun"] = cyc["ortalama_gun"].map(lambda v: fmt_num(v, 1))
-        cyc["medyan_gun"] = cyc["medyan_gun"].map(lambda v: fmt_num(v, 1))
-    _table(
-        cyc.rename(
+        toplanti_gun = p2.number_input(
+            "günde gerçekleşen toplantı (plan)",
+            min_value=0.0,
+            max_value=20.0,
+            value=float(DEFAULT_TOPLANTI_GUN),
+            step=0.5,
+        )
+        board = _board(rep_id, float(arama_per_lead), float(toplanti_gun))
+        bframe = _df(board["rows"]).rename(
             columns={
-                "ortalama_gun": "ortalama gün",
-                "medyan_gun": "tipik gün",
-                "n": "kayıt sayısı",
+                "planlanan": "PLANLANAN",
+                "plan dk": "PLANLANAN dk",
+                "gerçekleşen": "GERÇEKLEŞEN",
+                "gerçek dk": "GERÇEKLEŞEN dk",
             }
         )
-    )
-
-    _heading("Satışa dönme oranı", HELP_TAKE_GENEL, conv)
-    take_rep, take_team = _take(start, end)
-    with st.container(border=True):
-        _stat_row(
-            [
-                {
-                    "label": "Genelde satışa dönme oranı",
-                    "value": fmt_pct(take_team.get("genel")),
-                    "help": HELP_TAKE_GENEL,
-                },
-                {
-                    "label": "Ulaşılanda satışa dönme oranı",
-                    "value": fmt_pct(take_team.get("ulasilanda")),
-                    "help": HELP_TAKE_ULASILANDA,
-                },
-            ]
+        bframe["plan gerçekleşme"] = bframe["plan gerçekleşme"].map(fmt_pct)
+        _table(bframe)
+        with st.container(border=True):
+            _stat_row(
+                [
+                    {
+                        "label": "planlanan toplam",
+                        "value": f"{board['plan_saat']} saat",
+                    },
+                    {
+                        "label": "gerçekleşen toplam",
+                        "value": f"{board['gercek_saat']} saat",
+                    },
+                    {
+                        "label": (
+                            "ekip doluluk oranı"
+                            if rep_id is None
+                            else "gün doluluk oranı"
+                        ),
+                        "value": fmt_pct(board.get("doluluk")),
+                        "help": HELP_DOLULUK,
+                    },
+                ]
+            )
+        st.caption(
+            f"plan gerçekleşme (süre) {fmt_pct(board.get('toplam_oran'))} · "
+            f"ulaşılamayan arama ort. {fmt_duration(board.get('miss_sn'))} · "
+            f"ulaşılan görüşme ort. {fmt_duration(board.get('hit_sn'))} · "
+            f"toplantı plan {int(TOPLANTI_DK)} dk · "
+            f"CRM ulaşılamayan {int(CRM_SN_PER_ULASILAMAYAN)} sn · "
+            f"CRM ulaşılan {CRM_DK_PER_GORUSME} dk/görüşme · "
+            f"ölü zaman {fmt_duration(OLU_ZAMAN_SN)}/arama · "
+            f"{int(board.get('workdays') or 0)} iş günü · "
+            f"mesai hafta içi {MESAI_WD_SAAT:.0f} saat · "
+            f"cumartesi {MESAI_SAT_SAAT:.0f} saat"
         )
-    tframe = _df(take_rep)
-    tframe["genelde"] = tframe["genel"].map(fmt_pct)
-    tframe["ulaşılanda"] = tframe["ulasilanda"].map(fmt_pct)
-    _table(tframe[["temsilci", "leads", "genelde", "ulaşılanda"]])
+        return
 
-    _heading("Satış kaynağı", HELP_SOURCE, conv)
-    src = _df(_source(start, end))
-    src["genelde"] = src["genelde"].map(fmt_pct)
-    src["ulaşılanda"] = src["ulasilanda"].map(fmt_pct)
-    st.markdown("Lead source", help=HELP_SOURCE)
-    _table(src[["kaynak", "lead", "satis", "genelde", "ulaşılanda"]])
-    path = _df(_path(start, end))
-    path["genelde"] = path["genelde"].map(fmt_pct)
-    path["ulaşılanda"] = path["ulasilanda"].map(fmt_pct)
-    st.markdown("Satışa giden yol", help=HELP_YOL)
-    _table(path[["yol", "lead", "satis", "genelde", "ulaşılanda"]])
+    if report == "Görüşme süresi":
+        _heading("Görüşme süresi", HELP_SURE, window)
+        talk = _df(_talk(start, end))
+        if not talk.empty:
+            talk_show = pd.DataFrame(
+                {
+                    "temsilci": talk["temsilci"],
+                    "ortalama": talk["ortalama_sn"].map(fmt_duration),
+                    "tipik": talk["medyan_sn"].map(fmt_duration),
+                    "görüşme": talk["n"],
+                }
+            )
+            _table(talk_show)
+        else:
+            st.caption("veri yetersiz")
+        return
 
-    _heading("Huni", HELP_HUNI, window)
-    fun = _funnel(rep_id, True, start, end)
-    _table(_df(fun))
-    st.markdown("Ekip toplamı")
-    _table(_df(_funnel(None, False, start, end)))
-    _funnel_drop_report(window)
+    if report == "Satış döngüsü":
+        _heading("Satış döngüsü (gün)", HELP_DONGU, conv)
+        cycle_rep, cycle_team = _cycle(start, end)
+        with st.container(border=True):
+            _stat_row(
+                [
+                    {
+                        "label": "ortalama gün",
+                        "value": fmt_num(cycle_team.get("ortalama_gun")),
+                        "help": HELP_DONGU,
+                    },
+                    {
+                        "label": "tipik gün",
+                        "value": fmt_num(cycle_team.get("medyan_gun")),
+                        "help": HELP_TIPIK,
+                    },
+                    {
+                        "label": "kayıt sayısı",
+                        "value": str(cycle_team.get("n") or 0),
+                        "help": HELP_KAYIT,
+                    },
+                ]
+            )
+        cyc = _df(cycle_rep)
+        if not cyc.empty:
+            cyc["ortalama_gun"] = cyc["ortalama_gun"].map(
+                lambda v: fmt_num(v, 1)
+            )
+            cyc["medyan_gun"] = cyc["medyan_gun"].map(lambda v: fmt_num(v, 1))
+        _table(
+            cyc.rename(
+                columns={
+                    "ortalama_gun": "ortalama gün",
+                    "medyan_gun": "tipik gün",
+                    "n": "kayıt sayısı",
+                }
+            )
+        )
+        return
 
-    st.divider()
-    _render_ciro_yonetici(rep_id)
-    st.divider()
-    _render_profil(window)
-    st.divider()
+    if report == "Dönme oranı":
+        _heading("Satışa dönme oranı", HELP_TAKE_GENEL, conv)
+        take_rep, take_team = _take(start, end)
+        with st.container(border=True):
+            _stat_row(
+                [
+                    {
+                        "label": "Genelde satışa dönme oranı",
+                        "value": fmt_pct(take_team.get("genel")),
+                        "help": HELP_TAKE_GENEL,
+                    },
+                    {
+                        "label": "Ulaşılanda satışa dönme oranı",
+                        "value": fmt_pct(take_team.get("ulasilanda")),
+                        "help": HELP_TAKE_ULASILANDA,
+                    },
+                ]
+            )
+        tframe = _df(take_rep)
+        tframe["genelde"] = tframe["genel"].map(fmt_pct)
+        tframe["ulaşılanda"] = tframe["ulasilanda"].map(fmt_pct)
+        _table(tframe[["temsilci", "leads", "genelde", "ulaşılanda"]])
+        return
 
-    _heading("Haftalık gelişim", window=window)
-    team_w = _weekly_team(start, end)
-    if rep_id is None:
-        _render_weekly_charts(team_w, None, kisi_basi=True)
-    else:
-        rep_w = _weekly(rep_id, start, end)
-        _render_weekly_charts(team_w, rep_w, kisi_basi=True)
+    if report == "Kaynak":
+        _heading("Satış kaynağı", HELP_SOURCE, conv)
+        src = _df(_source(start, end))
+        src["genelde"] = src["genelde"].map(fmt_pct)
+        src["ulaşılanda"] = src["ulasilanda"].map(fmt_pct)
+        st.markdown("Lead source", help=HELP_SOURCE)
+        _table(src[["kaynak", "lead", "satis", "genelde", "ulaşılanda"]])
+        path = _df(_path(start, end))
+        path["genelde"] = path["genelde"].map(fmt_pct)
+        path["ulaşılanda"] = path["ulasilanda"].map(fmt_pct)
+        st.markdown("Satışa giden yol", help=HELP_YOL)
+        _table(path[["yol", "lead", "satis", "genelde", "ulaşılanda"]])
+        return
+
+    if report == "Huni":
+        _heading("Huni", HELP_HUNI, window)
+        fun = _funnel(rep_id, True, start, end)
+        _table(_df(fun))
+        st.markdown("Ekip toplamı")
+        _table(_df(_funnel(None, False, start, end)))
+        _funnel_drop_report(window)
+        return
+
+    if report == "Ciro":
+        _render_ciro_yonetici(rep_id)
+        return
+
+    if report == "Profil":
+        _render_profil(window)
+        return
+
+    if report == "Haftalık":
+        _heading("Haftalık gelişim", window=window)
+        team_w = _weekly_team(start, end)
+        if rep_id is None:
+            _render_weekly_charts(team_w, None, kisi_basi=True)
+        else:
+            rep_w = _weekly(rep_id, start, end)
+            _render_weekly_charts(team_w, rep_w, kisi_basi=True)
 
 
 def _render_weekly_charts(
@@ -1810,192 +2042,201 @@ def render_temsilci(
         choice = st.selectbox("Temsilci", list(names), key="temsilci_sel")
         rep_id = names[choice]
     start, end = _keys(window)
-    snap = _rep_snap(rep_id, start, end)
-    cur = snap["current"]
-    prev = snap["previous"]
+    report = _pick_report(_TEM_REPORTS, "tem_rapor")
+    if report == "Bugün":
+        _render_bugun(rep_id, block_day, with_team=True, scope="tem")
+        return
 
-    _render_bugun(rep_id, block_day, with_team=True, scope="tem")
-    st.divider()
-    with st.container(border=True):
-        st.markdown("**Günlük özet**")
-        st.caption(
-            f"{fmt_window(window)}, önceki {window.days} günle kıyas"
-        )
-        _metric_row(
-            [
-                {
-                    "label": "ulaşma oranı",
-                    "cur": cur.get("ulasma_orani"),
-                    "prev": prev.get("ulasma_orani"),
-                    "pct": True,
-                    "help_text": HELP_ULASMA,
-                },
-                {
-                    "label": "giden arama / gün",
-                    "cur": cur.get("arama_gun"),
-                    "prev": prev.get("arama_gun"),
-                    "help_text": HELP_ARAMA,
-                },
-                {
-                    "label": "ulaşılan / gün",
-                    "cur": cur.get("ulasilan_gun"),
-                    "prev": prev.get("ulasilan_gun"),
-                    "help_text": HELP_ULASILAN,
-                },
-                {
-                    "label": "görüşme ortalama",
-                    "cur": cur.get("ortalama_sn"),
-                    "prev": prev.get("ortalama_sn"),
-                    "duration": True,
-                    "help_text": HELP_SURE,
-                },
-            ]
-        )
-        _metric_row(
-            [
-                {
-                    "label": "dönüş araması / gün",
-                    "cur": cur.get("donus_gun"),
-                    "prev": prev.get("donus_gun"),
-                    "help_text": HELP_DONUS,
-                },
-                {
-                    "label": "gelen arama / gün",
-                    "cur": cur.get("gelen_gun"),
-                    "prev": prev.get("gelen_gun"),
-                    "help_text": HELP_GELEN,
-                },
-                {
-                    "label": "dönüş araması",
-                    "cur": cur.get("donus"),
-                    "prev": prev.get("donus"),
-                    "help_text": HELP_DONUS,
-                },
-                {
-                    "label": "gelen arama",
-                    "cur": cur.get("gelen"),
-                    "prev": prev.get("gelen"),
-                    "help_text": HELP_GELEN,
-                },
-            ]
-        )
-        _metric_row(
-            [
-                {
-                    "label": "görüşme tipik",
-                    "cur": cur.get("medyan_sn"),
-                    "prev": prev.get("medyan_sn"),
-                    "duration": True,
-                    "help_text": HELP_TIPIK,
-                },
-                {
-                    "label": "gelen lead",
-                    "cur": cur.get("lead"),
-                    "prev": prev.get("lead"),
-                    "help_text": HELP_LEAD,
-                },
-                {
-                    "label": "randevu",
-                    "cur": cur.get("randevu"),
-                    "prev": prev.get("randevu"),
-                    "help_text": HELP_RANDEVU,
-                },
-                {
-                    "label": "katıldı",
-                    "cur": cur.get("katildi"),
-                    "prev": prev.get("katildi"),
-                    "help_text": HELP_KATILIM,
-                },
-            ]
-        )
-        _metric_row(
-            [
-                {
-                    "label": "katılım oranı",
-                    "cur": cur.get("katilim_orani"),
-                    "prev": prev.get("katilim_orani"),
-                    "pct": True,
-                    "help_text": HELP_KATILIM,
-                },
-                {
-                    "label": "randevu / gün",
-                    "cur": cur.get("randevu_gun"),
-                    "prev": prev.get("randevu_gun"),
-                    "help_text": HELP_RANDEVU,
-                },
-                {
-                    "label": "toplantı / gün",
-                    "cur": cur.get("toplanti_gun"),
-                    "prev": prev.get("toplanti_gun"),
-                    "help_text": HELP_ISYUKU,
-                },
-                {
-                    "label": "CRM kayıt / gün",
-                    "cur": cur.get("crm_gun"),
-                    "prev": prev.get("crm_gun"),
-                    "help_text": HELP_ISYUKU,
-                },
-            ]
-        )
-        _metric_row(
-            [
-                {
-                    "label": "ulaşılan görüşmenin randevuya dönme oranı",
-                    "cur": cur.get("temas_randevu_orani"),
-                    "prev": prev.get("temas_randevu_orani"),
-                    "pct": True,
-                },
-            ]
-        )
-        own_board = _board(
-            rep_id, float(DEFAULT_ARAMA_PER_LEAD), float(DEFAULT_TOPLANTI_GUN)
-        )
-        team_board = _board(
-            None, float(DEFAULT_ARAMA_PER_LEAD), float(DEFAULT_TOPLANTI_GUN)
-        )
-        with st.container():
-            st.metric(
-                "gün doluluk oranı",
-                fmt_pct(own_board.get("doluluk")),
-                help=HELP_DOLULUK,
+    if report == "Günlük özet":
+        snap = _rep_snap(rep_id, start, end)
+        cur = snap["current"]
+        prev = snap["previous"]
+        with st.container(border=True):
+            st.markdown("**Günlük özet**")
+            st.caption(
+                f"{fmt_window(window)}, önceki {window.days} günle kıyas"
+            )
+            _metric_row(
+                [
+                    {
+                        "label": "ulaşma oranı",
+                        "cur": cur.get("ulasma_orani"),
+                        "prev": prev.get("ulasma_orani"),
+                        "pct": True,
+                        "help_text": HELP_ULASMA,
+                    },
+                    {
+                        "label": "giden arama / gün",
+                        "cur": cur.get("arama_gun"),
+                        "prev": prev.get("arama_gun"),
+                        "help_text": HELP_ARAMA,
+                    },
+                    {
+                        "label": "ulaşılan / gün",
+                        "cur": cur.get("ulasilan_gun"),
+                        "prev": prev.get("ulasilan_gun"),
+                        "help_text": HELP_ULASILAN,
+                    },
+                    {
+                        "label": "görüşme ortalama",
+                        "cur": cur.get("ortalama_sn"),
+                        "prev": prev.get("ortalama_sn"),
+                        "duration": True,
+                        "help_text": HELP_SURE,
+                    },
+                ]
+            )
+            _metric_row(
+                [
+                    {
+                        "label": "dönüş araması / gün",
+                        "cur": cur.get("donus_gun"),
+                        "prev": prev.get("donus_gun"),
+                        "help_text": HELP_DONUS,
+                    },
+                    {
+                        "label": "gelen arama / gün",
+                        "cur": cur.get("gelen_gun"),
+                        "prev": prev.get("gelen_gun"),
+                        "help_text": HELP_GELEN,
+                    },
+                    {
+                        "label": "dönüş araması",
+                        "cur": cur.get("donus"),
+                        "prev": prev.get("donus"),
+                        "help_text": HELP_DONUS,
+                    },
+                    {
+                        "label": "gelen arama",
+                        "cur": cur.get("gelen"),
+                        "prev": prev.get("gelen"),
+                        "help_text": HELP_GELEN,
+                    },
+                ]
+            )
+            _metric_row(
+                [
+                    {
+                        "label": "görüşme tipik",
+                        "cur": cur.get("medyan_sn"),
+                        "prev": prev.get("medyan_sn"),
+                        "duration": True,
+                        "help_text": HELP_TIPIK,
+                    },
+                    {
+                        "label": "gelen lead",
+                        "cur": cur.get("lead"),
+                        "prev": prev.get("lead"),
+                        "help_text": HELP_LEAD,
+                    },
+                    {
+                        "label": "randevu",
+                        "cur": cur.get("randevu"),
+                        "prev": prev.get("randevu"),
+                        "help_text": HELP_RANDEVU,
+                    },
+                    {
+                        "label": "katıldı",
+                        "cur": cur.get("katildi"),
+                        "prev": prev.get("katildi"),
+                        "help_text": HELP_KATILIM,
+                    },
+                ]
+            )
+            _metric_row(
+                [
+                    {
+                        "label": "katılım oranı",
+                        "cur": cur.get("katilim_orani"),
+                        "prev": prev.get("katilim_orani"),
+                        "pct": True,
+                        "help_text": HELP_KATILIM,
+                    },
+                    {
+                        "label": "randevu / gün",
+                        "cur": cur.get("randevu_gun"),
+                        "prev": prev.get("randevu_gun"),
+                        "help_text": HELP_RANDEVU,
+                    },
+                    {
+                        "label": "toplantı / gün",
+                        "cur": cur.get("toplanti_gun"),
+                        "prev": prev.get("toplanti_gun"),
+                        "help_text": HELP_ISYUKU,
+                    },
+                    {
+                        "label": "CRM kayıt / gün",
+                        "cur": cur.get("crm_gun"),
+                        "prev": prev.get("crm_gun"),
+                        "help_text": HELP_ISYUKU,
+                    },
+                ]
+            )
+            _metric_row(
+                [
+                    {
+                        "label": "ulaşılan görüşmenin randevuya dönme oranı",
+                        "cur": cur.get("temas_randevu_orani"),
+                        "prev": prev.get("temas_randevu_orani"),
+                        "pct": True,
+                    },
+                ]
+            )
+            own_board = _board(
+                rep_id, float(DEFAULT_ARAMA_PER_LEAD), float(DEFAULT_TOPLANTI_GUN)
+            )
+            team_board = _board(
+                None, float(DEFAULT_ARAMA_PER_LEAD), float(DEFAULT_TOPLANTI_GUN)
+            )
+            with st.container():
+                st.metric(
+                    "gün doluluk oranı",
+                    fmt_pct(own_board.get("doluluk")),
+                    help=HELP_DOLULUK,
+                )
+                st.caption(
+                    f"ekip ortalaması {fmt_pct(team_board.get('doluluk'))}"
+                )
+            st.caption(f"CRM kayıt tahmini {CRM_DK_PER_GORUSME} dk/görüşme")
+        return
+
+    if report == "Ulaşma":
+        _heading("Ulaşma oranı", HELP_ULASMA, window)
+        _show_reach_break(_reach_break(start, end, rep_id, False), named=False)
+        return
+
+    if report == "Ciro":
+        _render_ciro_temsilci(rep_id, show_period=locked_rep_id is not None)
+        return
+
+    if report == "Haftalık":
+        _heading("Haftalık gelişim", window=window)
+        rows = _weekly(rep_id, start, end)
+        frame = _df(rows)
+        if frame.empty:
+            st.caption("veri yetersiz")
+            return
+        frame["seri"] = "kendisi"
+        n_weeks = len(rows)
+        for key, title, is_pct in (
+            ("arama_ham", "giden arama", False),
+            ("ulasma_orani", "ulaşma oranı", True),
+            ("randevu", "randevu", False),
+            ("katilim_orani", "katılım oranı", True),
+        ):
+            st.markdown(title, help=CHART_HELP.get(key))
+            _line_chart(
+                frame[["hafta", key, "seri"]], key, title, is_pct=is_pct
             )
             st.caption(
-                f"ekip ortalaması {fmt_pct(team_board.get('doluluk'))}"
+                f"son hafta vs {n_weeks} haftalık ortalama: "
+                f"{_week_delta(rows, key)}"
             )
-        st.caption(f"CRM kayıt tahmini {CRM_DK_PER_GORUSME} dk/görüşme")
-
-    st.divider()
-    _heading("Ulaşma oranı", HELP_ULASMA, window)
-    _show_reach_break(_reach_break(start, end, rep_id, False), named=False)
-
-    st.divider()
-    _render_ciro_temsilci(rep_id, show_period=locked_rep_id is not None)
-    st.divider()
-
-    _heading("Haftalık gelişim", window=window)
-    rows = _weekly(rep_id, start, end)
-    frame = _df(rows)
-    if frame.empty:
-        st.caption("veri yetersiz")
-        return
-    frame["seri"] = "kendisi"
-    n_weeks = len(rows)
-    for key, title, is_pct in (
-        ("arama_ham", "giden arama", False),
-        ("ulasma_orani", "ulaşma oranı", True),
-        ("randevu", "randevu", False),
-        ("katilim_orani", "katılım oranı", True),
-    ):
-        st.markdown(title, help=CHART_HELP.get(key))
-        _line_chart(frame[["hafta", key, "seri"]], key, title, is_pct=is_pct)
-        src_key = key
-        st.caption(
-            f"son hafta vs {n_weeks} haftalık ortalama: {_week_delta(rows, src_key)}"
-        )
 
 
 def main() -> None:
     st.set_page_config(page_title="Pusula", page_icon="P", layout="wide")
+    _apply_chrome()
     _apply_secrets()
     user = _session_user()
     if user is None:

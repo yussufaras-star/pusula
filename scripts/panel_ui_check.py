@@ -42,6 +42,27 @@ MEETING_LEAVES: tuple[str, ...] = (
 )
 # Glide iç kaydırma ölçümünde kenar payı.
 _SCROLL_TOL_PX = 6
+_YON_REPORTS: tuple[str, ...] = (
+    "Bugün",
+    "Ekip",
+    "Ulaşma",
+    "İş yükü",
+    "Görüşme süresi",
+    "Satış döngüsü",
+    "Dönme oranı",
+    "Kaynak",
+    "Huni",
+    "Ciro",
+    "Profil",
+    "Haftalık",
+)
+_TEM_REPORTS: tuple[str, ...] = (
+    "Bugün",
+    "Günlük özet",
+    "Ulaşma",
+    "Ciro",
+    "Haftalık",
+)
 
 
 def _ordered_leaves(frame: pd.DataFrame) -> list[str]:
@@ -271,6 +292,33 @@ def _hour_frame(at: Any) -> Any | None:
     return None
 
 
+def _report_radio(at: Any, *, admin: bool) -> Any | None:
+    """Yönetici ve temsilci sekmeleri birlikte çizilirse doğru seçiciyi al."""
+    wanted = list(_YON_REPORTS if admin else _TEM_REPORTS)
+    radios = [r for r in at.radio if str(getattr(r, "label", "")) == "Rapor"]
+    for radio in radios:
+        if [str(opt) for opt in radio.options] == wanted:
+            return radio
+    return None
+
+
+def _select_report(at: Any, name: str, *, admin: bool) -> str | None:
+    """Rapor seç ve yeniden çalıştır. Hata metni ya da None."""
+    radio = _report_radio(at, admin=admin)
+    if radio is None:
+        return "Rapor secici yok"
+    options = [str(opt) for opt in radio.options]
+    if name not in options:
+        return f"rapor yok: {name} secenek={options}"
+    radio.set_value(name)
+    at.run()
+    radio = _report_radio(at, admin=admin)
+    if radio is None or str(radio.value) != name:
+        got = None if radio is None else radio.value
+        return f"rapor secilemedi: {name} kalan={got}"
+    return None
+
+
 def _assert_common(at: Any, *, admin: bool) -> list[str]:
     errors: list[str] = []
     if len(at.exception) > 0:
@@ -294,8 +342,18 @@ def _assert_common(at: Any, *, admin: bool) -> list[str]:
     sub = [str(s.value) for s in at.subheader]
     if any(s.startswith("Saatlik") for s in sub):
         errors.append(f"saatlik subheader {sub}")
-    if "Ciro" not in sub:
-        errors.append(f"Ciro bolumu yok: {sub}")
+    if any(s == "Ciro" for s in sub):
+        errors.append(f"varsayilan raporda Ciro acik: {sub}")
+    radio = _report_radio(at, admin=admin)
+    expected = list(_YON_REPORTS if admin else _TEM_REPORTS)
+    if radio is None:
+        errors.append(f"Rapor secici yok: {radio_labels}")
+    else:
+        options = [str(opt) for opt in radio.options]
+        if options != expected:
+            errors.append(f"rapor secenekleri {options}")
+        if str(radio.value) != "Bugün":
+            errors.append(f"varsayilan rapor {radio.value}")
     blob = _all_text(at)
     if "Kullanıcı adı" in blob or (hasattr(at, "form") and list(at.form)):
         errors.append("giris formu oturumda gorunuyor")
@@ -355,33 +413,63 @@ def main() -> int:
     print(f"temsilci AppTest: {rep_s:.2f}s")
 
     errors = _assert_common(at_rep, admin=False)
-    blob = _all_text(at_rep)
-    if "ekip " not in blob:
-        errors.append("temsilcide ekip ortalamasi yok")
-    if "gün doluluk oranı" not in blob:
-        errors.append("temsilcide gun doluluk orani yok")
-    if "Ay içi izdüşüm" not in blob:
-        errors.append("temsilcide izdusum yok")
-    if "ekip ortalaması" not in blob:
-        errors.append("temsilcide ekip doluluk kiyasi yok")
-    if "ekip doluluk oranı" in blob:
-        errors.append("temsilcide ekip doluluk basligi var")
     others = [
         row["full_name"]
         for row in roster
         if row["rep_id"] != person["rep_id"]
     ]
-    leaked = [name for name in others if name and name in blob]
-    if leaked:
-        errors.append(f"baska temsilci adi: {leaked}")
-    donem_boxes = [s for s in at_rep.selectbox if str(s.label) == "Dönem"]
-    other_boxes = [s.label for s in at_rep.selectbox if str(s.label) != "Dönem"]
-    if other_boxes:
-        errors.append(f"temsilcide selectbox var: {other_boxes}")
-    if not donem_boxes:
-        errors.append("temsilcide Donem secici yok")
-    elif str(donem_boxes[0].value) != "Bu ay":
-        errors.append(f"temsilci varsayilan donem {donem_boxes[0].value}")
+
+    def _leak(blob: str, where: str) -> None:
+        leaked = [name for name in others if name and name in blob]
+        if leaked:
+            errors.append(f"baska temsilci adi ({where}): {leaked}")
+
+    _leak(_all_text(at_rep), "bugun")
+    if list(at_rep.selectbox):
+        labels = [s.label for s in at_rep.selectbox]
+        errors.append(f"temsilcide bugun selectbox var: {labels}")
+
+    err = _select_report(at_rep, "Günlük özet", admin=False)
+    if err:
+        errors.append(err)
+    else:
+        print(_dump(at_rep, "temsilci gunluk ozet"))
+        blob = _all_text(at_rep)
+        if "ekip " not in blob:
+            errors.append("temsilcide ekip ortalamasi yok")
+        if "gün doluluk oranı" not in blob:
+            errors.append("temsilcide gun doluluk orani yok")
+        if "ekip ortalaması" not in blob:
+            errors.append("temsilcide ekip doluluk kiyasi yok")
+        if "ekip doluluk oranı" in blob:
+            errors.append("temsilcide ekip doluluk basligi var")
+        _leak(blob, "gunluk ozet")
+        if list(at_rep.selectbox):
+            labels = [s.label for s in at_rep.selectbox]
+            errors.append(f"temsilcide selectbox var: {labels}")
+
+    err = _select_report(at_rep, "Ciro", admin=False)
+    if err:
+        errors.append(err)
+    else:
+        print(_dump(at_rep, "temsilci ciro"))
+        blob = _all_text(at_rep)
+        sub = [str(s.value) for s in at_rep.subheader]
+        if "Ciro" not in sub:
+            errors.append(f"temsilcide Ciro bolumu yok: {sub}")
+        if "Ay içi izdüşüm" not in blob:
+            errors.append("temsilcide izdusum yok")
+        _leak(blob, "ciro")
+        donem_boxes = [s for s in at_rep.selectbox if str(s.label) == "Dönem"]
+        other_boxes = [
+            s.label for s in at_rep.selectbox if str(s.label) != "Dönem"
+        ]
+        if other_boxes:
+            errors.append(f"temsilcide selectbox var: {other_boxes}")
+        if not donem_boxes:
+            errors.append("temsilcide Donem secici yok")
+        elif str(donem_boxes[0].value) != "Bu ay":
+            errors.append(f"temsilci varsayilan donem {donem_boxes[0].value}")
 
     t0 = time.perf_counter()
     at_admin = _run_app(
@@ -397,81 +485,135 @@ def main() -> int:
     print(f"yonetici AppTest: {admin_s:.2f}s")
     errors.extend(_assert_common(at_admin, admin=True))
     admin_blob = _all_text(at_admin)
-    if "ekip doluluk oranı" not in admin_blob:
-        errors.append("yoneticide ekip doluluk orani yok")
-    if "mesai hafta içi 8 saat" not in admin_blob:
-        errors.append("yoneticide mesai 8 saat yazisi yok")
-    if "CRM ulaşılamayan" not in admin_blob:
-        errors.append("yoneticide CRM ulasilamayan satiri yok")
-    if "ölçülen" not in admin_blob or "varsayım" not in admin_blob:
-        errors.append("yoneticide olculen/varsayim ayrimi yok")
-    if "2026 başından bugüne" in admin_blob:
-        errors.append("eski ytd basligi duruyor")
-    if "Ay içi izdüşüm" not in admin_blob:
-        errors.append("yoneticide izdusum yok")
-    if "Aynı güne kadar" not in admin_blob:
-        errors.append("yoneticide ayni gune kadar yok")
-    if "Ekip toplamı" not in admin_blob:
-        errors.append("yoneticide ekip toplami yok")
-    if "Ekim 2025" in admin_blob or "Kasım 2025" in admin_blob:
-        errors.append("aylik tabloda 2025 bos ay duruyor")
-    if "Mart 2026" in admin_blob:
-        errors.append("aylik tabloda nisan oncesi ay duruyor")
-    admin_donem = [s for s in at_admin.selectbox if str(s.label) == "Dönem"]
-    if len(admin_donem) != 1:
-        errors.append(f"yoneticide Donem adet={len(admin_donem)} (beklenen 1)")
-    else:
-        opts = [str(o) for o in admin_donem[0].options]
-        needed = [
-            "Bu ay",
-            "Geçen ay",
-            "Son 3 ay",
-            "Son 6 ay",
-            "Tüm zamanlar",
-            "Özel aralık",
-        ]
-        missing = [n for n in needed if n not in opts]
-        if missing:
-            errors.append(f"donem secenek eksik: {missing}")
-        if str(admin_donem[0].value) != "Bu ay":
-            errors.append(f"yonetici varsayilan donem {admin_donem[0].value}")
-    iz_help = " ".join(_help_of(m) for m in getattr(at_admin, "metric", []))
-    if "Mevsimsellik hesaba katılmaz" not in iz_help:
-        errors.append("izdusum (?) balonunda yontem yok")
-    if "Beş aylık veriyle hesaplanır" not in iz_help and "Bes aylik" not in iz_help:
-        errors.append("izdusum (?) balonunda bes ay yok")
-    donem_widgets = [s for s in at_admin.selectbox if str(s.label) == "Dönem"]
-    if donem_widgets:
-        opts = [str(o) for o in donem_widgets[0].options]
-        if "Tüm zamanlar" in opts:
-            tum_i = opts.index("Tüm zamanlar")
-            for box in donem_widgets:
-                box.select_index(tum_i)
-            at_admin.run()
-            all_blob = _all_text(at_admin)
-            print(_dump(at_admin, "yonetici tum zamanlar"))
-            if "Ekim 2025" in all_blob or "Kasım 2025" in all_blob:
-                errors.append("tum zamanlarda 2025 bos ay var")
-            if "Mart 2026" in all_blob:
-                errors.append("tum zamanlarda nisan oncesi ay var")
-            if "Ay içi izdüşüm" in all_blob:
-                errors.append("tum zamanlarda izdusum gorunuyor")
-            for box in [s for s in at_admin.selectbox if str(s.label) == "Dönem"]:
-                box.select_index(0)
-            at_admin.run()
+    if "Ay içi izdüşüm" in admin_blob or "Ekip toplamı" in admin_blob:
+        errors.append("bugun ekraninda baska rapor duruyor")
+    if not at_admin.selectbox or str(at_admin.selectbox[0].label) != "Temsilci":
+        labels = [s.label for s in at_admin.selectbox]
+        errors.append(f"yonetici ilk selectbox Temsilci degil: {labels}")
     help_blob = " ".join(_help_of(c) for c in at_admin.caption)
     help_blob += " ".join(_help_of(s) for s in at_admin.subheader)
     if "1 Mayıs 2026" not in help_blob and "1 Mayis 2026" not in help_blob:
         errors.append("tazelik (?) balonunda 1 Mayis yok")
 
-    if at_admin.selectbox:
+    err = _select_report(at_admin, "Ekip", admin=True)
+    if err:
+        errors.append(err)
+    else:
+        print(_dump(at_admin, "yonetici ekip"))
+        if "ekip doluluk oranı" not in _all_text(at_admin):
+            errors.append("yoneticide ekip doluluk orani yok")
+
+    err = _select_report(at_admin, "İş yükü", admin=True)
+    if err:
+        errors.append(err)
+    else:
+        print(_dump(at_admin, "yonetici is yuku"))
+        admin_blob = _all_text(at_admin)
+        if "mesai hafta içi 8 saat" not in admin_blob:
+            errors.append("yoneticide mesai 8 saat yazisi yok")
+        if "CRM ulaşılamayan" not in admin_blob:
+            errors.append("yoneticide CRM ulasilamayan satiri yok")
+        if "ölçülen" not in admin_blob or "varsayım" not in admin_blob:
+            errors.append("yoneticide olculen/varsayim ayrimi yok")
+
+    err = _select_report(at_admin, "Huni", admin=True)
+    if err:
+        errors.append(err)
+    else:
+        print(_dump(at_admin, "yonetici huni"))
+        if "Ekip toplamı" not in _all_text(at_admin):
+            errors.append("yoneticide ekip toplami yok")
+
+    err = _select_report(at_admin, "Ciro", admin=True)
+    if err:
+        errors.append(err)
+    else:
+        print(_dump(at_admin, "yonetici ciro"))
+        admin_blob = _all_text(at_admin)
+        sub = [str(s.value) for s in at_admin.subheader]
+        if "Ciro" not in sub:
+            errors.append(f"Ciro bolumu yok: {sub}")
+        if "2026 başından bugüne" in admin_blob:
+            errors.append("eski ytd basligi duruyor")
+        if "Ay içi izdüşüm" not in admin_blob:
+            errors.append("yoneticide izdusum yok")
+        if "Aynı güne kadar" not in admin_blob:
+            errors.append("yoneticide ayni gune kadar yok")
+        if "Ekim 2025" in admin_blob or "Kasım 2025" in admin_blob:
+            errors.append("aylik tabloda 2025 bos ay duruyor")
+        if "Mart 2026" in admin_blob:
+            errors.append("aylik tabloda nisan oncesi ay duruyor")
+        admin_donem = [s for s in at_admin.selectbox if str(s.label) == "Dönem"]
+        if len(admin_donem) != 1:
+            errors.append(
+                f"yoneticide Donem adet={len(admin_donem)} (beklenen 1)"
+            )
+        else:
+            opts = [str(o) for o in admin_donem[0].options]
+            needed = [
+                "Bu ay",
+                "Geçen ay",
+                "Son 3 ay",
+                "Son 6 ay",
+                "Tüm zamanlar",
+                "Özel aralık",
+            ]
+            missing = [n for n in needed if n not in opts]
+            if missing:
+                errors.append(f"donem secenek eksik: {missing}")
+            if str(admin_donem[0].value) != "Bu ay":
+                errors.append(
+                    f"yonetici varsayilan donem {admin_donem[0].value}"
+                )
+        iz_help = " ".join(
+            _help_of(m) for m in getattr(at_admin, "metric", [])
+        )
+        if "Mevsimsellik hesaba katılmaz" not in iz_help:
+            errors.append("izdusum (?) balonunda yontem yok")
+        if (
+            "Beş aylık veriyle hesaplanır" not in iz_help
+            and "Bes aylik" not in iz_help
+        ):
+            errors.append("izdusum (?) balonunda bes ay yok")
+        donem_widgets = [
+            s for s in at_admin.selectbox if str(s.label) == "Dönem"
+        ]
+        if donem_widgets:
+            opts = [str(o) for o in donem_widgets[0].options]
+            if "Tüm zamanlar" in opts:
+                tum_i = opts.index("Tüm zamanlar")
+                for box in donem_widgets:
+                    box.select_index(tum_i)
+                at_admin.run()
+                all_blob = _all_text(at_admin)
+                print(_dump(at_admin, "yonetici tum zamanlar"))
+                if "Ekim 2025" in all_blob or "Kasım 2025" in all_blob:
+                    errors.append("tum zamanlarda 2025 bos ay var")
+                if "Mart 2026" in all_blob:
+                    errors.append("tum zamanlarda nisan oncesi ay var")
+                if "Ay içi izdüşüm" in all_blob:
+                    errors.append("tum zamanlarda izdusum gorunuyor")
+                for box in [
+                    s for s in at_admin.selectbox if str(s.label) == "Dönem"
+                ]:
+                    box.select_index(0)
+                at_admin.run()
+
+    if at_admin.selectbox and str(at_admin.selectbox[0].label) == "Temsilci":
         box = at_admin.selectbox[0]
         if len(box.options) > 1:
             box.select_index(1)
+            radio = _report_radio(at_admin, admin=True)
+            if radio is not None:
+                radio.set_value("Ekip")
             at_admin.run()
             print(_dump(at_admin, "yonetici girisi (bir temsilci)"))
             if "ekip " not in _all_text(at_admin):
                 errors.append("yonetici temsilci seciminde ekip yok")
+
+    err = _select_report(at_admin, "Bugün", admin=True)
+    if err:
+        errors.append(err)
 
     today = date.today()
     # AppTest tarih Istanbul'a bagli degil; takvim gunu yeter.
@@ -717,16 +859,10 @@ def _shots(person: dict[str, str]) -> int:
             inputs.nth(1).fill(VERIFY_PASSWORD)
             page.locator('[data-testid="stFormSubmitButton"] button').click()
             t_open = time.perf_counter()
-            page.wait_for_selector("text=Ciro", timeout=120000)
+            page.wait_for_selector("text=Bugün", timeout=120000)
             open_s = time.perf_counter() - t_open
-            print(f"sayfa acilis (Ciro gorundu): {open_s:.2f}s")
+            print(f"sayfa acilis (Bugün gorundu): {open_s:.2f}s")
             page.wait_for_timeout(3000)
-            ciro_head = page.get_by_text("Ciro", exact=True).first
-            ciro_head.scroll_into_view_if_needed()
-            page.wait_for_timeout(1000)
-            page.screenshot(
-                path=str(SHOT_DIR / "ciro-eylul.png"), full_page=True
-            )
             print(
                 "grup yontemi: pandas MultiIndex ust baslik "
                 "(arama / toplantı); ikon yok"
@@ -761,6 +897,14 @@ def _shots(person: dict[str, str]) -> int:
             print(f"doluluk 6 saat adet={doluluk6.count()}")
             tabs = page.get_by_role("tab")
             print(f"playwright tab sayisi={tabs.count()}")
+            page.locator('[data-testid="stRadio"] label').filter(
+                has_text="Ciro"
+            ).click()
+            page.get_by_role("heading", name="Ciro").wait_for(timeout=120000)
+            page.wait_for_timeout(1000)
+            page.screenshot(
+                path=str(SHOT_DIR / "ciro-eylul.png"), full_page=True
+            )
             browser.close()
     except Exception as exc:
         print(f"playwright hata: {exc}")
