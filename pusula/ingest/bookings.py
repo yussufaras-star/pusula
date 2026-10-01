@@ -61,6 +61,7 @@ _SALES_NAME_KEYS = frozenset(
         "miray aksel",
         "ayse kar",
         "abdullah benli",
+        "beytullah aras",
     }
 )
 
@@ -111,7 +112,7 @@ class BookingsIngester(Ingester):
         self.fetch_truncated = False
         # None: günlük 7 gün. Blok ingest 24 saat verir.
         self.lookback: timedelta | None = None
-        # full_name katlaması → rep_id (yalnız satış dörtlüsü).
+        # full_name katlaması → rep_id (yalnız satış ekibi).
         self._sales_reps: dict[str, str] | None = None
         # identities.email (normalize) → lead'i olan thread var.
         self._lead_emails: set[str] | None = None
@@ -282,7 +283,7 @@ def _parse_dt(raw: Any) -> datetime | None:
 
 
 def _load_sales_reps() -> dict[str, str]:
-    """Satış dörtlüsünün name_key → rep_id eşlemesi."""
+    """Satış ekibinin name_key → rep_id eşlemesi."""
     query = """
         SELECT rep_id, full_name FROM reps
         WHERE org_id = %s AND active = TRUE
