@@ -11,7 +11,7 @@ import logging
 import os
 import sys
 import urllib.error
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -68,7 +68,7 @@ from pusula.panel_data import (
     OLU_ZAMAN_SN,
     TOPLANTI_DK,
     DateWindow,
-    activity_duration_rank,
+    activity_rank_between,
     all_data_window,
     arrow,
     conv_window,
@@ -118,8 +118,8 @@ from pusula.temas import RETURN_CALL_LOOKBACK_DAYS
 CACHE_TTL = 15 * 60
 _TZ = ZoneInfo("Europe/Istanbul")
 logger = logging.getLogger(__name__)
-# Glide satır yüksekliği. Başlık iki satır: grup + metrik.
-_HOUR_ROW_PX = 35
+# Glide satır yüksekliği. Görüşme süresi üç satır; iç kaydırma yok.
+_HOUR_ROW_PX = 62
 _HOUR_HEADER_ROWS = 2
 
 # Tanım balonları — metin birebir.
@@ -243,8 +243,8 @@ HELP_SURE_SIRA = (
     "Yorum, toplam süreyi ve görüşme ortalamasını ekiple kıyaslar. "
     "Fark yüzde 20'nin altındaysa yakın sayılır. "
     "Üçten az görüşmede ortalama kıyaslanmaz. "
-    "Gün seçilen takvim günü. Hafta o günün pazartesinden "
-    "pazara; bugün henüz bitmemişse bugüne kadar."
+    "Aralık seçilen günlerin tamamı. Bitiş bugünü geçmez. "
+    "Varsayılan, bu haftanın pazartesinden bugüne."
 )
 HELP_CIRO = (
     "Kapandi Kazanildi asamasindaki anlasmalarin toplam "
@@ -297,6 +297,15 @@ COL_HELP: dict[str, str] = {
         "ekibe göre yeri. Fark yüzde 20'nin altındaysa yakın. "
         "Üçten az görüşmede ortalama kıyaslanmaz."
     ),
+    "gerçekleşen görüşme süresi": (
+        "Açılan telefonun toplam süresi. Giden temas ve "
+        "süreli gelen arama. Cevapsız arama yok."
+    ),
+    "gerçekleşen toplantı süresi": (
+        "Katılınan randevunun planlanan süresi. "
+        "Gerçekleşen süre kaydı yok."
+    ),
+    "görüşme adedi": "Açılan telefon adedi.",
     "toplantı süresi": (
         "Planlanan süre. Yalnız katılınan toplantılar. "
         "Kaynak events.meta.duration. "
@@ -773,8 +782,10 @@ def _rep_snap(rep_id: str, start: str, end: str) -> dict[str, Any]:
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _activity_rank(day: str) -> dict[str, Any]:
-    return activity_duration_rank(date.fromisoformat(day))
+def _efficiency_rank(start: str, end: str) -> list[dict[str, Any]]:
+    return activity_rank_between(
+        date.fromisoformat(start), date.fromisoformat(end)
+    )
 
 
 @st.cache_data(ttl=CACHE_TTL)
@@ -887,21 +898,21 @@ HOUR_COL_GROUPS: tuple[tuple[str, str], ...] = (
     ("toplantı", "toplantı süresi"),
 )
 
-# Tek satır kalsın diye piksel. Toplam sayfa genişliğini aşar.
+# Toplam genişlik sayfaya sığsın. Yatay kaydırma olmasın.
 _HOUR_COL_WIDTHS: dict[str, int] = {
-    "saat": 108,
-    "giden arama": 108,
-    "ulaşılan görüşme": 140,
-    "dönüş araması": 120,
-    "gelen arama": 110,
-    "ulaşma oranı": 110,
-    "görüşme süresi": 480,
-    "toplantı": 90,
-    "katıldı": 84,
-    "katılmadı": 100,
-    "iptal edildi": 110,
-    "sonuç girilmedi": 130,
-    "toplantı süresi": 140,
+    "saat": 64,
+    "giden arama": 72,
+    "ulaşılan görüşme": 88,
+    "dönüş araması": 76,
+    "gelen arama": 72,
+    "ulaşma oranı": 72,
+    "görüşme süresi": 168,
+    "toplantı": 64,
+    "katıldı": 56,
+    "katılmadı": 68,
+    "iptal edildi": 72,
+    "sonuç girilmedi": 84,
+    "toplantı süresi": 88,
 }
 
 
@@ -954,12 +965,11 @@ def _hour_col_config(frame: pd.DataFrame) -> dict[str, Any] | None:
 
 
 def _hour_table(frame: pd.DataFrame) -> None:
-    """Saatlik tablo. Yükseklik içeriğe göre; sayfa kaydırılır."""
+    """Saatlik tablo. Sayfa genişliğine sığar; iç kaydırma yok."""
     st.dataframe(
         frame,
         hide_index=True,
-        use_container_width=False,
-        width=sum(_HOUR_COL_WIDTHS.values()),
+        use_container_width=True,
         height=hour_table_height(len(frame)),
         row_height=_HOUR_ROW_PX,
         column_config=_hour_col_config(frame),
@@ -1209,18 +1219,20 @@ def _sure_cell_text(row: dict[str, Any], *, day_total: bool = False) -> str:
     def _fmt(sec: float | None) -> str:
         return fmt_clock_span(sec, day_total=day_total)
 
-    pair = _fmt_ortalama_tipik(
-        row.get("sure_ort"), row.get("sure_tipik"), fmt=_fmt
-    )
     toplam = row.get("sure_toplam")
-    if pair is None and toplam is None:
+    avg = row.get("sure_ort")
+    tipik = row.get("sure_tipik")
+    if avg is None and tipik is None and toplam is None:
         return "veri yetersiz"
-    if pair is None:
+    if avg is None and tipik is None:
         return f"toplam {_fmt(toplam)}"
-    shown = pair
+    lines = [
+        f"ort. {_fmt(avg)}",
+        f"tipik {_fmt(tipik)}",
+    ]
     if toplam is not None:
-        shown = f"{shown} (toplam {_fmt(toplam)})"
-    return shown
+        lines.append(f"toplam {_fmt(toplam)}")
+    return "\n".join(lines)
 
 
 def _hour_display_row(
@@ -1334,47 +1346,156 @@ def _activity_rank_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return records
 
 
-def _activity_table(frame: pd.DataFrame) -> None:
-    """Süre sırası. Yorum sığsın diye satır yüksek."""
+_VERIM_WIDTHS: dict[str, int] = {
+    "sıra": 52,
+    "temsilci": 130,
+    "gerçekleşen görüşme süresi": 140,
+    "gerçekleşen toplantı süresi": 150,
+    "toplam süre": 100,
+    "ortalama görüşme": 110,
+    "görüşme adedi": 72,
+    "katıldı": 72,
+    "yorum": 200,
+}
+# Yorum birden çok cümle. Satır onları kessin diye saat satırından yüksek.
+_VERIM_ROW_PX = 108
+_VERIM_HELP = {
+    "katıldı": "Katılınan randevu adedi.",
+}
+
+
+def _comment_lines(text: str) -> str:
+    """Yorum cümleleri alt alta. Tek satırda kesilmesin."""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    parts = [part.strip() for part in raw.split(". ") if part.strip()]
+    lines: list[str] = []
+    for part in parts:
+        lines.append(part if part.endswith(".") else f"{part}.")
+    return "\n".join(lines)
+
+
+def _verim_table_height(n_rows: int) -> int:
+    """Başlık ve tüm temsilciler sığsın. İç kaydırma olmasın."""
+    return (n_rows + 1) * _VERIM_ROW_PX + _HOUR_HEIGHT_PAD
+
+
+def _verim_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Ekip alt alta. Son satır toplam. Sıra toplam süreye göre."""
+    records: list[dict[str, Any]] = []
+    for row in rows:
+        records.append(
+            {
+                "sıra": str(int(row["sira"])),
+                "temsilci": str(row["temsilci"]),
+                "gerçekleşen görüşme süresi": fmt_clock_span(
+                    row.get("phone_sec"), day_total=True
+                ),
+                "gerçekleşen toplantı süresi": fmt_meet_minutes(
+                    row.get("meet_min"), day_total=True
+                ),
+                "toplam süre": fmt_clock_span(
+                    row.get("total_sec"), day_total=True
+                ),
+                "ortalama görüşme": fmt_clock_span(row.get("avg_sec")),
+                "görüşme adedi": str(int(row.get("talk_n") or 0)),
+                "katıldı": str(int(row.get("meet_n") or 0)),
+                "yorum": _comment_lines(str(row.get("yorum") or "—")),
+            }
+        )
+    if not records:
+        return records
+    phone = sum(float(row.get("phone_sec") or 0) for row in rows)
+    meet = sum(float(row.get("meet_min") or 0) for row in rows)
+    total = sum(float(row.get("total_sec") or 0) for row in rows)
+    talks = sum(int(row.get("talk_n") or 0) for row in rows)
+    meets = sum(int(row.get("meet_n") or 0) for row in rows)
+    pooled = (phone / talks) if talks else None
+    records.append(
+        {
+            "sıra": "",
+            "temsilci": "toplam",
+            "gerçekleşen görüşme süresi": fmt_clock_span(phone, day_total=True),
+            "gerçekleşen toplantı süresi": fmt_meet_minutes(meet, day_total=True),
+            "toplam süre": fmt_clock_span(total, day_total=True),
+            "ortalama görüşme": fmt_clock_span(pooled),
+            "görüşme adedi": str(talks),
+            "katıldı": str(meets),
+            "yorum": "",
+        }
+    )
+    return records
+
+
+def _verim_table(frame: pd.DataFrame) -> None:
+    """Tek tablo, sayfa genişliği. Yatay kaydırma yok."""
+    cfg: dict[str, Any] = {}
+    for col in frame.columns:
+        leaf = _col_leaf(col)
+        text = _VERIM_HELP.get(leaf) or COL_HELP.get(leaf)
+        cfg[leaf] = st.column_config.TextColumn(
+            leaf,
+            help=text,
+            width=_VERIM_WIDTHS.get(leaf),
+        )
     st.dataframe(
         frame,
         hide_index=True,
         use_container_width=True,
-        column_config=_col_config(frame),
-        row_height=88,
+        column_config=cfg,
+        row_height=_VERIM_ROW_PX,
+        height=_verim_table_height(len(frame)),
     )
 
 
-def _render_activity_rank(day: date) -> None:
-    """Yönetici. Kişi kişi gün ve hafta. Saat tablosunun altında."""
-    payload = _activity_rank(day.isoformat())
-    left, right = st.columns(2)
-    with left:
-        st.subheader("Günlük performans", help=HELP_SURE_SIRA)
-        day_rows = payload["day"]
-        if not day_rows:
-            st.caption("veri yetersiz")
-        else:
-            _activity_table(_df(_activity_rank_records(day_rows)))
-    with right:
-        st.subheader("Haftalık performans", help=HELP_SURE_SIRA)
-        st.caption(fmt_span(payload["week_start"], payload["week_end"]))
-        week_rows = payload["week"]
-        if not week_rows:
-            st.caption("veri yetersiz")
-        else:
-            _activity_table(_df(_activity_rank_records(week_rows)))
-    day_err = int(payload.get("day_meet_err") or 0)
-    week_err = int(payload.get("week_meet_err") or 0)
-    if day_err or week_err:
+def _verim_range() -> tuple[date, date] | None:
+    """Kapalı aralık. İkinci tarih seçilmeden None."""
+    today = datetime.now(_TZ).date()
+    monday = today - timedelta(days=today.weekday())
+    raw = st.date_input(
+        "Aralık",
+        value=(monday, today),
+        max_value=today,
+        key="verim_aralik",
+    )
+    if isinstance(raw, (tuple, list)):
+        if len(raw) < 2:
+            return None
+        start = _as_date(raw[0])
+        end = _as_date(raw[1])
+    elif isinstance(raw, date):
+        return None
+    else:
+        start, end = monday, today
+    if start > end:
+        start, end = end, start
+    if end > today:
+        end = today
+    return start, end
+
+
+def _render_verimlilik() -> None:
+    """Yönetici. Tarih aralığında satış ekibi, alt alta."""
+    _heading("Verimlilik", HELP_SURE_SIRA)
+    chosen = _verim_range()
+    if chosen is None:
+        st.caption("bitiş tarihini seçin")
+        return
+    start, end = chosen
+    st.caption(fmt_span(start, end))
+    rows = _efficiency_rank(start.isoformat(), end.isoformat())
+    if not rows:
+        st.caption("veri yetersiz")
+        return
+    _verim_table(_df(_verim_records(rows)))
+    meet_err = int(rows[0].get("meet_err") or 0)
+    if meet_err:
         logger.warning(
-            "toplantı süresi çevrilemedi: gün %s, hafta %s kayıt",
-            day_err,
-            week_err,
+            "toplantı süresi çevrilemedi: %s kayıt (aralık, katildi)",
+            meet_err,
         )
-        st.caption(
-            f"toplantı süresi çevrilemedi: gün {day_err}, hafta {week_err} kayıt"
-        )
+        st.caption(f"toplantı süresi çevrilemedi: {meet_err} kayıt")
 
 
 def _hour_table_frame(
@@ -1459,6 +1580,7 @@ def _render_bugun(
     scope: str = "gun",
 ) -> None:
     del with_team
+    del scope
     hours = display_hours(day)
     _heading(f"Bugün - {fmt_day(day)}", HELP_BUGUN)
     if not hours:
@@ -1479,8 +1601,6 @@ def _render_bugun(
         frame = _hour_table_frame(hour_rows, day)
         _report_meeting_split(hour_rows)
         _hour_table(frame)
-    if scope == "yon":
-        _render_activity_rank(day)
 
 
 def _share_send_error(exc: BaseException) -> None:
@@ -1886,6 +2006,7 @@ def _render_profil(window: DateWindow) -> None:
 
 _YON_REPORTS: tuple[str, ...] = (
     "Bugün",
+    "Verimlilik",
     "Ekip",
     "Ulaşma",
     "İş yükü",
@@ -1939,6 +2060,10 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
             rep_id, block_day, with_team=rep_id is not None, scope="yon"
         )
         _render_block_share(block_day)
+        return
+
+    if report == "Verimlilik":
+        _render_verimlilik()
         return
 
     if report == "Ekip":

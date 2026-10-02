@@ -643,3 +643,99 @@ def test_efficiency_comment_skips_thin_average_and_empty_day() -> None:
     )
     assert ranked[0]["yorum"] == "Telefon ve toplantı kaydı yok."
     assert ranked[0]["avg_sec"] is None
+
+
+def test_hour_widths_fit_without_horizontal_scroll() -> None:
+    from app.panel import HOUR_COL_GROUPS, _HOUR_COL_WIDTHS, _sure_cell_text
+
+    leaves = [leaf for _group, leaf in HOUR_COL_GROUPS]
+    assert set(leaves) <= set(_HOUR_COL_WIDTHS)
+    assert sum(_HOUR_COL_WIDTHS[leaf] for leaf in leaves) <= 1100
+    cell = _sure_cell_text(
+        {"sure_ort": 90.0, "sure_tipik": 80.0, "sure_toplam": 180.0}
+    )
+    assert cell.split("\n") == [
+        "ort. 1 dk 30 sn",
+        "tipik 1 dk 20 sn",
+        "toplam 3 dk",
+    ]
+    day = _sure_cell_text(
+        {"sure_toplam": 2 * 3600 + 21 * 60}, day_total=True
+    )
+    assert day == "toplam 2 sa 21 dk"
+    assert " sn" not in day
+
+
+def test_verim_records_rank_and_pooled_average() -> None:
+    from app.panel import _VERIM_WIDTHS, _YON_REPORTS, _TEM_REPORTS, _verim_records
+    from pusula.panel_data import apply_efficiency_notes, rank_activity_rows
+    import inspect
+    from pusula.panel_data import (
+        _attended_meeting_sql,
+        _meet_duration_parsed_sql,
+        _phone_talk_sql,
+        activity_rank_between,
+    )
+
+    assert "Verimlilik" in _YON_REPORTS
+    assert "Verimlilik" not in _TEM_REPORTS
+    assert sum(_VERIM_WIDTHS.values()) <= 1100
+    rows = apply_efficiency_notes(
+        rank_activity_rows(
+            [
+                {
+                    "rep_id": "b",
+                    "temsilci": "Miray Aksel",
+                    "phone_sec": 3600,
+                    "meet_min": 0,
+                    "talk_n": 10,
+                    "meet_n": 0,
+                },
+                {
+                    "rep_id": "a",
+                    "temsilci": "Ayşe Kar",
+                    "phone_sec": 600,
+                    "meet_min": 30,
+                    "talk_n": 4,
+                    "meet_n": 1,
+                },
+            ]
+        )
+    )
+    records = _verim_records(rows)
+    assert list(records[0]) == [
+        "sıra",
+        "temsilci",
+        "gerçekleşen görüşme süresi",
+        "gerçekleşen toplantı süresi",
+        "toplam süre",
+        "ortalama görüşme",
+        "görüşme adedi",
+        "katıldı",
+        "yorum",
+    ]
+    assert [row["temsilci"] for row in records] == [
+        "Miray Aksel",
+        "Ayşe Kar",
+        "toplam",
+    ]
+    assert records[0]["sıra"] == "1"
+    assert records[0]["gerçekleşen görüşme süresi"] == "1 sa"
+    assert records[0]["gerçekleşen toplantı süresi"] == "0 dk"
+    assert records[0]["görüşme adedi"] == "10"
+    assert records[0]["katıldı"] == "0"
+    assert "\n" in records[0]["yorum"]
+    assert "Toplantı yok." in records[0]["yorum"]
+    assert records[2]["ortalama görüşme"] == "5 dk"
+    assert records[2]["görüşme adedi"] == "14"
+    assert records[2]["katıldı"] == "1"
+    assert records[2]["yorum"] == ""
+    src = inspect.getsource(activity_rank_between)
+    sql_src = src.split('sql = f"""', 1)[1].split('"""', 1)[0]
+    assert sql_src.count("%s") == 4
+    for frag in (
+        _phone_talk_sql("e"),
+        _attended_meeting_sql("e"),
+        _meet_duration_parsed_sql("e"),
+    ):
+        assert "%" not in frag

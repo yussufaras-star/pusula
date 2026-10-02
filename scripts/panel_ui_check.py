@@ -44,6 +44,7 @@ MEETING_LEAVES: tuple[str, ...] = (
 _SCROLL_TOL_PX = 6
 _YON_REPORTS: tuple[str, ...] = (
     "Bugün",
+    "Verimlilik",
     "Ekip",
     "Ulaşma",
     "İş yükü",
@@ -697,10 +698,10 @@ def _write_ci_secrets(person: dict[str, str]) -> Path:
 
 
 def _assert_hour_dataframe_scroll(page: Any) -> bool:
-    """gün toplamı dataframe'inde dikey iç kaydırma olmasın.
+    """gün toplamı dataframe'inde iç kaydırma olmasın.
 
-    Yatay kaydırma beklenir; sayı yazılır, tek başına hata sayılmaz.
-    Dış kutu kaydırmıyorsa ölçü iç scroller'dan alınır.
+    Dikey ve yatay kaydırma hata. Dış kutu kaydırmıyorsa ölçü
+    iç scroller'dan alınır.
     """
     try:
         info = page.evaluate(
@@ -790,6 +791,9 @@ def _assert_hour_dataframe_scroll(page: Any) -> bool:
         print("saatlik dataframe goruntusu alinamadi")
     if vertical:
         print("saatlik tablo dikey kaydirma: HATA")
+        return False
+    if horizontal:
+        print("saatlik tablo yatay kaydirma: HATA")
         return False
     return True
 
