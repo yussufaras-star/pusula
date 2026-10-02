@@ -493,24 +493,32 @@ def test_rank_tie_breaks_by_name() -> None:
 
 def test_activity_rank_table_shows_durations_and_team_total() -> None:
     from app.panel import _activity_rank_records
-    from pusula.panel_data import fmt_span, rank_activity_rows
+    from pusula.panel_data import apply_efficiency_notes, fmt_span, rank_activity_rows
 
-    rows = rank_activity_rows(
-        [
-            {
-                "rep_id": "b",
-                "temsilci": "Miray Aksel",
-                "phone_sec": 3600,
-                "meet_min": 0,
-            },
-            {
-                "rep_id": "a",
-                "temsilci": "Ayşe Kar",
-                "phone_sec": 600,
-                "meet_min": 30,
-            },
-        ]
+    rows = apply_efficiency_notes(
+        rank_activity_rows(
+            [
+                {
+                    "rep_id": "b",
+                    "temsilci": "Miray Aksel",
+                    "phone_sec": 3600,
+                    "meet_min": 0,
+                    "talk_n": 10,
+                    "meet_n": 0,
+                },
+                {
+                    "rep_id": "a",
+                    "temsilci": "Ayşe Kar",
+                    "phone_sec": 600,
+                    "meet_min": 30,
+                    "talk_n": 4,
+                    "meet_n": 1,
+                },
+            ]
+        )
     )
+    assert rows[0]["avg_sec"] == 360
+    assert rows[1]["avg_sec"] == 150
     records = _activity_rank_records(rows)
     assert [row["temsilci"] for row in records] == [
         "Miray Aksel",
@@ -521,16 +529,117 @@ def test_activity_rank_table_shows_durations_and_team_total() -> None:
     assert records[0]["telefon süresi"] == "1 sa"
     assert records[0]["toplantı süresi"] == "0 dk"
     assert records[0]["toplam süre"] == "1 sa"
+    assert records[0]["ortalama görüşme"] == "6 dk"
+    assert "Görüşme ortalaması ekibin üstünde" in records[0]["yorum"]
+    assert "6 dk" in records[0]["yorum"]
+    assert "Toplantı yok." in records[0]["yorum"]
     assert records[1]["telefon süresi"] == "10 dk"
     assert records[1]["toplantı süresi"] == "30 dk"
     assert records[1]["toplam süre"] == "40 dk"
+    assert records[1]["ortalama görüşme"] == "2 dk 30 sn"
+    assert "Görüşme ortalaması ekibin altında" in records[1]["yorum"]
+    assert "Sürenin çoğu toplantıda." in records[1]["yorum"]
+    assert "!" not in records[0]["yorum"]
+    assert "!" not in records[1]["yorum"]
     assert records[2]["sıra"] == ""
     assert records[2]["telefon süresi"] == "1 sa 10 dk"
     assert records[2]["toplantı süresi"] == "30 dk"
     assert records[2]["toplam süre"] == "1 sa 40 dk"
+    assert records[2]["ortalama görüşme"] == "5 dk"
+    assert records[2]["yorum"] == ""
     assert "↑" not in str(records)
     assert "↓" not in str(records)
     assert fmt_span(date(2026, 9, 28), date(2026, 10, 2)) == (
         "28 Eylül – 2 Ekim 2026"
     )
     assert fmt_span(date(2026, 10, 2), date(2026, 10, 2)) == "2 Ekim 2026"
+
+
+def test_efficiency_comment_skips_thin_average_and_empty_day() -> None:
+    from pusula.panel_data import apply_efficiency_notes, efficiency_comment, rank_activity_rows
+
+    team = {"avg_sec": 300.0, "total_sec": 3600.0}
+    thin = efficiency_comment(
+        {
+            "phone_sec": 80.0,
+            "meet_min": 0.0,
+            "total_sec": 80.0,
+            "talk_n": 2,
+            "meet_n": 0,
+            "avg_sec": 40.0,
+        },
+        team,
+    )
+    assert "veri yetersiz" in thin
+    assert "Görüşme ortalaması" not in thin
+    assert "2 görüşme" in thin
+
+    empty = efficiency_comment(
+        {
+            "phone_sec": 0.0,
+            "meet_min": 0.0,
+            "total_sec": 0.0,
+            "talk_n": 0,
+            "meet_n": 0,
+        },
+        team,
+    )
+    assert empty == "Telefon ve toplantı kaydı yok."
+
+    meeting_only = efficiency_comment(
+        {
+            "phone_sec": 0.0,
+            "meet_min": 30.0,
+            "total_sec": 1800.0,
+            "talk_n": 0,
+            "meet_n": 1,
+        },
+        team,
+    )
+    assert meeting_only == "Telefon görüşmesi yok. Süre toplantıdan geliyor."
+
+    # Eşik tam %20. Ortalama 240 sn, ekip 300 sn.
+    on_edge = efficiency_comment(
+        {
+            "phone_sec": 960.0,
+            "meet_min": 0.0,
+            "total_sec": 960.0,
+            "talk_n": 4,
+            "meet_n": 0,
+            "avg_sec": 240.0,
+        },
+        {"avg_sec": 300.0, "total_sec": 960.0},
+    )
+    assert "Görüşme ortalaması ekibin altında" in on_edge
+    assert "Müşteriyle geçen süre ekibe yakın" in on_edge
+
+    inside = efficiency_comment(
+        {
+            "phone_sec": 1000.0,
+            "meet_min": 0.0,
+            "total_sec": 1000.0,
+            "talk_n": 4,
+            "meet_n": 0,
+            "avg_sec": 250.0,
+        },
+        {"avg_sec": 300.0, "total_sec": 1000.0},
+    )
+    assert "Görüşme ortalaması ekibe yakın" in inside
+    assert "Toplantı yok." in inside
+
+    ranked = apply_efficiency_notes(
+        rank_activity_rows(
+            [
+                {
+                    "rep_id": "z",
+                    "temsilci": "Boş",
+                    "phone_sec": 0,
+                    "meet_min": 0,
+                    "talk_n": 0,
+                    "meet_n": 0,
+                }
+            ]
+        )
+    )
+    assert ranked[0]["yorum"] == "Telefon ve toplantı kaydı yok."
+    assert ranked[0]["avg_sec"] is None

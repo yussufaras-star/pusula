@@ -238,7 +238,11 @@ HELP_SURE_SIRA = (
     "Telefon: açılan görüşmenin süresi. Giden temas ve süreli "
     "gelen arama. Cevapsız arama yok. Toplantı: katılınan "
     "randevunun planlanan süresi. Gerçekleşen süre kaydı yok. "
+    "Ortalama görüşme: telefon süresinin görüşme sayısına bölümü. "
     "Sıra, telefon ile toplantının toplamına göre. "
+    "Yorum, toplam süreyi ve görüşme ortalamasını ekiple kıyaslar. "
+    "Fark yüzde 20'nin altındaysa yakın sayılır. "
+    "Üçten az görüşmede ortalama kıyaslanmaz. "
     "Gün seçilen takvim günü. Hafta o günün pazartesinden "
     "pazara; bugün henüz bitmemişse bugüne kadar."
 )
@@ -283,6 +287,15 @@ COL_HELP: dict[str, str] = {
     "toplam süre": (
         "Telefon süresi ile katılınan toplantının planlanan "
         "süresinin toplamı. Sıra buna göre."
+    ),
+    "ortalama görüşme": (
+        "Telefon süresinin görüşme sayısına bölümü. "
+        "Giden temas ve süreli gelen arama."
+    ),
+    "yorum": (
+        "Toplam müşteri süresi ve görüşme ortalamasının "
+        "ekibe göre yeri. Fark yüzde 20'nin altındaysa yakın. "
+        "Üçten az görüşmede ortalama kıyaslanmaz."
     ),
     "toplantı süresi": (
         "Planlanan süre. Yalnız katılınan toplantılar. "
@@ -903,6 +916,13 @@ def _col_config(frame: pd.DataFrame) -> dict[str, Any] | None:
     for col in frame.columns:
         leaf = _col_leaf(col)
         text = COL_HELP.get(leaf)
+        if leaf == "yorum":
+            cfg[leaf] = st.column_config.TextColumn(
+                leaf,
+                help=text,
+                width="large",
+            )
+            continue
         if text:
             cfg[leaf] = st.column_config.Column(leaf, help=text)
     return cfg or None
@@ -1289,6 +1309,8 @@ def _activity_rank_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "toplam süre": fmt_clock_span(
                     row.get("total_sec"), day_total=True
                 ),
+                "ortalama görüşme": fmt_clock_span(row.get("avg_sec")),
+                "yorum": str(row.get("yorum") or "—"),
             }
         )
     if not records:
@@ -1296,6 +1318,8 @@ def _activity_rank_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     phone = sum(float(row.get("phone_sec") or 0) for row in rows)
     meet = sum(float(row.get("meet_min") or 0) for row in rows)
     total = sum(float(row.get("total_sec") or 0) for row in rows)
+    talks = sum(int(row.get("talk_n") or 0) for row in rows)
+    pooled = (phone / talks) if talks else None
     records.append(
         {
             "sıra": "",
@@ -1303,9 +1327,22 @@ def _activity_rank_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "telefon süresi": fmt_clock_span(phone, day_total=True),
             "toplantı süresi": fmt_meet_minutes(meet, day_total=True),
             "toplam süre": fmt_clock_span(total, day_total=True),
+            "ortalama görüşme": fmt_clock_span(pooled),
+            "yorum": "",
         }
     )
     return records
+
+
+def _activity_table(frame: pd.DataFrame) -> None:
+    """Süre sırası. Yorum sığsın diye satır yüksek."""
+    st.dataframe(
+        frame,
+        hide_index=True,
+        use_container_width=True,
+        column_config=_col_config(frame),
+        row_height=88,
+    )
 
 
 def _render_activity_rank(day: date) -> None:
@@ -1315,22 +1352,19 @@ def _render_activity_rank(day: date) -> None:
         "**Satış ekibi — telefon + gerçekleşen toplantı**",
         help=HELP_SURE_SIRA,
     )
-    left, right = st.columns(2)
-    with left:
-        st.markdown("Gün sıralaması", help=HELP_SURE_SIRA)
-        day_rows = payload["day"]
-        if not day_rows:
-            st.caption("veri yetersiz")
-        else:
-            _table(_df(_activity_rank_records(day_rows)))
-    with right:
-        st.markdown("Hafta sıralaması", help=HELP_SURE_SIRA)
-        st.caption(fmt_span(payload["week_start"], payload["week_end"]))
-        week_rows = payload["week"]
-        if not week_rows:
-            st.caption("veri yetersiz")
-        else:
-            _table(_df(_activity_rank_records(week_rows)))
+    st.markdown("Gün sıralaması", help=HELP_SURE_SIRA)
+    day_rows = payload["day"]
+    if not day_rows:
+        st.caption("veri yetersiz")
+    else:
+        _activity_table(_df(_activity_rank_records(day_rows)))
+    st.markdown("Hafta sıralaması", help=HELP_SURE_SIRA)
+    st.caption(fmt_span(payload["week_start"], payload["week_end"]))
+    week_rows = payload["week"]
+    if not week_rows:
+        st.caption("veri yetersiz")
+    else:
+        _activity_table(_df(_activity_rank_records(week_rows)))
     day_err = int(payload.get("day_meet_err") or 0)
     week_err = int(payload.get("week_meet_err") or 0)
     if day_err or week_err:

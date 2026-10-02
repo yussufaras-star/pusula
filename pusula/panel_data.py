@@ -2019,16 +2019,29 @@ def fmt_span(start: date, end: date) -> str:
     return f"{left} – {right}"
 
 
+# Performans profilindeki göreli eşikle aynı bant.
+ACTIVITY_REL = 0.20
+# Altında ortalama, ekiple kıyaslanmaz.
+TALK_AVG_MIN_N = 3
+# Toplam sürenin bu payı toplantıdaysa yorum ona bakar.
+MEET_SHARE_NOTE = 0.60
+
+
 def rank_activity_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Toplam süre azalan. Eşitlikte ad, sonra rep_id. Sıra 1'den."""
     prepared: list[dict[str, Any]] = []
     for row in rows:
         phone = float(row.get("phone_sec") or 0)
         meet = float(row.get("meet_min") or 0)
+        talk_n = int(row.get("talk_n") or 0)
+        meet_n = int(row.get("meet_n") or 0)
         item = dict(row)
         item["phone_sec"] = phone
         item["meet_min"] = meet
+        item["talk_n"] = talk_n
+        item["meet_n"] = meet_n
         item["total_sec"] = activity_total_sec(phone, meet)
+        item["avg_sec"] = (phone / talk_n) if talk_n > 0 else None
         prepared.append(item)
     prepared.sort(
         key=lambda r: (
@@ -2042,6 +2055,120 @@ def rank_activity_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ranked = dict(row)
         ranked["sira"] = index
         out.append(ranked)
+    return out
+
+
+def _activity_band(value: float | None, baseline: float | None) -> str | None:
+    """Ekip ortalamasına göre alti / yakin / ustu. Eşik ACTIVITY_REL."""
+    if value is None or baseline is None:
+        return None
+    base = float(baseline)
+    if base <= 0:
+        return None
+    rel = (float(value) - base) / base
+    if rel <= -ACTIVITY_REL:
+        return "alti"
+    if rel >= ACTIVITY_REL:
+        return "ustu"
+    return "yakin"
+
+
+def activity_team_baseline(rows: list[dict[str, Any]]) -> dict[str, float | None]:
+    """Ekip: görüşme ortalaması havuz, toplam süre kişi ortalaması."""
+    if not rows:
+        return {"avg_sec": None, "total_sec": None}
+    phone = sum(float(row.get("phone_sec") or 0) for row in rows)
+    talks = sum(int(row.get("talk_n") or 0) for row in rows)
+    totals = [float(row.get("total_sec") or 0) for row in rows]
+    return {
+        "avg_sec": (phone / talks) if talks else None,
+        "total_sec": sum(totals) / len(totals),
+    }
+
+
+def efficiency_comment(
+    row: dict[str, Any],
+    team: dict[str, float | None],
+) -> str:
+    """Kişi yorumu. Gözlem ve ölçülen süre. Talimat yok.
+
+    Müşteri süresi: telefon + katılınan toplantı.
+    Görüşme ortalaması: telefon süresinin görüşme sayısına bölümü.
+    Üçten az görüşmede ortalama ekiple kıyaslanmaz.
+    """
+    phone = float(row.get("phone_sec") or 0)
+    meet_min = float(row.get("meet_min") or 0)
+    total = float(row.get("total_sec") or 0)
+    talk_n = int(row.get("talk_n") or 0)
+    meet_n = int(row.get("meet_n") or 0)
+    avg = row.get("avg_sec")
+    if avg is None and talk_n > 0:
+        avg = phone / talk_n
+    if talk_n == 0 and meet_n == 0:
+        return "Telefon ve toplantı kaydı yok."
+    if talk_n == 0 and meet_min <= 0:
+        return "Telefon görüşmesi yok. Toplantı süresi çevrilemedi."
+    if talk_n == 0:
+        return "Telefon görüşmesi yok. Süre toplantıdan geliyor."
+
+    parts: list[str] = []
+    volume = _activity_band(total, team.get("total_sec"))
+    volume_text = {
+        "alti": "Müşteriyle geçen süre ekibin altında",
+        "ustu": "Müşteriyle geçen süre ekibin üstünde",
+        "yakin": "Müşteriyle geçen süre ekibe yakın",
+    }.get(volume or "")
+    own_total = fmt_clock_span(total, day_total=True)
+    if volume_text and team.get("total_sec") is not None:
+        team_total = fmt_clock_span(team.get("total_sec"), day_total=True)
+        parts.append(f"{volume_text} ({own_total}, ekip {team_total}).")
+    else:
+        parts.append(f"Müşteriyle geçen süre {own_total}.")
+
+    if talk_n < TALK_AVG_MIN_N:
+        parts.append(f"Ortalama görüşme için veri yetersiz ({talk_n} görüşme).")
+    else:
+        avg_band = _activity_band(
+            float(avg) if avg is not None else None,
+            team.get("avg_sec"),
+        )
+        avg_text = {
+            "alti": "Görüşme ortalaması ekibin altında",
+            "ustu": "Görüşme ortalaması ekibin üstünde",
+            "yakin": "Görüşme ortalaması ekibe yakın",
+        }.get(avg_band or "")
+        if (
+            avg_text
+            and avg is not None
+            and team.get("avg_sec") is not None
+        ):
+            own_avg = fmt_clock_span(float(avg))
+            team_avg = fmt_clock_span(team.get("avg_sec"))
+            parts.append(
+                f"{avg_text} ({own_avg}, ekip {team_avg}, {talk_n} görüşme)."
+            )
+        elif avg is not None:
+            parts.append(
+                f"Görüşme ortalaması {fmt_clock_span(float(avg))} "
+                f"({talk_n} görüşme)."
+            )
+
+    meet_sec = meet_min * 60.0
+    if total > 0 and meet_sec / total >= MEET_SHARE_NOTE and talk_n > 0:
+        parts.append("Sürenin çoğu toplantıda.")
+    elif meet_n == 0 and volume in {"ustu", "yakin"} and talk_n >= TALK_AVG_MIN_N:
+        parts.append("Toplantı yok.")
+    return " ".join(parts)
+
+
+def apply_efficiency_notes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sıra satırlarına bireysel verimlilik yorumu yazar."""
+    team = activity_team_baseline(rows)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["yorum"] = efficiency_comment(item, team)
+        out.append(item)
     return out
 
 
@@ -2066,9 +2193,15 @@ def activity_duration_rank(day: date) -> dict[str, Any]:
                coalesce(sum({_DUR_E}) FILTER (
                  WHERE {phone} AND {_DAY_IST} = %s
                ), 0)::float AS day_phone,
+               count(*) FILTER (
+                 WHERE {phone} AND {_DAY_IST} = %s
+               )::int AS day_talks,
                coalesce(sum({meet_parsed}) FILTER (
                  WHERE {attended} AND {_DAY_IST} = %s
                ), 0)::float AS day_meet,
+               count(*) FILTER (
+                 WHERE {attended} AND {_DAY_IST} = %s
+               )::int AS day_meets,
                count(*) FILTER (
                  WHERE {attended}
                    AND {_DAY_IST} = %s
@@ -2076,8 +2209,10 @@ def activity_duration_rank(day: date) -> dict[str, Any]:
                )::int AS day_err,
                coalesce(sum({_DUR_E}) FILTER (WHERE {phone}), 0)::float
                  AS week_phone,
+               count(*) FILTER (WHERE {phone})::int AS week_talks,
                coalesce(sum({meet_parsed}) FILTER (WHERE {attended}), 0)::float
                  AS week_meet,
+               count(*) FILTER (WHERE {attended})::int AS week_meets,
                count(*) FILTER (
                  WHERE {attended} AND ({meet_parsed}) IS NULL
                )::int AS week_err
@@ -2098,6 +2233,8 @@ def activity_duration_rank(day: date) -> dict[str, Any]:
                 day,
                 day,
                 day,
+                day,
+                day,
                 list(SALES_TEAM_IDS),
                 org_id,
                 start_ts,
@@ -2108,13 +2245,28 @@ def activity_duration_rank(day: date) -> dict[str, Any]:
     week_raw: list[dict[str, Any]] = []
     day_err = 0
     week_err = 0
-    for rep_id, name, d_phone, d_meet, d_err, w_phone, w_meet, w_err in fetched:
+    for (
+        rep_id,
+        name,
+        d_phone,
+        d_talks,
+        d_meet,
+        d_meets,
+        d_err,
+        w_phone,
+        w_talks,
+        w_meet,
+        w_meets,
+        w_err,
+    ) in fetched:
         base = {"rep_id": str(rep_id), "temsilci": str(name)}
         day_raw.append(
             {
                 **base,
                 "phone_sec": float(d_phone or 0),
                 "meet_min": float(d_meet or 0),
+                "talk_n": int(d_talks or 0),
+                "meet_n": int(d_meets or 0),
             }
         )
         week_raw.append(
@@ -2122,6 +2274,8 @@ def activity_duration_rank(day: date) -> dict[str, Any]:
                 **base,
                 "phone_sec": float(w_phone or 0),
                 "meet_min": float(w_meet or 0),
+                "talk_n": int(w_talks or 0),
+                "meet_n": int(w_meets or 0),
             }
         )
         day_err += int(d_err or 0)
@@ -2136,8 +2290,8 @@ def activity_duration_rank(day: date) -> dict[str, Any]:
             "toplantı süresi çevrilemedi: %s kayıt (hafta, katildi)",
             week_err,
         )
-    day_rows = rank_activity_rows(day_raw)
-    week_rows = rank_activity_rows(week_raw)
+    day_rows = apply_efficiency_notes(rank_activity_rows(day_raw))
+    week_rows = apply_efficiency_notes(rank_activity_rows(week_raw))
     return {
         "day": day_rows,
         "week": week_rows,
