@@ -6,6 +6,7 @@ Giriş: st.session_state + st.secrets[passwords]. Salt okuma.
 
 from __future__ import annotations
 
+import html
 import logging
 import os
 import sys
@@ -406,10 +407,24 @@ html, body, [class*="css"] {
   padding-bottom: 3.2rem;
   max-width: 1240px;
 }
-header[data-testid="stHeader"] {
-  background: transparent;
+header[data-testid="stHeader"],
+[data-testid="stToolbar"],
+[data-testid="stDecoration"] {
+  display: none;
 }
 #MainMenu, footer { visibility: hidden; }
+.stButton > button[data-testid="stBaseButton-secondary"] {
+  background: transparent;
+  color: #1A1F26;
+  border: 1px solid #DDD6C8;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.stButton > button[data-testid="stBaseButton-secondary"]:hover {
+  background: #E7E2D6;
+  color: #1A1F26;
+  border-color: #C9C2B4;
+}
 .pusula-kicker {
   margin: 0;
   color: #6A6258;
@@ -425,6 +440,10 @@ header[data-testid="stHeader"] {
   font-weight: 500;
   letter-spacing: -0.03em;
   line-height: 1;
+}
+.pusula-mark-compact {
+  font-size: 1.45rem;
+  margin: 0;
 }
 h1, h2, h3, [data-testid="stHeading"] {
   font-family: "Source Serif 4", Georgia, serif;
@@ -474,16 +493,21 @@ hr {
 .stTabs [aria-selected="true"] {
   color: #1A1F26;
 }
-.stButton > button, .stFormSubmitButton > button {
+.stButton > button[data-testid="stBaseButton-primary"],
+.stFormSubmitButton > button {
   border-radius: 999px;
   border: 1px solid #1A1F26;
   background: #1A1F26;
   color: #F3F0E8;
   font-weight: 600;
 }
-.stButton > button:hover, .stFormSubmitButton > button:hover {
+.stButton > button[data-testid="stBaseButton-primary"]:hover,
+.stFormSubmitButton > button:hover {
   border-color: #1B365D;
   background: #1B365D;
+  color: #F3F0E8;
+}
+.stFormSubmitButton > button p {
   color: #F3F0E8;
 }
 [data-testid="stDataFrame"] {
@@ -532,16 +556,46 @@ hr {
 </style>
 """
 
+# Giriş yalnız. Panelin geniş kabuğunu ezmez; oturum açılınca kalkar.
+_LOGIN_CHROME = """
+<style>
+[data-testid="stAppViewContainer"] .block-container {
+  min-height: 100vh !important;
+  width: min(400px, calc(100vw - 3rem)) !important;
+  max-width: 400px !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  padding: 2rem 0 !important;
+}
+[data-testid="stMainBlockContainer"] > div,
+[data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"],
+[data-testid="stMainBlockContainer"] [data-testid="stForm"] {
+  width: 100% !important;
+  max-width: 100% !important;
+  flex: 0 0 auto !important;
+  height: auto !important;
+}
+[data-testid="stTextInput"] input {
+  background: #FBFAF6;
+  border-radius: 10px;
+}
+</style>
+"""
+
 
 def _apply_chrome() -> None:
     """Sayfa kabuğu. Metrik ve bölüm sırasına dokunmaz."""
     st.markdown(_CHROME, unsafe_allow_html=True)
 
 
-def _mark() -> None:
+def _mark(*, compact: bool = False) -> None:
+    mark_class = "pusula-mark pusula-mark-compact" if compact else "pusula-mark"
     st.markdown(
         '<p class="pusula-kicker">Rexven satış operasyonu</p>'
-        '<p class="pusula-mark">Pusula</p>',
+        f'<p class="{mark_class}">Pusula</p>',
         unsafe_allow_html=True,
     )
 
@@ -549,15 +603,16 @@ def _mark() -> None:
 def _render_login() -> None:
     if _session_user() is not None:
         return
-    _, mid, _ = st.columns([1, 1.15, 1])
-    with mid:
-        _mark()
-        if not _passwords():
-            st.error("giriş yapılandırması yok")
-        with st.form("login"):
-            email = st.text_input("Kullanıcı adı")
-            password = st.text_input("Şifre", type="password")
-            submitted = st.form_submit_button("Giriş")
+    st.markdown(_LOGIN_CHROME, unsafe_allow_html=True)
+    _mark()
+    if not _passwords():
+        st.error("giriş yapılandırması yok")
+    with st.form("login"):
+        email = st.text_input("Kullanıcı adı", placeholder="ornek@rexven.com")
+        password = st.text_input("Şifre", type="password")
+        submitted = st.form_submit_button(
+            "Giriş", type="primary", use_container_width=True
+        )
     if not submitted:
         return
     passwords = _passwords()
@@ -578,12 +633,12 @@ def _render_login() -> None:
 
 
 def _render_header(user: AuthUser) -> None:
-    left, right = st.columns([6, 1])
+    left, right = st.columns([6, 1], vertical_alignment="center")
     with left:
-        _mark()
+        _mark(compact=True)
+        st.caption(html.escape(user.email))
     with right:
-        st.caption(user.email)
-        if st.button("Çıkış", use_container_width=True):
+        if st.button("Çıkış", type="secondary", key="logout"):
             st.session_state.clear()
             st.rerun()
 
@@ -2269,7 +2324,12 @@ def render_temsilci(
 
 
 def main() -> None:
-    st.set_page_config(page_title="Pusula", page_icon="P", layout="wide")
+    st.set_page_config(
+        page_title="Pusula",
+        page_icon="P",
+        layout="wide",
+        initial_sidebar_state="collapsed",
+    )
     _apply_chrome()
     _apply_secrets()
     user = _session_user()
