@@ -1346,25 +1346,24 @@ def _activity_table(frame: pd.DataFrame) -> None:
 
 
 def _render_activity_rank(day: date) -> None:
-    """Yönetici. Satış ekibinin gün ve hafta süre sırası."""
+    """Yönetici. Kişi kişi gün ve hafta. Saat tablosunun altında."""
     payload = _activity_rank(day.isoformat())
-    st.markdown(
-        "**Satış ekibi — telefon + gerçekleşen toplantı**",
-        help=HELP_SURE_SIRA,
-    )
-    st.markdown("Gün sıralaması", help=HELP_SURE_SIRA)
-    day_rows = payload["day"]
-    if not day_rows:
-        st.caption("veri yetersiz")
-    else:
-        _activity_table(_df(_activity_rank_records(day_rows)))
-    st.markdown("Hafta sıralaması", help=HELP_SURE_SIRA)
-    st.caption(fmt_span(payload["week_start"], payload["week_end"]))
-    week_rows = payload["week"]
-    if not week_rows:
-        st.caption("veri yetersiz")
-    else:
-        _activity_table(_df(_activity_rank_records(week_rows)))
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Günlük performans", help=HELP_SURE_SIRA)
+        day_rows = payload["day"]
+        if not day_rows:
+            st.caption("veri yetersiz")
+        else:
+            _activity_table(_df(_activity_rank_records(day_rows)))
+    with right:
+        st.subheader("Haftalık performans", help=HELP_SURE_SIRA)
+        st.caption(fmt_span(payload["week_start"], payload["week_end"]))
+        week_rows = payload["week"]
+        if not week_rows:
+            st.caption("veri yetersiz")
+        else:
+            _activity_table(_df(_activity_rank_records(week_rows)))
     day_err = int(payload.get("day_meet_err") or 0)
     week_err = int(payload.get("week_meet_err") or 0)
     if day_err or week_err:
@@ -1462,26 +1461,26 @@ def _render_bugun(
     del with_team
     hours = display_hours(day)
     _heading(f"Bugün - {fmt_day(day)}", HELP_BUGUN)
-    if scope == "yon":
-        _render_activity_rank(day)
     if not hours:
         st.caption("pazar mesai yok")
-        return
-    hour_rows = _today_hours(rep_id, day.isoformat())
-    if day.weekday() == 5:
-        st.caption("saatler 09:00-15:00 · doluluk 6 saat üzerinden")
     else:
-        st.caption("saatler 09:00-18:00 · doluluk 9 saat üzerinden")
-    failed = sum(int(row.get("toplanti_dk_hata") or 0) for row in hour_rows)
-    if failed:
-        logger.warning(
-            "toplantı süresi çevrilemedi: %s kayıt (katildi, meta.duration)",
-            failed,
-        )
-        st.caption(f"toplantı süresi çevrilemedi: {failed} kayıt")
-    frame = _hour_table_frame(hour_rows, day)
-    _report_meeting_split(hour_rows)
-    _hour_table(frame)
+        hour_rows = _today_hours(rep_id, day.isoformat())
+        if day.weekday() == 5:
+            st.caption("saatler 09:00-15:00 · doluluk 6 saat üzerinden")
+        else:
+            st.caption("saatler 09:00-18:00 · doluluk 9 saat üzerinden")
+        failed = sum(int(row.get("toplanti_dk_hata") or 0) for row in hour_rows)
+        if failed:
+            logger.warning(
+                "toplantı süresi çevrilemedi: %s kayıt (katildi, meta.duration)",
+                failed,
+            )
+            st.caption(f"toplantı süresi çevrilemedi: {failed} kayıt")
+        frame = _hour_table_frame(hour_rows, day)
+        _report_meeting_split(hour_rows)
+        _hour_table(frame)
+    if scope == "yon":
+        _render_activity_rank(day)
 
 
 def _share_send_error(exc: BaseException) -> None:
