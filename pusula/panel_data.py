@@ -36,6 +36,7 @@ from pusula.temas import (
     distinct_attempted_leads_sql,
     distinct_reached_leads_sql,
     duration_sec,
+    is_answered_inbound_sql,
     is_attempt_sql,
     is_cevirme_sql,
     is_donus_sql,
@@ -1965,6 +1966,187 @@ def workload_board(
         "meet_dk": occ["meet_dk"],
         "ulasilan_dk": 0.0,
         "meet_duration_key": MEET_DURATION_KEY,
+    }
+
+
+def _phone_talk_sql(alias: str = "e") -> str:
+    """Açılan telefon. Giden temas veya süreli gelen. Cevapsız yok."""
+    temas = is_temas_sql(alias)
+    inbound = is_answered_inbound_sql(alias)
+    return f"""
+        {alias}.channel = 'call'
+        AND (
+            ({alias}.direction = 'outbound' AND ({temas}))
+            OR ({inbound})
+        )
+    """
+
+
+def _attended_meeting_sql(alias: str = "e") -> str:
+    """Katılınan randevu. Katılmayan ve iptal bu süreye girmez."""
+    return (
+        f"{alias}.channel = 'meeting' "
+        f"AND {alias}.meta->>'randevu_durumu' = 'katildi'"
+    )
+
+
+def activity_total_sec(phone_sec: float, meet_min: float) -> float:
+    """Telefon saniyesi + katılınan toplantı dakikası. Çift sayım yok."""
+    phone = max(float(phone_sec), 0.0)
+    meet = max(float(meet_min), 0.0)
+    return phone + meet * 60.0
+
+
+def week_window(day: date, *, today: date | None = None) -> DateWindow:
+    """Seçilen günün pazartesi–pazar haftası. Bitiş bugünü geçmez."""
+    today = today if today is not None else datetime.now(_TZ).date()
+    monday = day - timedelta(days=day.weekday())
+    sunday = monday + timedelta(days=6)
+    end = sunday if sunday < today else today
+    if end < monday:
+        end = monday
+    return DateWindow(start=monday, end=end)
+
+
+def fmt_span(start: date, end: date) -> str:
+    """'28 Eylül – 2 Ekim 2026'. Aynı günse tek tarih."""
+    if start == end:
+        return f"{start.day} {_MONTHS[start.month - 1]} {start.year}"
+    left = f"{start.day} {_MONTHS[start.month - 1]}"
+    if start.year != end.year:
+        left = f"{left} {start.year}"
+    right = f"{end.day} {_MONTHS[end.month - 1]} {end.year}"
+    return f"{left} – {right}"
+
+
+def rank_activity_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Toplam süre azalan. Eşitlikte ad, sonra rep_id. Sıra 1'den."""
+    prepared: list[dict[str, Any]] = []
+    for row in rows:
+        phone = float(row.get("phone_sec") or 0)
+        meet = float(row.get("meet_min") or 0)
+        item = dict(row)
+        item["phone_sec"] = phone
+        item["meet_min"] = meet
+        item["total_sec"] = activity_total_sec(phone, meet)
+        prepared.append(item)
+    prepared.sort(
+        key=lambda r: (
+            -float(r["total_sec"]),
+            str(r.get("temsilci") or "").casefold(),
+            str(r.get("rep_id") or ""),
+        )
+    )
+    out: list[dict[str, Any]] = []
+    for index, row in enumerate(prepared, start=1):
+        ranked = dict(row)
+        ranked["sira"] = index
+        out.append(ranked)
+    return out
+
+
+def activity_duration_rank(day: date) -> dict[str, Any]:
+    """Satış ekibi: telefon konuşması + katılınan toplantı. Gün ve o hafta.
+
+    Telefon: giden temas ve süreli gelen. Cevapsız arama yok.
+    Toplantı: katildi kayıtlarının planlanan süresi (meta.duration).
+    Gerçekleşen toplantı dakikası Bookings'te yok.
+    """
+    from pusula.panel_ciro import SALES_TEAM_IDS
+
+    org_id = get_org_id()
+    week = week_window(day)
+    start_ts, end_ts = _bounds(week)
+    phone = _phone_talk_sql("e")
+    attended = _attended_meeting_sql("e")
+    meet_parsed = _meet_duration_parsed_sql("e")
+    sql = f"""
+        SELECT r.rep_id,
+               r.full_name,
+               coalesce(sum({_DUR_E}) FILTER (
+                 WHERE {phone} AND {_DAY_IST} = %s
+               ), 0)::float AS day_phone,
+               coalesce(sum({meet_parsed}) FILTER (
+                 WHERE {attended} AND {_DAY_IST} = %s
+               ), 0)::float AS day_meet,
+               count(*) FILTER (
+                 WHERE {attended}
+                   AND {_DAY_IST} = %s
+                   AND ({meet_parsed}) IS NULL
+               )::int AS day_err,
+               coalesce(sum({_DUR_E}) FILTER (WHERE {phone}), 0)::float
+                 AS week_phone,
+               coalesce(sum({meet_parsed}) FILTER (WHERE {attended}), 0)::float
+                 AS week_meet,
+               count(*) FILTER (
+                 WHERE {attended} AND ({meet_parsed}) IS NULL
+               )::int AS week_err
+        FROM unnest(%s::text[]) AS t(rep_id)
+        JOIN reps r ON r.org_id = %s AND r.rep_id = t.rep_id
+        LEFT JOIN events e
+          ON e.org_id = r.org_id
+         AND e.rep_id = r.rep_id
+         AND e.occurred_at >= %s
+         AND e.occurred_at <= %s
+         AND e.occurred_at <= now()
+        GROUP BY r.rep_id, r.full_name
+    """
+    with connect() as conn:
+        fetched = conn.execute(
+            sql,
+            (
+                day,
+                day,
+                day,
+                list(SALES_TEAM_IDS),
+                org_id,
+                start_ts,
+                end_ts,
+            ),
+        ).fetchall()
+    day_raw: list[dict[str, Any]] = []
+    week_raw: list[dict[str, Any]] = []
+    day_err = 0
+    week_err = 0
+    for rep_id, name, d_phone, d_meet, d_err, w_phone, w_meet, w_err in fetched:
+        base = {"rep_id": str(rep_id), "temsilci": str(name)}
+        day_raw.append(
+            {
+                **base,
+                "phone_sec": float(d_phone or 0),
+                "meet_min": float(d_meet or 0),
+            }
+        )
+        week_raw.append(
+            {
+                **base,
+                "phone_sec": float(w_phone or 0),
+                "meet_min": float(w_meet or 0),
+            }
+        )
+        day_err += int(d_err or 0)
+        week_err += int(w_err or 0)
+    if day_err:
+        logger.warning(
+            "toplantı süresi çevrilemedi: %s kayıt (gün, katildi)",
+            day_err,
+        )
+    if week_err:
+        logger.warning(
+            "toplantı süresi çevrilemedi: %s kayıt (hafta, katildi)",
+            week_err,
+        )
+    day_rows = rank_activity_rows(day_raw)
+    week_rows = rank_activity_rows(week_raw)
+    return {
+        "day": day_rows,
+        "week": week_rows,
+        "week_start": week.start,
+        "week_end": week.end,
+        "day_meet_err": day_err,
+        "week_meet_err": week_err,
+        "day_total_sec": sum(float(r["total_sec"]) for r in day_rows),
+        "week_total_sec": sum(float(r["total_sec"]) for r in week_rows),
     }
 
 

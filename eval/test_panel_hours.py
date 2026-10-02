@@ -1,6 +1,6 @@
 """Blok saat kırılımı, payda eşiği, yıl kıyası, cumartesi — DB yok."""
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from pusula.blocks import (
@@ -396,3 +396,141 @@ def test_istanbul_sql_wraps_timestamptz_expr() -> None:
         "(coalesce(closed_at, created_at) AT TIME ZONE 'Europe/Istanbul')"
     )
     assert istanbul_sql("now()") == "(now() AT TIME ZONE 'Europe/Istanbul')"
+
+
+def test_week_window_current_and_past() -> None:
+    from pusula.panel_data import week_window
+
+    today = date(2026, 10, 2)
+    current = week_window(today, today=today)
+    assert current.start == today - timedelta(days=today.weekday())
+    assert current.end == today
+    assert current.start.weekday() == 0
+
+    past_day = date(2026, 9, 16)
+    past = week_window(past_day, today=today)
+    assert past.start == past_day - timedelta(days=past_day.weekday())
+    assert past.end == past.start + timedelta(days=6)
+    assert past.end < today
+
+    sunday = past.start + timedelta(days=6)
+    assert sunday.weekday() == 6
+    from_sunday = week_window(sunday, today=today)
+    assert from_sunday.start == past.start
+    assert from_sunday.end == sunday
+
+
+def test_activity_total_adds_phone_and_meeting_once() -> None:
+    from pusula.panel_data import activity_total_sec
+
+    assert activity_total_sec(600, 30) == 600 + 30 * 60
+    assert activity_total_sec(0, 0) == 0
+    assert activity_total_sec(-5, -2) == 0
+
+
+def test_phone_talk_and_attended_meeting_sql() -> None:
+    from pusula.panel_data import _attended_meeting_sql, _phone_talk_sql
+
+    phone = _phone_talk_sql("e")
+    assert "e.direction = 'outbound'" in phone
+    assert "e.direction = 'inbound'" in phone
+    assert "katildi" not in phone
+    meeting = _attended_meeting_sql("e")
+    assert "katildi" in meeting
+    assert "katilmadi" not in meeting
+    assert "iptal" not in meeting
+
+
+def test_rank_activity_orders_by_combined_duration() -> None:
+    from pusula.panel_data import rank_activity_rows
+
+    rows = rank_activity_rows(
+        [
+            {
+                "rep_id": "a",
+                "temsilci": "Ayşe Kar",
+                "phone_sec": 600,
+                "meet_min": 30,
+            },
+            {
+                "rep_id": "b",
+                "temsilci": "Miray Aksel",
+                "phone_sec": 3600,
+                "meet_min": 0,
+            },
+            {
+                "rep_id": "c",
+                "temsilci": "Beytullah Aras",
+                "phone_sec": 0,
+                "meet_min": 0,
+            },
+        ]
+    )
+    assert [row["temsilci"] for row in rows] == [
+        "Miray Aksel",
+        "Ayşe Kar",
+        "Beytullah Aras",
+    ]
+    assert [row["sira"] for row in rows] == [1, 2, 3]
+    assert rows[0]["total_sec"] == 3600
+    assert rows[1]["total_sec"] == 2400
+    assert rows[2]["total_sec"] == 0
+
+
+def test_rank_tie_breaks_by_name() -> None:
+    from pusula.panel_data import rank_activity_rows
+
+    rows = rank_activity_rows(
+        [
+            {"rep_id": "2", "temsilci": "Serkan", "phone_sec": 100, "meet_min": 0},
+            {"rep_id": "1", "temsilci": "Abdullah", "phone_sec": 100, "meet_min": 0},
+        ]
+    )
+    assert [row["temsilci"] for row in rows] == ["Abdullah", "Serkan"]
+    assert rows[0]["sira"] == 1
+    assert rows[1]["sira"] == 2
+
+
+def test_activity_rank_table_shows_durations_and_team_total() -> None:
+    from app.panel import _activity_rank_records
+    from pusula.panel_data import fmt_span, rank_activity_rows
+
+    rows = rank_activity_rows(
+        [
+            {
+                "rep_id": "b",
+                "temsilci": "Miray Aksel",
+                "phone_sec": 3600,
+                "meet_min": 0,
+            },
+            {
+                "rep_id": "a",
+                "temsilci": "Ayşe Kar",
+                "phone_sec": 600,
+                "meet_min": 30,
+            },
+        ]
+    )
+    records = _activity_rank_records(rows)
+    assert [row["temsilci"] for row in records] == [
+        "Miray Aksel",
+        "Ayşe Kar",
+        "toplam",
+    ]
+    assert records[0]["sıra"] == "1"
+    assert records[0]["telefon süresi"] == "1 sa"
+    assert records[0]["toplantı süresi"] == "0 dk"
+    assert records[0]["toplam süre"] == "1 sa"
+    assert records[1]["telefon süresi"] == "10 dk"
+    assert records[1]["toplantı süresi"] == "30 dk"
+    assert records[1]["toplam süre"] == "40 dk"
+    assert records[2]["sıra"] == ""
+    assert records[2]["telefon süresi"] == "1 sa 10 dk"
+    assert records[2]["toplantı süresi"] == "30 dk"
+    assert records[2]["toplam süre"] == "1 sa 40 dk"
+    assert "↑" not in str(records)
+    assert "↓" not in str(records)
+    assert fmt_span(date(2026, 9, 28), date(2026, 10, 2)) == (
+        "28 Eylül – 2 Ekim 2026"
+    )
+    assert fmt_span(date(2026, 10, 2), date(2026, 10, 2)) == "2 Ekim 2026"

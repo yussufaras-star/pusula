@@ -68,6 +68,7 @@ from pusula.panel_data import (
     OLU_ZAMAN_SN,
     TOPLANTI_DK,
     DateWindow,
+    activity_duration_rank,
     all_data_window,
     arrow,
     conv_window,
@@ -78,6 +79,7 @@ from pusula.panel_data import (
     fmt_meet_minutes,
     fmt_num,
     fmt_pct,
+    fmt_span,
     fmt_window,
     funnel,
     funnel_dropped_by_rep,
@@ -232,6 +234,14 @@ HELP_BUGUN = (
     "Seçilen günün saatlik dökümü. Her satır bir saat. "
     "Payda 5'in altındaysa oran yerine veri yetersiz."
 )
+HELP_SURE_SIRA = (
+    "Telefon: açılan görüşmenin süresi. Giden temas ve süreli "
+    "gelen arama. Cevapsız arama yok. Toplantı: katılınan "
+    "randevunun planlanan süresi. Gerçekleşen süre kaydı yok. "
+    "Sıra, telefon ile toplantının toplamına göre. "
+    "Gün seçilen takvim günü. Hafta o günün pazartesinden "
+    "pazara; bugün henüz bitmemişse bugüne kadar."
+)
 HELP_CIRO = (
     "Kapandi Kazanildi asamasindaki anlasmalarin toplam "
     "tutari. Ilk kez satin alan ve tekrar satin alan ayrimi "
@@ -266,6 +276,14 @@ COL_HELP: dict[str, str] = {
     "ulaşma %": HELP_ULASMA,
     "ulaşma oranı": HELP_ULASMA,
     "görüşme süresi": HELP_SURE,
+    "telefon süresi": (
+        "Açılan görüşmenin süresi. Giden temas ve süreli gelen "
+        "arama. Cevapsız arama yok."
+    ),
+    "toplam süre": (
+        "Telefon süresi ile katılınan toplantının planlanan "
+        "süresinin toplamı. Sıra buna göre."
+    ),
     "toplantı süresi": (
         "Planlanan süre. Yalnız katılınan toplantılar. "
         "Kaynak events.meta.duration. "
@@ -739,6 +757,11 @@ def _rep_snap(rep_id: str, start: str, end: str) -> dict[str, Any]:
     return rep_snapshot(
         rep_id, DateWindow(date.fromisoformat(start), date.fromisoformat(end))
     )
+
+
+@st.cache_data(ttl=CACHE_TTL)
+def _activity_rank(day: str) -> dict[str, Any]:
+    return activity_duration_rank(date.fromisoformat(day))
 
 
 @st.cache_data(ttl=CACHE_TTL)
@@ -1249,6 +1272,78 @@ def _report_meeting_split(rows: list[dict[str, Any]]) -> None:
         )
 
 
+def _activity_rank_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sıra tablosu. Son satır ekip toplamı. Sıra numarası süreye göre."""
+    records: list[dict[str, Any]] = []
+    for row in rows:
+        records.append(
+            {
+                "sıra": str(int(row["sira"])),
+                "temsilci": str(row["temsilci"]),
+                "telefon süresi": fmt_clock_span(
+                    row.get("phone_sec"), day_total=True
+                ),
+                "toplantı süresi": fmt_meet_minutes(
+                    row.get("meet_min"), day_total=True
+                ),
+                "toplam süre": fmt_clock_span(
+                    row.get("total_sec"), day_total=True
+                ),
+            }
+        )
+    if not records:
+        return records
+    phone = sum(float(row.get("phone_sec") or 0) for row in rows)
+    meet = sum(float(row.get("meet_min") or 0) for row in rows)
+    total = sum(float(row.get("total_sec") or 0) for row in rows)
+    records.append(
+        {
+            "sıra": "",
+            "temsilci": "toplam",
+            "telefon süresi": fmt_clock_span(phone, day_total=True),
+            "toplantı süresi": fmt_meet_minutes(meet, day_total=True),
+            "toplam süre": fmt_clock_span(total, day_total=True),
+        }
+    )
+    return records
+
+
+def _render_activity_rank(day: date) -> None:
+    """Yönetici. Satış ekibinin gün ve hafta süre sırası."""
+    payload = _activity_rank(day.isoformat())
+    st.markdown(
+        "**Satış ekibi — telefon + gerçekleşen toplantı**",
+        help=HELP_SURE_SIRA,
+    )
+    left, right = st.columns(2)
+    with left:
+        st.markdown("Gün sıralaması", help=HELP_SURE_SIRA)
+        day_rows = payload["day"]
+        if not day_rows:
+            st.caption("veri yetersiz")
+        else:
+            _table(_df(_activity_rank_records(day_rows)))
+    with right:
+        st.markdown("Hafta sıralaması", help=HELP_SURE_SIRA)
+        st.caption(fmt_span(payload["week_start"], payload["week_end"]))
+        week_rows = payload["week"]
+        if not week_rows:
+            st.caption("veri yetersiz")
+        else:
+            _table(_df(_activity_rank_records(week_rows)))
+    day_err = int(payload.get("day_meet_err") or 0)
+    week_err = int(payload.get("week_meet_err") or 0)
+    if day_err or week_err:
+        logger.warning(
+            "toplantı süresi çevrilemedi: gün %s, hafta %s kayıt",
+            day_err,
+            week_err,
+        )
+        st.caption(
+            f"toplantı süresi çevrilemedi: gün {day_err}, hafta {week_err} kayıt"
+        )
+
+
 def _hour_table_frame(
     rows: list[dict[str, Any]],
     day: date,
@@ -1331,9 +1426,10 @@ def _render_bugun(
     scope: str = "gun",
 ) -> None:
     del with_team
-    del scope
     hours = display_hours(day)
     _heading(f"Bugün - {fmt_day(day)}", HELP_BUGUN)
+    if scope == "yon":
+        _render_activity_rank(day)
     if not hours:
         st.caption("pazar mesai yok")
         return
