@@ -670,12 +670,12 @@ def test_verim_records_rank_and_pooled_average() -> None:
     from app.panel import _VERIM_WIDTHS, _YON_REPORTS, _TEM_REPORTS, _verim_records
     from pusula.panel_data import apply_efficiency_notes, rank_activity_rows
     import inspect
-    from pusula.panel_data import (
+    from pusula.panel_activity import (
         _attended_meeting_sql,
-        _meet_duration_parsed_sql,
         _phone_talk_sql,
         activity_rank_between,
     )
+    from pusula.panel_data import _meet_duration_parsed_sql
 
     assert "Verimlilik" in _YON_REPORTS
     assert "Verimlilik" not in _TEM_REPORTS

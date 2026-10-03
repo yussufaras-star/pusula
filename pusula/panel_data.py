@@ -2010,13 +2010,9 @@ def week_window(day: date, *, today: date | None = None) -> DateWindow:
 
 def fmt_span(start: date, end: date) -> str:
     """'28 Eylül – 2 Ekim 2026'. Aynı günse tek tarih."""
-    if start == end:
-        return f"{start.day} {_MONTHS[start.month - 1]} {start.year}"
-    left = f"{start.day} {_MONTHS[start.month - 1]}"
-    if start.year != end.year:
-        left = f"{left} {start.year}"
-    right = f"{end.day} {_MONTHS[end.month - 1]} {end.year}"
-    return f"{left} – {right}"
+    from pusula.panel_activity import fmt_span as impl
+
+    return impl(start, end)
 
 
 # Performans profilindeki göreli eşikle aynı bant.
@@ -2305,70 +2301,10 @@ def activity_duration_rank(day: date) -> dict[str, Any]:
 
 
 def activity_rank_between(start: date, end: date) -> list[dict[str, Any]]:
-    """Satış ekibi, kapalı tarih aralığı. Toplam süreye göre sıra.
+    """Satış ekibi, kapalı tarih aralığı. Toplam süreye göre sıra."""
+    from pusula.panel_activity import activity_rank_between as impl
 
-    Telefon: giden temas ve süreli gelen. Toplantı: katılınan
-    randevunun planlanan süresi.
-    """
-    from pusula.panel_ciro import SALES_TEAM_IDS
-
-    if end < start:
-        start, end = end, start
-    org_id = get_org_id()
-    start_ts, end_ts = _bounds(DateWindow(start, end))
-    phone = _phone_talk_sql("e")
-    attended = _attended_meeting_sql("e")
-    meet_parsed = _meet_duration_parsed_sql("e")
-    sql = f"""
-        SELECT r.rep_id,
-               r.full_name,
-               coalesce(sum({_DUR_E}) FILTER (WHERE {phone}), 0)::float
-                 AS phone_sec,
-               count(*) FILTER (WHERE {phone})::int AS talks,
-               coalesce(sum({meet_parsed}) FILTER (WHERE {attended}), 0)::float
-                 AS meet_min,
-               count(*) FILTER (WHERE {attended})::int AS meets,
-               count(*) FILTER (
-                 WHERE {attended} AND ({meet_parsed}) IS NULL
-               )::int AS meet_err
-        FROM unnest(%s::text[]) AS t(rep_id)
-        JOIN reps r ON r.org_id = %s AND r.rep_id = t.rep_id
-        LEFT JOIN events e
-          ON e.org_id = r.org_id
-         AND e.rep_id = r.rep_id
-         AND e.occurred_at >= %s
-         AND e.occurred_at <= %s
-         AND e.occurred_at <= now()
-        GROUP BY r.rep_id, r.full_name
-    """
-    with connect() as conn:
-        fetched = conn.execute(
-            sql,
-            (list(SALES_TEAM_IDS), org_id, start_ts, end_ts),
-        ).fetchall()
-    raw: list[dict[str, Any]] = []
-    meet_err = 0
-    for rep_id, name, phone_sec, talks, meet_min, meets, err in fetched:
-        raw.append(
-            {
-                "rep_id": str(rep_id),
-                "temsilci": str(name),
-                "phone_sec": float(phone_sec or 0),
-                "meet_min": float(meet_min or 0),
-                "talk_n": int(talks or 0),
-                "meet_n": int(meets or 0),
-            }
-        )
-        meet_err += int(err or 0)
-    if meet_err:
-        logger.warning(
-            "toplantı süresi çevrilemedi: %s kayıt (aralık, katildi)",
-            meet_err,
-        )
-    rows = apply_efficiency_notes(rank_activity_rows(raw))
-    for row in rows:
-        row["meet_err"] = meet_err
-    return rows
+    return impl(start, end)
 
 
 def talk_duration_by_rep(
