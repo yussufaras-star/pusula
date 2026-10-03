@@ -10,7 +10,7 @@ import logging
 from datetime import date
 from typing import Any
 
-from pusula.temas import is_answered_inbound_sql, is_temas_sql
+from pusula.temas import is_answered_inbound_sql, is_cevirme_sql, is_temas_sql
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,17 @@ def rank_activity_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         item["meet_min"] = meet
         item["talk_n"] = talk_n
         item["meet_n"] = meet_n
+        dial_n = int(row.get("dial_n") or 0)
+        out_talk_n = int(row.get("out_talk_n") or 0)
+        book_n = int(row.get("book_n") or 0)
+        noshow_n = int(row.get("noshow_n") or 0)
+        item["dial_n"] = dial_n
+        item["out_talk_n"] = out_talk_n
+        item["book_n"] = book_n
+        item["noshow_n"] = noshow_n
+        item["dial_rate"] = (100.0 * out_talk_n / dial_n) if dial_n else None
+        join_den = meet_n + noshow_n
+        item["join_rate"] = (100.0 * meet_n / join_den) if join_den else None
         item["total_sec"] = activity_total_sec(phone, meet)
         item["avg_sec"] = (phone / talk_n) if talk_n > 0 else None
         prepared.append(item)
@@ -104,9 +115,16 @@ def activity_team_baseline(rows: list[dict[str, Any]]) -> dict[str, float | None
     phone = sum(float(row.get("phone_sec") or 0) for row in rows)
     talks = sum(int(row.get("talk_n") or 0) for row in rows)
     totals = [float(row.get("total_sec") or 0) for row in rows]
+    dials = sum(int(row.get("dial_n") or 0) for row in rows)
+    out_talks = sum(int(row.get("out_talk_n") or 0) for row in rows)
+    meets = sum(int(row.get("meet_n") or 0) for row in rows)
+    noshows = sum(int(row.get("noshow_n") or 0) for row in rows)
+    join_den = meets + noshows
     return {
         "avg_sec": (phone / talks) if talks else None,
         "total_sec": sum(totals) / len(totals),
+        "dial_rate": (100.0 * out_talks / dials) if dials else None,
+        "join_rate": (100.0 * meets / join_den) if join_den else None,
     }
 
 
@@ -175,7 +193,57 @@ def efficiency_comment(
         parts.append("Sürenin çoğu toplantıda.")
     elif meet_n == 0 and volume in {"ustu", "yakin"} and talk_n >= TALK_AVG_MIN_N:
         parts.append("Toplantı yok.")
+    funnel = _funnel_note(row, team)
+    if funnel:
+        parts.append(funnel)
     return " ".join(parts)
+
+
+def _fmt_rate(value: float) -> str:
+    return f"%{value:.1f}"
+
+
+def _funnel_note(row: dict[str, Any], team: dict[str, float | None]) -> str | None:
+    """En açık oran sapması. Talimat yok. Payda 5'in altındaysa sus."""
+    notes: list[tuple[float, str]] = []
+    dial_n = int(row.get("dial_n") or 0)
+    if (
+        dial_n >= 5
+        and row.get("dial_rate") is not None
+        and team.get("dial_rate") is not None
+    ):
+        own = float(row["dial_rate"])
+        base = float(team["dial_rate"])
+        if _activity_band(own, base) == "alti":
+            gap = abs(own - base)
+            notes.append(
+                (
+                    gap,
+                    "Aramanın görüşmeye dönmesi ekibin altında "
+                    f"({_fmt_rate(own)}, ekip {_fmt_rate(base)}).",
+                )
+            )
+    join_den = int(row.get("meet_n") or 0) + int(row.get("noshow_n") or 0)
+    if (
+        join_den >= 5
+        and row.get("join_rate") is not None
+        and team.get("join_rate") is not None
+    ):
+        own = float(row["join_rate"])
+        base = float(team["join_rate"])
+        if _activity_band(own, base) == "alti":
+            gap = abs(own - base)
+            notes.append(
+                (
+                    gap,
+                    "Katılım ekibin altında "
+                    f"({_fmt_rate(own)}, ekip {_fmt_rate(base)}).",
+                )
+            )
+    if not notes:
+        return None
+    notes.sort(key=lambda item: item[0], reverse=True)
+    return notes[0][1]
 
 
 def apply_efficiency_notes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -187,6 +255,26 @@ def apply_efficiency_notes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         item["yorum"] = efficiency_comment(item, team)
         out.append(item)
     return out
+
+
+def _outbound_dial_sql(alias: str = "e") -> str:
+    """Giden arama. Saat tablosundaki giden arama ile aynı: çevirme."""
+    cevirme = is_cevirme_sql(alias)
+    return f"""
+        {alias}.channel = 'call'
+        AND {alias}.direction = 'outbound'
+        AND ({cevirme})
+    """
+
+
+def _outbound_talk_sql(alias: str = "e") -> str:
+    """Giden ve açılan görüşme. Gelen arama bu orana girmez."""
+    temas = is_temas_sql(alias)
+    return f"""
+        {alias}.channel = 'call'
+        AND {alias}.direction = 'outbound'
+        AND ({temas})
+    """
 
 
 def _phone_talk_sql(alias: str = "e") -> str:
@@ -232,6 +320,8 @@ def activity_rank_between(start: date, end: date) -> list[dict[str, Any]]:
     start_ts, end_ts = _bounds(DateWindow(start, end))
     phone = _phone_talk_sql("e")
     attended = _attended_meeting_sql("e")
+    dial = _outbound_dial_sql("e")
+    out_talk = _outbound_talk_sql("e")
     meet_parsed = _meet_duration_parsed_sql("e")
     sql = f"""
         SELECT r.rep_id,
@@ -239,9 +329,16 @@ def activity_rank_between(start: date, end: date) -> list[dict[str, Any]]:
                coalesce(sum({_DUR_E}) FILTER (WHERE {phone}), 0)::float
                  AS phone_sec,
                count(*) FILTER (WHERE {phone})::int AS talks,
+               count(*) FILTER (WHERE {dial})::int AS dials,
+               count(*) FILTER (WHERE {out_talk})::int AS out_talks,
                coalesce(sum({meet_parsed}) FILTER (WHERE {attended}), 0)::float
                  AS meet_min,
                count(*) FILTER (WHERE {attended})::int AS meets,
+               count(*) FILTER (
+                 WHERE e.channel = 'meeting'
+                   AND e.meta->>'randevu_durumu' = 'katilmadi'
+               )::int AS noshows,
+               count(*) FILTER (WHERE e.channel = 'meeting')::int AS books,
                count(*) FILTER (
                  WHERE {attended} AND ({meet_parsed}) IS NULL
                )::int AS meet_err
@@ -262,7 +359,19 @@ def activity_rank_between(start: date, end: date) -> list[dict[str, Any]]:
         ).fetchall()
     raw: list[dict[str, Any]] = []
     meet_err = 0
-    for rep_id, name, phone_sec, talks, meet_min, meets, err in fetched:
+    for (
+        rep_id,
+        name,
+        phone_sec,
+        talks,
+        dials,
+        out_talks,
+        meet_min,
+        meets,
+        noshows,
+        books,
+        err,
+    ) in fetched:
         raw.append(
             {
                 "rep_id": str(rep_id),
@@ -271,6 +380,10 @@ def activity_rank_between(start: date, end: date) -> list[dict[str, Any]]:
                 "meet_min": float(meet_min or 0),
                 "talk_n": int(talks or 0),
                 "meet_n": int(meets or 0),
+                "dial_n": int(dials or 0),
+                "out_talk_n": int(out_talks or 0),
+                "book_n": int(books or 0),
+                "noshow_n": int(noshows or 0),
             }
         )
         meet_err += int(err or 0)

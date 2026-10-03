@@ -242,6 +242,10 @@ HELP_SURE_SIRA = (
     "Yorum, toplam süreyi ve görüşme ortalamasını ekiple kıyaslar. "
     "Fark yüzde 20'nin altındaysa yakın sayılır. "
     "Üçten az görüşmede ortalama kıyaslanmaz. "
+    "Huni aynı aralığın adetleridir. Aynı lead'in zinciri değil. "
+    "Görüşmeye dönme: giden aramanın açılan giden görüşmeye oranı. "
+    "Katılım: katılanın, katılan ve katılmayan toplamına oranı. "
+    "Payda 5'in altındaysa oran yerine veri yetersiz. "
     "Aralık seçilen günlerin tamamı. Bitiş bugünü geçmez. "
     "Varsayılan, bu haftanın pazartesinden bugüne."
 )
@@ -305,6 +309,16 @@ COL_HELP: dict[str, str] = {
         "Gerçekleşen süre kaydı yok."
     ),
     "görüşme adedi": "Açılan telefon adedi.",
+    "görüşmeye dönme": (
+        "Giden aramanın, açılan giden görüşmeye oranı. "
+        "Gelen arama yok. Ulaşma raporundaki lead oranı değil. "
+        "Payda 5'in altındaysa veri yetersiz."
+    ),
+    "katılım": (
+        "Katılanın, katılan ve katılmayan toplamına oranı. "
+        "Sonucu işaretlenmemiş randevu yok. "
+        "Payda 5'in altındaysa veri yetersiz."
+    ),
     "toplantı süresi": (
         "Planlanan süre. Yalnız katılınan toplantılar. "
         "Kaynak events.meta.duration. "
@@ -1427,6 +1441,89 @@ def _verim_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return records
 
 
+_HUNI_WIDTHS: dict[str, int] = {
+    "sıra": 52,
+    "temsilci": 130,
+    "giden arama": 96,
+    "görüşmeye dönme": 120,
+    "randevu": 80,
+    "katıldı": 72,
+    "katılmadı": 88,
+    "katılım": 88,
+}
+_HUNI_ROW_PX = 40
+
+
+def _huni_rate(value: float | None, payda: int) -> str:
+    return rate_cell(value, payda)
+
+
+def _huni_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aynı sıra. Adetler aynı aralık. Oran lead zinciri değil."""
+    records: list[dict[str, Any]] = []
+    for row in rows:
+        dial_n = int(row.get("dial_n") or 0)
+        join_den = int(row.get("meet_n") or 0) + int(row.get("noshow_n") or 0)
+        records.append(
+            {
+                "sıra": str(int(row["sira"])),
+                "temsilci": str(row["temsilci"]),
+                "giden arama": str(dial_n),
+                "görüşmeye dönme": _huni_rate(row.get("dial_rate"), dial_n),
+                "randevu": str(int(row.get("book_n") or 0)),
+                "katıldı": str(int(row.get("meet_n") or 0)),
+                "katılmadı": str(int(row.get("noshow_n") or 0)),
+                "katılım": _huni_rate(row.get("join_rate"), join_den),
+            }
+        )
+    if not records:
+        return records
+    dials = sum(int(row.get("dial_n") or 0) for row in rows)
+    out_talks = sum(int(row.get("out_talk_n") or 0) for row in rows)
+    books = sum(int(row.get("book_n") or 0) for row in rows)
+    meets = sum(int(row.get("meet_n") or 0) for row in rows)
+    noshows = sum(int(row.get("noshow_n") or 0) for row in rows)
+    join_den = meets + noshows
+    dial_rate = (100.0 * out_talks / dials) if dials else None
+    join_rate = (100.0 * meets / join_den) if join_den else None
+    records.append(
+        {
+            "sıra": "",
+            "temsilci": "toplam",
+            "giden arama": str(dials),
+            "görüşmeye dönme": _huni_rate(dial_rate, dials),
+            "randevu": str(books),
+            "katıldı": str(meets),
+            "katılmadı": str(noshows),
+            "katılım": _huni_rate(join_rate, join_den),
+        }
+    )
+    return records
+
+
+def _huni_height(n_rows: int) -> int:
+    return (n_rows + 1) * _HUNI_ROW_PX + _HOUR_HEIGHT_PAD
+
+
+def _huni_table(frame: pd.DataFrame) -> None:
+    cfg: dict[str, Any] = {}
+    for col in frame.columns:
+        leaf = _col_leaf(col)
+        cfg[leaf] = st.column_config.TextColumn(
+            leaf,
+            help=COL_HELP.get(leaf),
+            width=_HUNI_WIDTHS.get(leaf),
+        )
+    st.dataframe(
+        frame,
+        hide_index=True,
+        use_container_width=True,
+        column_config=cfg,
+        row_height=_HUNI_ROW_PX,
+        height=_huni_height(len(frame)),
+    )
+
+
 def _verim_table(frame: pd.DataFrame) -> None:
     """Tek tablo, sayfa genişliği. Yatay kaydırma yok."""
     cfg: dict[str, Any] = {}
@@ -1488,6 +1585,8 @@ def _render_verimlilik() -> None:
         st.caption("veri yetersiz")
         return
     _verim_table(_df(_verim_records(rows)))
+    st.markdown("**Huni**")
+    _huni_table(_df(_huni_records(rows)))
     meet_err = int(rows[0].get("meet_err") or 0)
     if meet_err:
         logger.warning(

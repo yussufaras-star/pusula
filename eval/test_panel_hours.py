@@ -739,3 +739,76 @@ def test_verim_records_rank_and_pooled_average() -> None:
         _meet_duration_parsed_sql("e"),
     ):
         assert "%" not in frag
+
+
+def test_huni_shows_period_rates_and_names_the_gap() -> None:
+    from app.panel import _HUNI_WIDTHS, _huni_records
+    from pusula.panel_activity import apply_efficiency_notes, rank_activity_rows
+
+    assert sum(_HUNI_WIDTHS.values()) <= 1100
+    rows = apply_efficiency_notes(
+        rank_activity_rows(
+            [
+                {
+                    "rep_id": "a",
+                    "temsilci": "Ayşe Kar",
+                    "phone_sec": 600,
+                    "meet_min": 0,
+                    "talk_n": 4,
+                    "meet_n": 1,
+                    "dial_n": 20,
+                    "out_talk_n": 2,
+                    "book_n": 10,
+                    "noshow_n": 9,
+                },
+                {
+                    "rep_id": "b",
+                    "temsilci": "Miray Aksel",
+                    "phone_sec": 3600,
+                    "meet_min": 0,
+                    "talk_n": 10,
+                    "meet_n": 8,
+                    "dial_n": 20,
+                    "out_talk_n": 10,
+                    "book_n": 10,
+                    "noshow_n": 2,
+                },
+            ]
+        )
+    )
+    ayse = next(row for row in rows if row["temsilci"] == "Ayşe Kar")
+    assert "Katılım ekibin altında" in ayse["yorum"]
+    assert "!" not in ayse["yorum"]
+    thin = apply_efficiency_notes(
+        rank_activity_rows(
+            [
+                {
+                    "rep_id": "c",
+                    "temsilci": "Serkan",
+                    "phone_sec": 100,
+                    "meet_min": 0,
+                    "talk_n": 1,
+                    "meet_n": 0,
+                    "dial_n": 2,
+                    "out_talk_n": 0,
+                    "book_n": 0,
+                    "noshow_n": 0,
+                }
+            ]
+        )
+    )[0]
+    assert "görüşmeye dönmesi" not in thin["yorum"]
+    assert "Katılım ekibin altında" not in thin["yorum"]
+    records = _huni_records(rows)
+    assert [row["temsilci"] for row in records] == [
+        "Miray Aksel",
+        "Ayşe Kar",
+        "toplam",
+    ]
+    assert records[1]["giden arama"] == "20"
+    assert records[1]["görüşmeye dönme"] == "%10.0"
+    assert records[1]["katılım"] == "%10.0"
+    assert records[2]["giden arama"] == "40"
+    assert records[2]["görüşmeye dönme"] == "%30.0"
+    assert records[2]["katılım"] == "%45.0"
+    assert records[2]["randevu"] == "20"
