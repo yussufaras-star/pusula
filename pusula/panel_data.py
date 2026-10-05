@@ -108,6 +108,31 @@ DEFAULT_TOPLANTI_GUN = 6.0
 CRM_DK_PER_ARAMA = CRM_DK_PER_GORUSME
 TOPLANTI_DK_VARSAYILAN = TOPLANTI_DK
 
+# İş yükü satır sırası. Plan alanları bu sırayla düzenlenir.
+WORKLOAD_ROWS: tuple[tuple[str, str, str], ...] = (
+    ("lead", "gelen lead", "—"),
+    ("arama", "arama", "ölçülen"),
+    ("ulasilan", "ulaşılan görüşme", "—"),
+    ("randevu", "randevu alınan", "—"),
+    ("toplanti", "gerçekleşen toplantı", "ölçülen"),
+    ("crm_miss", "CRM ulaşılamayan", "varsayım"),
+    ("crm_hit", "CRM ulaşılan", "varsayım"),
+    ("olu", "ölü zaman", "varsayım"),
+)
+
+
+@dataclass(frozen=True)
+class DolulukVarsayim:
+    """Doluluk ve plan süreleri. Varsayılanlar koddaki mevcut sabitler."""
+
+    toplanti_dk: float = TOPLANTI_DK
+    crm_sn_miss: float = CRM_SN_PER_ULASILAMAYAN
+    crm_dk_hit: float = CRM_DK_PER_GORUSME
+    olu_sn: float = OLU_ZAMAN_SN
+    mesai_wd: float = MESAI_WD_SAAT
+    mesai_sat: float = MESAI_SAT_SAAT
+
+
 _FUNNEL_STATUSES = (
     "1.Arama-Ulaşılamadı",
     "2.Arama-Ulaşılamadı",
@@ -1519,25 +1544,35 @@ def occupancy_pay_dk(
     unreached: float,
     reached: float,
     arama: float,
+    varsayim: DolulukVarsayim | None = None,
 ) -> float:
-    """Doluluk payı (dk): ölçülen arama+toplantı + varsayılan CRM ve ölü zaman.
+    """Doluluk payı (dk): ölçülen arama+toplantı + CRM ve ölü zaman.
 
     Arama süresi tek kalem; ulaşılan görüşme ayrıca eklenmez.
+    varsayim boşsa koddaki mevcut sabitler kullanılır.
     """
+    v = varsayim or DolulukVarsayim()
     return (
         float(call_sec) / 60.0
         + float(meet_dk)
-        + float(unreached) * (CRM_SN_PER_ULASILAMAYAN / 60.0)
-        + float(reached) * CRM_DK_PER_GORUSME
-        + float(arama) * (OLU_ZAMAN_SN / 60.0)
+        + float(unreached) * (v.crm_sn_miss / 60.0)
+        + float(reached) * v.crm_dk_hit
+        + float(arama) * (v.olu_sn / 60.0)
     )
 
 
-def mesai_avail_dk(n_wd: int, n_sat: int, n_reps: int = 1) -> float:
-    """Mesai paydası (dk). Hafta içi 8 saat, cumartesi 5 saat, pazar yok."""
+def mesai_avail_dk(
+    n_wd: int,
+    n_sat: int,
+    n_reps: int = 1,
+    *,
+    varsayim: DolulukVarsayim | None = None,
+) -> float:
+    """Mesai paydası (dk). Hafta içi ve cumartesi; pazar yok."""
+    v = varsayim or DolulukVarsayim()
     return (
         float(n_reps)
-        * (float(n_wd) * MESAI_WD_SAAT + float(n_sat) * MESAI_SAT_SAAT)
+        * (float(n_wd) * v.mesai_wd + float(n_sat) * v.mesai_sat)
         * 60.0
     )
 
@@ -1554,8 +1589,11 @@ def _cap_doluluk(pct: float | None, *, detail: str) -> float | None:
 def occupancy_breakdown(
     rep_id: str | None,
     day: date | None = None,
+    *,
+    varsayim: DolulukVarsayim | None = None,
 ) -> dict[str, Any]:
     """Doluluk pay/payda. day verilirse o gün; yoksa 90 gün (pazar hariç)."""
+    v = varsayim or DolulukVarsayim()
     org_id = get_org_id()
     extra, params = _rep_filter("e", rep_id)
     n_reps = 1 if rep_id else max(len(load_reps()), 1)
@@ -1624,17 +1662,18 @@ def occupancy_breakdown(
     miss_sn = float(row[5]) if row and row[5] is not None else 0.0
     hit_sn = float(row[6]) if row and row[6] is not None else 0.0
     unreached = max(arama - ulasilan, 0)
-    crm_miss_dk = unreached * (CRM_SN_PER_ULASILAMAYAN / 60.0)
-    crm_hit_dk = ulasilan * CRM_DK_PER_GORUSME
-    olu_dk = arama * (OLU_ZAMAN_SN / 60.0)
+    crm_miss_dk = unreached * (v.crm_sn_miss / 60.0)
+    crm_hit_dk = ulasilan * v.crm_dk_hit
+    olu_dk = arama * (v.olu_sn / 60.0)
     pay_dk = occupancy_pay_dk(
         call_sec=call_sec,
         meet_dk=meet_dk_val,
         unreached=unreached,
         reached=ulasilan,
         arama=arama,
+        varsayim=v,
     )
-    payda_dk = mesai_avail_dk(n_wd, n_sat, n_reps)
+    payda_dk = mesai_avail_dk(n_wd, n_sat, n_reps, varsayim=v)
     raw = _ratio(pay_dk, payda_dk)
     label = (
         f"rep={rep_id or 'ekip'} day={day.isoformat() if day else '90g'} "
@@ -1789,8 +1828,11 @@ def workload_board(
     rep_id: str | None,
     arama_per_lead: float,
     toplanti_gun: float,
+    *,
+    varsayim: DolulukVarsayim | None = None,
 ) -> dict[str, Any]:
     """Kişi başı günlük PLANLANAN / GERÇEKLEŞEN + doluluk."""
+    v = varsayim or DolulukVarsayim()
     org_id = get_org_id()
     days = max(_workdays(), 1)
     extra, params = _rep_filter("e", rep_id)
@@ -1798,7 +1840,7 @@ def workload_board(
     n_reps = 1
     if not rep_id:
         n_reps = max(len(load_reps()), 1)
-    occ = occupancy_breakdown(rep_id)
+    occ = occupancy_breakdown(rep_id, varsayim=v)
     start_ts, end_ts = _bounds()
 
     sql = f"""
@@ -1899,9 +1941,10 @@ def workload_board(
         miss_sn=miss_sn,
         hit_sn=hit_sn,
     )
-    plan_dk["crm_miss"] = unreached_plan * (CRM_SN_PER_ULASILAMAYAN / 60.0)
-    plan_dk["crm_hit"] = ulasilan_plan * CRM_DK_PER_GORUSME
-    plan_dk["olu"] = arama_plan * (OLU_ZAMAN_SN / 60.0)
+    plan_dk["toplanti"] = plan["toplanti"] * v.toplanti_dk
+    plan_dk["crm_miss"] = unreached_plan * (v.crm_sn_miss / 60.0)
+    plan_dk["crm_hit"] = ulasilan_plan * v.crm_dk_hit
+    plan_dk["olu"] = arama_plan * (v.olu_sn / 60.0)
     # Plan arama satırındaki ölü zaman ayrı satıra taşındı; çift yazılmasın.
     plan_dk["arama"] = (
         max(plan["arama"] - plan["ulasilan"], 0.0) * miss_sn
@@ -1920,16 +1963,7 @@ def workload_board(
         "crm_hit": occ["crm_hit_dk"] / occ_scale,
         "olu": occ["olu_dk"] / occ_scale,
     }
-    labels = [
-        ("lead", "gelen lead", "—"),
-        ("arama", "arama", "ölçülen"),
-        ("ulasilan", "ulaşılan görüşme", "—"),
-        ("randevu", "randevu alınan", "—"),
-        ("toplanti", "gerçekleşen toplantı", "ölçülen"),
-        ("crm_miss", "CRM ulaşılamayan", "varsayım"),
-        ("crm_hit", "CRM ulaşılan", "varsayım"),
-        ("olu", "ölü zaman", "varsayım"),
-    ]
+    labels = WORKLOAD_ROWS
     rows: list[dict[str, Any]] = []
     for key, label, kaynak in labels:
         p = plan[key]
@@ -1966,7 +2000,75 @@ def workload_board(
         "meet_dk": occ["meet_dk"],
         "ulasilan_dk": 0.0,
         "meet_duration_key": MEET_DURATION_KEY,
+        "plan_raw": plan,
+        "actual_raw": actual,
+        "scale": occ_scale,
+        "varsayim": v,
     }
+
+
+def apply_plan_counts(
+    board: dict[str, Any],
+    counts: Sequence[float],
+    varsayim: DolulukVarsayim | None = None,
+) -> dict[str, Any]:
+    """Plan adetlerini elle yazılmış değerle değiştirir. Ölçülen süre durur.
+
+    Kullanıcı yuvarlanmış haliyle bırakırsa ham plan korunur.
+    """
+    v = varsayim or board.get("varsayim") or DolulukVarsayim()
+    if not isinstance(v, DolulukVarsayim):
+        v = DolulukVarsayim()
+    raw_plan = board.get("plan_raw")
+    if not isinstance(raw_plan, dict):
+        raw_plan = {}
+    actual_raw = board.get("actual_raw")
+    if not isinstance(actual_raw, dict):
+        actual_raw = {}
+    resolved: dict[str, float] = {}
+    for key, edited in zip((row[0] for row in WORKLOAD_ROWS), counts):
+        raw = float(raw_plan.get(key, edited))
+        shown = round(raw, 1)
+        # 0.1 adımın yarısı. Yuvarlanmış haliyle bırakılırsa ham plan kalır.
+        if abs(float(edited) - shown) < 0.05:
+            resolved[key] = raw
+        else:
+            resolved[key] = float(edited)
+    miss_sn = float(board.get("miss_sn") or 0.0)
+    hit_sn = float(board.get("hit_sn") or 0.0)
+    plan_dk = {
+        "lead": 0.0,
+        "arama": (
+            max(resolved.get("arama", 0.0) - resolved.get("ulasilan", 0.0), 0.0)
+            * miss_sn
+            + resolved.get("ulasilan", 0.0) * hit_sn
+        )
+        / 60.0,
+        "ulasilan": 0.0,
+        "randevu": 0.0,
+        "toplanti": resolved.get("toplanti", 0.0) * v.toplanti_dk,
+        "crm_miss": resolved.get("crm_miss", 0.0) * (v.crm_sn_miss / 60.0),
+        "crm_hit": resolved.get("crm_hit", 0.0) * v.crm_dk_hit,
+        "olu": resolved.get("olu", 0.0) * (v.olu_sn / 60.0),
+    }
+    scale = float(board.get("scale") or 1.0)
+    rows: list[dict[str, Any]] = []
+    for row, (key, _label, _kaynak) in zip(board.get("rows") or [], WORKLOAD_ROWS):
+        item = dict(row)
+        p = resolved.get(key, float(item.get("planlanan") or 0.0))
+        g = float(actual_raw.get(key, item.get("gerçekleşen") or 0.0))
+        item["planlanan"] = round(p, 1)
+        item["plan dk"] = round(plan_dk.get(key) or 0.0, 1)
+        item["plan gerçekleşme"] = _ratio(g, p)
+        rows.append(item)
+    plan_dk_sum = sum(plan_dk.get(key) or 0.0 for key, _l, _s in WORKLOAD_ROWS)
+    out = dict(board)
+    out["rows"] = rows
+    out["plan_saat"] = round(plan_dk_sum / 60.0, 2)
+    out["toplam_oran"] = _ratio(float(board.get("pay_dk") or 0.0), plan_dk_sum * scale)
+    out["plan_raw"] = resolved
+    out["varsayim"] = v
+    return out
 
 
 def _phone_talk_sql(alias: str = "e") -> str:
