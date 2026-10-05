@@ -196,6 +196,10 @@ class BookingsIngester(Ingester):
         if client.is_identifier_blocked("email", email):
             return self._skip("lead_yok", payload)
 
+        meta = merge_preserved_meta(
+            _build_meta(payload, staff_name),
+            _existing_event_meta(raw.source_ref),
+        )
         return Event(
             channel="meeting",
             direction="outbound",
@@ -204,7 +208,7 @@ class BookingsIngester(Ingester):
             source_ref=raw.source_ref,
             body=None,
             body_quality="low",
-            meta=_build_meta(payload, staff_name),
+            meta=meta,
             email=email,
         )
 
@@ -217,6 +221,40 @@ class BookingsIngester(Ingester):
             "reason": reason,
         }
         return None
+
+
+# Meeting süresi bu anahtarlara yazılır. Bookings meta'yı baştan kurar;
+# silinirse gerçekleşen süre bir sonraki randevu çekiminde kaybolur.
+PRESERVED_META_KEYS = ("actual_duration_sec", "meeting_key")
+
+
+def merge_preserved_meta(
+    meta: dict[str, Any], existing: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Bookings alanlarını yazar, Meeting'in süre anahtarlarını bırakır."""
+    merged = dict(meta)
+    if not existing:
+        return merged
+    for key in PRESERVED_META_KEYS:
+        if key in merged or key not in existing:
+            continue
+        value = existing[key]
+        if value is None:
+            continue
+        merged[key] = value
+    return merged
+
+
+def _existing_event_meta(source_ref: str) -> dict[str, Any]:
+    query = """
+        SELECT meta FROM events
+        WHERE org_id = %s AND channel = 'meeting' AND source_ref = %s
+    """
+    with client.transaction() as conn:
+        row = conn.execute(query, (get_org_id(), source_ref)).fetchone()
+    if row is None or not isinstance(row[0], dict):
+        return {}
+    return row[0]
 
 
 def _build_meta(payload: dict[str, Any], staff_name: str) -> dict[str, Any]:

@@ -13,6 +13,9 @@ from pusula.ingest.registry import all_ingesters, get, register
 # Somut ingester'lar import edilince @register çalışır.
 from pusula.ingest.bookings import BookingsIngester as _BookingsIngester  # noqa: F401
 from pusula.ingest.crm_calls import CrmCallsIngester as _CrmCallsIngester  # noqa: F401
+from pusula.ingest.zoho_meeting import (  # noqa: F401
+    MeetingDurationIngester as _MeetingDurationIngester,
+)
 
 __all__ = [
     "Ingester",

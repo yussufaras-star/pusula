@@ -236,7 +236,9 @@ HELP_BUGUN = (
 HELP_SURE_SIRA = (
     "Telefon: açılan görüşmenin süresi. Giden temas ve süreli "
     "gelen arama. Cevapsız arama yok. Toplantı: katılınan "
-    "randevunun planlanan süresi. Gerçekleşen süre kaydı yok. "
+    "randevunun gerçekleşen süresi. Süre, Zoho Meeting'de "
+    "temsilcinin oturumda kaldığı dakikadır. Oturum kaydı yoksa "
+    "planlanan süre durur. "
     "Ortalama görüşme: telefon süresinin görüşme sayısına bölümü. "
     "Sıra, telefon ile toplantının toplamına göre. "
     "Yorum, toplam süreyi ve görüşme ortalamasını ekiple kıyaslar. "
@@ -288,8 +290,9 @@ COL_HELP: dict[str, str] = {
         "arama. Cevapsız arama yok."
     ),
     "toplam süre": (
-        "Telefon süresi ile katılınan toplantının planlanan "
-        "süresinin toplamı. Sıra buna göre."
+        "Telefon süresi ile katılınan toplantının gerçekleşen "
+        "süresinin toplamı. Oturum kaydı yoksa planlanan süre. "
+        "Sıra buna göre."
     ),
     "ortalama görüşme": (
         "Telefon süresinin görüşme sayısına bölümü. "
@@ -305,8 +308,9 @@ COL_HELP: dict[str, str] = {
         "süreli gelen arama. Cevapsız arama yok."
     ),
     "gerçekleşen toplantı süresi": (
-        "Katılınan randevunun planlanan süresi. "
-        "Gerçekleşen süre kaydı yok."
+        "Katılınan randevunun gerçekleşen süresi. "
+        "Zoho Meeting'de temsilcinin oturumda kaldığı süre. "
+        "Kayıt yoksa planlanan süre."
     ),
     "görüşme adedi": "Açılan telefon adedi.",
     "görüşmeye dönme": (

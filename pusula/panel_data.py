@@ -1059,6 +1059,28 @@ def _meet_duration_parsed_sql(alias: str = "e") -> str:
     return f"CASE WHEN {ok} THEN {hours} * 60 + {mins} ELSE NULL END"
 
 
+# Zoho Meeting katılımcı süresi. Bookings duration planlanan metin olarak kalır.
+ACTUAL_MEET_SEC_KEY = "actual_duration_sec"
+
+
+def _actual_meet_minutes_sql(alias: str = "e") -> str:
+    """meta.actual_duration_sec (saniye) → dakika. Yoksa veya bozuksa NULL."""
+    raw = (
+        f"nullif(btrim(coalesce({alias}.meta->>'{ACTUAL_MEET_SEC_KEY}', '')), '')"
+    )
+    return (
+        f"CASE WHEN {raw} ~ '^[0-9]+$' "
+        f"THEN {raw}::numeric / 60.0 ELSE NULL END"
+    )
+
+
+def _attended_meet_minutes_sql(alias: str = "e") -> str:
+    """Katılınan toplantı dakikası. Oturum varsa o, yoksa planlanan süre."""
+    actual = _actual_meet_minutes_sql(alias)
+    planned = _meet_duration_parsed_sql(alias)
+    return f"coalesce({actual}, {planned})"
+
+
 def today_hours(
     rep_id: str | None,
     day: date | None = None,
@@ -2172,8 +2194,8 @@ def activity_duration_rank(day: date) -> dict[str, Any]:
     """Satış ekibi: telefon konuşması + katılınan toplantı. Gün ve o hafta.
 
     Telefon: giden temas ve süreli gelen. Cevapsız arama yok.
-    Toplantı: katildi kayıtlarının planlanan süresi (meta.duration).
-    Gerçekleşen toplantı dakikası Bookings'te yok.
+    Toplantı: katildi kayıtlarının gerçekleşen süresi. Zoho Meeting
+    kaydı yoksa planlanan süre (meta.duration).
     """
     from pusula.panel_ciro import SALES_TEAM_IDS
 
@@ -2182,7 +2204,7 @@ def activity_duration_rank(day: date) -> dict[str, Any]:
     start_ts, end_ts = _bounds(week)
     phone = _phone_talk_sql("e")
     attended = _attended_meeting_sql("e")
-    meet_parsed = _meet_duration_parsed_sql("e")
+    meet_minutes = _attended_meet_minutes_sql("e")
     sql = f"""
         SELECT r.rep_id,
                r.full_name,
@@ -2192,7 +2214,7 @@ def activity_duration_rank(day: date) -> dict[str, Any]:
                count(*) FILTER (
                  WHERE {phone} AND {_DAY_IST} = %s
                )::int AS day_talks,
-               coalesce(sum({meet_parsed}) FILTER (
+               coalesce(sum({meet_minutes}) FILTER (
                  WHERE {attended} AND {_DAY_IST} = %s
                ), 0)::float AS day_meet,
                count(*) FILTER (
@@ -2201,16 +2223,16 @@ def activity_duration_rank(day: date) -> dict[str, Any]:
                count(*) FILTER (
                  WHERE {attended}
                    AND {_DAY_IST} = %s
-                   AND ({meet_parsed}) IS NULL
+                   AND ({meet_minutes}) IS NULL
                )::int AS day_err,
                coalesce(sum({_DUR_E}) FILTER (WHERE {phone}), 0)::float
                  AS week_phone,
                count(*) FILTER (WHERE {phone})::int AS week_talks,
-               coalesce(sum({meet_parsed}) FILTER (WHERE {attended}), 0)::float
+               coalesce(sum({meet_minutes}) FILTER (WHERE {attended}), 0)::float
                  AS week_meet,
                count(*) FILTER (WHERE {attended})::int AS week_meets,
                count(*) FILTER (
-                 WHERE {attended} AND ({meet_parsed}) IS NULL
+                 WHERE {attended} AND ({meet_minutes}) IS NULL
                )::int AS week_err
         FROM unnest(%s::text[]) AS t(rep_id)
         JOIN reps r ON r.org_id = %s AND r.rep_id = t.rep_id
