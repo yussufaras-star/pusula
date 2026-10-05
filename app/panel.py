@@ -606,6 +606,128 @@ hr {
 [data-testid="stRadio"] [data-baseweb="radio"]:has(input:checked) [data-testid="stMarkdownContainer"] {
   color: #F3F0E8 !important;
 }
+[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .pusula-verim) {
+  background: #FBFAF6;
+  border: 1px solid #DDD6C8 !important;
+  border-radius: 14px;
+  padding: 0.15rem 0.2rem 0.35rem;
+  gap: 0.15rem;
+  overflow: hidden;
+}
+[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .pusula-verim) [data-testid="stPills"] {
+  padding: 0.45rem 0.55rem 0.15rem;
+}
+[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .pusula-verim) [data-testid="stBaseButton-pills"],
+[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .pusula-verim) [data-testid="stBaseButton-pillsActive"] {
+  border-radius: 999px !important;
+  border: 1px solid #DDD6C8 !important;
+  background: transparent !important;
+  color: #1A1F26 !important;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.2;
+  box-shadow: none !important;
+}
+[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .pusula-verim) [data-testid="stBaseButton-pills"] p,
+[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .pusula-verim) [data-testid="stBaseButton-pillsActive"] p {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .pusula-verim) [data-testid="stBaseButton-pillsActive"] {
+  background: #1A1F26 !important;
+  border-color: #1A1F26 !important;
+  color: #F3F0E8 !important;
+}
+[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .pusula-verim) [data-testid="stBaseButton-pillsActive"] p {
+  background: transparent !important;
+  color: #F3F0E8 !important;
+}
+.pusula-verim-table {
+  width: 100%;
+}
+.pusula-verim-table table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.pusula-verim-table th,
+.pusula-verim-table td {
+  padding: 0.62rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+.pusula-verim-table th:nth-child(n+3):nth-child(-n+8),
+.pusula-verim-table td:nth-child(n+3):nth-child(-n+8) {
+  text-align: right;
+}
+.pusula-verim-table th:nth-child(1),
+.pusula-verim-table td:nth-child(1) { width: 4.8%; }
+.pusula-verim-table th:nth-child(2),
+.pusula-verim-table td:nth-child(2) { width: 12%; }
+.pusula-verim-table th:nth-child(3),
+.pusula-verim-table td:nth-child(3) { width: 12.9%; }
+.pusula-verim-table th:nth-child(4),
+.pusula-verim-table td:nth-child(4) { width: 13.8%; }
+.pusula-verim-table th:nth-child(5),
+.pusula-verim-table td:nth-child(5) { width: 9.2%; }
+.pusula-verim-table th:nth-child(6),
+.pusula-verim-table td:nth-child(6) { width: 10.1%; }
+.pusula-verim-table th:nth-child(7),
+.pusula-verim-table td:nth-child(7) { width: 6.6%; }
+.pusula-verim-table th:nth-child(8),
+.pusula-verim-table td:nth-child(8) { width: 6.6%; }
+.pusula-verim-table th {
+  color: #6A6258;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.25;
+  vertical-align: bottom;
+  border-bottom: 1px solid #DDD6C8;
+  padding-top: 0.35rem;
+  padding-bottom: 0.5rem;
+}
+.pusula-verim-table th.is-sorted {
+  color: #1A1F26;
+}
+.pusula-verim-table .pusula-arrow {
+  font-weight: 600;
+  margin-left: 0.2rem;
+}
+.pusula-verim-table td {
+  color: #1A1F26;
+  font-size: 0.92rem;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid #E7E2D6;
+}
+.pusula-verim-table td.is-name {
+  font-weight: 600;
+}
+.pusula-verim-table td.is-rank {
+  color: #6A6258;
+}
+.pusula-verim-table td.is-note {
+  color: #3A342C;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  text-align: left;
+}
+.pusula-verim-table td.is-sorted,
+.pusula-verim-table th.is-sorted {
+  background: #F6F1E6;
+}
+.pusula-verim-table tr.is-total td {
+  background: #E8E2D4;
+  font-weight: 600;
+  border-top: 1px solid #D3CBBC;
+  border-bottom: none;
+}
+.pusula-verim-table tbody tr:not(.is-total):hover td {
+  background: #F7F4EE;
+}
+.pusula-verim-table tbody tr:not(.is-total):hover td.is-sorted {
+  background: #F1EBDF;
+}
 </style>
 """
 
@@ -1368,11 +1490,36 @@ _VERIM_WIDTHS: dict[str, int] = {
     "ortalama görüşme": 110,
     "görüşme adedi": 72,
     "katıldı": 72,
-    "yorum": 200,
+    "yorum": 260,
 }
-# Yorum birden çok cümle. Satır onları kessin diye saat satırından yüksek.
-_VERIM_ROW_PX = 108
+# Uzun başlıklar kelime sınırından kırılır. Sıra _verim_records ile aynı.
+_VERIM_HEAD_HTML: dict[str, str] = {
+    "gerçekleşen görüşme süresi": "gerçekleşen<br>görüşme süresi",
+    "gerçekleşen toplantı süresi": "gerçekleşen<br>toplantı süresi",
+    "ortalama görüşme": "ortalama<br>görüşme",
+    "görüşme adedi": "görüşme<br>adedi",
+}
+# Etiket, sıralama alanı. Varsayılan toplam süre (telefon + toplantı).
+_VERIM_SORT_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("toplam süre", "total_sec"),
+    ("telefon", "phone_sec"),
+    ("toplantı", "meet_min"),
+    ("ortalama", "avg_sec"),
+    ("görüşme", "talk_n"),
+    ("katıldı", "meet_n"),
+    ("temsilci", "temsilci"),
+)
+_VERIM_SORT_COLUMN: dict[str, str] = {
+    "total_sec": "toplam süre",
+    "phone_sec": "gerçekleşen görüşme süresi",
+    "meet_min": "gerçekleşen toplantı süresi",
+    "avg_sec": "ortalama görüşme",
+    "talk_n": "görüşme adedi",
+    "meet_n": "katıldı",
+    "temsilci": "temsilci",
+}
 _VERIM_HELP = {
+    "sıra": "Telefon ile toplantının toplamına göre. 1 en uzun süre.",
     "katıldı": "Katılınan randevu adedi.",
 }
 
@@ -1389,9 +1536,44 @@ def _comment_lines(text: str) -> str:
     return "\n".join(lines)
 
 
-def _verim_table_height(n_rows: int) -> int:
-    """Başlık ve tüm temsilciler sığsın. İç kaydırma olmasın."""
-    return (n_rows + 1) * _VERIM_ROW_PX + _HOUR_HEIGHT_PAD
+def verim_people_order(
+    rows: list[dict[str, Any]],
+    *,
+    sort_by: str = "total_sec",
+    descending: bool | None = None,
+) -> list[dict[str, Any]]:
+    """Görünen kişi sırası. Süre yazıdan değil, ölçülen sayıdan dizilir.
+
+    Varsayılan toplam süre: telefon saniyesi + toplantı dakikası.
+    Ortalaması olmayan satır sonda kalır. Toplam satırı buraya girmez.
+    """
+    fields = {field for _label, field in _VERIM_SORT_OPTIONS}
+    field = sort_by if sort_by in fields else "total_sec"
+    if descending is None:
+        descending = field != "temsilci"
+
+    def identity(row: dict[str, Any]) -> tuple[str, str]:
+        return (
+            str(row.get("temsilci") or "").casefold(),
+            str(row.get("rep_id") or ""),
+        )
+
+    if field == "temsilci":
+        return sorted(rows, key=identity, reverse=descending)
+
+    def metric(row: dict[str, Any]) -> tuple[bool, float, str, str]:
+        name, rep = identity(row)
+        if field == "avg_sec":
+            raw = row.get("avg_sec")
+            missing = raw is None
+            value = 0.0 if raw is None else float(raw)
+        else:
+            missing = False
+            value = float(row.get(field) or 0)
+        signed = -value if descending else value
+        return (missing, signed, name, rep)
+
+    return sorted(rows, key=metric)
 
 
 def _verim_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1524,25 +1706,88 @@ def _huni_table(frame: pd.DataFrame) -> None:
     )
 
 
-def _verim_table(frame: pd.DataFrame) -> None:
-    """Tek tablo, sayfa genişliği. Yatay kaydırma yok."""
-    cfg: dict[str, Any] = {}
-    for col in frame.columns:
-        leaf = _col_leaf(col)
-        text = _VERIM_HELP.get(leaf) or COL_HELP.get(leaf)
-        cfg[leaf] = st.column_config.TextColumn(
-            leaf,
-            help=text,
-            width=_VERIM_WIDTHS.get(leaf),
-        )
-    st.dataframe(
-        frame,
-        hide_index=True,
-        use_container_width=True,
-        column_config=cfg,
-        row_height=_VERIM_ROW_PX,
-        height=_verim_table_height(len(frame)),
+def _verim_sort_choice() -> tuple[str, str, bool]:
+    """Seçilen ölçü. Boş seçim toplam süreye döner."""
+    labels = [label for label, _field in _VERIM_SORT_OPTIONS]
+    fields = dict(_VERIM_SORT_OPTIONS)
+    if st.session_state.get("verim_sort_label") not in labels:
+        st.session_state["verim_sort_label"] = labels[0]
+    choice = st.pills(
+        "Sıra",
+        labels,
+        key="verim_sort_label",
+        help=(
+            "Varsayılan sıra, telefon ile toplantının toplamıdır. "
+            "Süre ölçülen miktara göre dizilir."
+        ),
+        label_visibility="collapsed",
     )
+    label = str(choice) if choice in fields else labels[0]
+    field = fields[label]
+    return label, field, field != "temsilci"
+
+
+def _verim_table_html(
+    records: list[dict[str, Any]],
+    *,
+    sort_column: str,
+    descending: bool,
+) -> str:
+    """Toplam satırı sonda. Yorum satır satır. Seçilen sütun vurgulanır."""
+    if not records:
+        return ""
+    labels = list(records[0])
+    arrow = "↓" if descending else "↑"
+    heads: list[str] = []
+    for label in labels:
+        title = _VERIM_HELP.get(label) or COL_HELP.get(label) or ""
+        title_attr = f' title="{html.escape(title, quote=True)}"' if title else ""
+        text = _VERIM_HEAD_HTML.get(label, html.escape(label))
+        classes = "is-sorted" if label == sort_column else ""
+        if label == sort_column:
+            text = f'{text} <span class="pusula-arrow">{arrow}</span>'
+        class_attr = f' class="{classes}"' if classes else ""
+        heads.append(f"<th{class_attr}{title_attr}>{text}</th>")
+    body: list[str] = []
+    for record in records:
+        is_total = record.get("temsilci") == "toplam"
+        cells: list[str] = []
+        for label in labels:
+            classes: list[str] = []
+            if label == sort_column:
+                classes.append("is-sorted")
+            if label == "yorum":
+                classes.append("is-note")
+            if label == "temsilci" and not is_total:
+                classes.append("is-name")
+            if label == "sıra":
+                classes.append("is-rank")
+            raw = str(record.get(label) or "")
+            inner = html.escape(raw).replace("\n", "<br>")
+            class_attr = f' class="{" ".join(classes)}"' if classes else ""
+            cells.append(f"<td{class_attr}>{inner}</td>")
+        row_class = ' class="is-total"' if is_total else ""
+        body.append(f"<tr{row_class}>{''.join(cells)}</tr>")
+    return (
+        '<div class="pusula-verim pusula-verim-table"><table>'
+        f"<thead><tr>{''.join(heads)}</tr></thead>"
+        f"<tbody>{''.join(body)}</tbody>"
+        "</table></div>"
+    )
+
+
+def _verim_table(rows: list[dict[str, Any]]) -> None:
+    """Ekip tablosu. Varsayılan sıra toplam süre. Toplam satır sonda."""
+    _label, field, descending = _verim_sort_choice()
+    ordered = verim_people_order(rows, sort_by=field, descending=descending)
+    records = _verim_records(ordered)
+    page = _verim_table_html(
+        records,
+        sort_column=_VERIM_SORT_COLUMN.get(field, "toplam süre"),
+        descending=descending,
+    )
+    if page:
+        st.html(page)
 
 
 def _verim_range() -> tuple[date, date] | None:
@@ -1584,7 +1829,8 @@ def _render_verimlilik() -> None:
     if not rows:
         st.caption("veri yetersiz")
         return
-    _verim_table(_df(_verim_records(rows)))
+    with st.container(border=True):
+        _verim_table(rows)
     st.markdown("**Huni**")
     _huni_table(_df(_huni_records(rows)))
     meet_err = int(rows[0].get("meet_err") or 0)
