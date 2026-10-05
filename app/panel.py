@@ -68,8 +68,11 @@ from pusula.panel_data import (
     MESAI_WD_SAAT,
     OLU_ZAMAN_SN,
     TOPLANTI_DK,
+    WORKLOAD_ROWS,
     DateWindow,
+    DolulukVarsayim,
     all_data_window,
+    apply_plan_counts,
     arrow,
     conv_window,
     default_window,
@@ -197,18 +200,18 @@ HELP_TAZELIK = (
     "Dönüşüm ve davranış metrikleri 1 Mayıs 2026 sonrası."
 )
 HELP_ISYUKU = (
-    "Kisi basi gunluk ortalama. Son 90 gunun pazar disi is "
-    "gunlerine bolunmustur."
+    "Kişi başı günlük ortalama. Son 90 günün pazar dışı iş "
+    "günlerine bölünmüştür. Plan adetleri canlı plandan gelir, "
+    "süre varsayımları buradan değişir. Ölçülen arama ve toplantı "
+    "süresi yerinde kalır."
 )
 HELP_DOLULUK = (
-    "Gün doluluk oranı. Payda mesai süresi (hafta içi 09:00-18:00 "
-    "eksi 1 saat mola = 8 saat; cumartesi 09:00-15:00 eksi 1 saat "
-    "mola = 5 saat; pazar yok). Pay ölçülen arama süresi "
-    "(call_status=connected, duration_sec) ve katılınan toplantı "
-    "süresi artı varsayılan CRM (ulaşılamayan 30 sn, ulaşılan "
-    "1.5 dk) ve ölü zaman. WhatsApp bu hesaba dahil değil. "
-    "Ulaşılan görüşme süresi arama satırında sayılır, ikinci "
-    "kez eklenmez."
+    "Gün doluluk oranı. Payda mesai süresi; hafta içi ve cumartesi "
+    "saatleri İş yükündeki alanlardan gelir, pazar yok. Pay, ölçülen "
+    "arama süresi ve katılınan toplantı süresi artı CRM ve ölü zaman. "
+    "Bu katsayılar da İş yükündeki alanlardan gelir. WhatsApp bu "
+    "hesaba dahil değil. Ulaşılan görüşme süresi arama satırında "
+    "sayılır, ikinci kez eklenmez."
 )
 HELP_LEAD = "Temsilciye atanan yeni lead sayisi."
 HELP_HUNI = (
@@ -719,11 +722,130 @@ def _reach_break(
     )
 
 
+def _varsayim_tuple() -> tuple[float, float, float, float, float, float]:
+    """İş yükünde yazılan süre varsayımı. Sayfa açılmadıysa kod sabiti."""
+    return (
+        float(st.session_state.get("doluluk_v_toplanti_dk", TOPLANTI_DK)),
+        float(st.session_state.get("doluluk_v_crm_sn_miss", CRM_SN_PER_ULASILAMAYAN)),
+        float(st.session_state.get("doluluk_v_crm_dk_hit", CRM_DK_PER_GORUSME)),
+        float(st.session_state.get("doluluk_v_olu_sn", OLU_ZAMAN_SN)),
+        float(st.session_state.get("doluluk_v_mesai_wd", MESAI_WD_SAAT)),
+        float(st.session_state.get("doluluk_v_mesai_sat", MESAI_SAT_SAAT)),
+    )
+
+
+def _render_doluluk_varsayim() -> tuple[float, float, float, float, float, float]:
+    """Süre varsayımı. İlk değer koddaki sabittir."""
+    st.caption("süre varsayımı")
+    c1, c2, c3 = st.columns(3)
+    toplanti_dk = float(
+        c1.number_input(
+            "toplantı (dk)",
+            min_value=0.0,
+            max_value=180.0,
+            value=float(TOPLANTI_DK),
+            step=5.0,
+            format="%.0f",
+            key="doluluk_v_toplanti_dk",
+        )
+    )
+    crm_sn = float(
+        c2.number_input(
+            "CRM ulaşılamayan (sn)",
+            min_value=0.0,
+            max_value=600.0,
+            value=float(CRM_SN_PER_ULASILAMAYAN),
+            step=5.0,
+            format="%.0f",
+            key="doluluk_v_crm_sn_miss",
+        )
+    )
+    crm_dk = float(
+        c3.number_input(
+            "CRM ulaşılan (dk)",
+            min_value=0.0,
+            max_value=30.0,
+            value=float(CRM_DK_PER_GORUSME),
+            step=0.1,
+            format="%.1f",
+            key="doluluk_v_crm_dk_hit",
+        )
+    )
+    c4, c5, c6 = st.columns(3)
+    olu_sn = float(
+        c4.number_input(
+            "ölü zaman (sn)",
+            min_value=0.0,
+            max_value=600.0,
+            value=float(OLU_ZAMAN_SN),
+            step=5.0,
+            format="%.0f",
+            key="doluluk_v_olu_sn",
+        )
+    )
+    mesai_wd = float(
+        c5.number_input(
+            "mesai hafta içi (saat)",
+            min_value=0.0,
+            max_value=24.0,
+            value=float(MESAI_WD_SAAT),
+            step=0.5,
+            format="%.1f",
+            key="doluluk_v_mesai_wd",
+        )
+    )
+    mesai_sat = float(
+        c6.number_input(
+            "mesai cumartesi (saat)",
+            min_value=0.0,
+            max_value=24.0,
+            value=float(MESAI_SAT_SAAT),
+            step=0.5,
+            format="%.1f",
+            key="doluluk_v_mesai_sat",
+        )
+    )
+    return (toplanti_dk, crm_sn, crm_dk, olu_sn, mesai_wd, mesai_sat)
+
+
+def _render_plan_counts(rep_id: str | None, board: dict[str, Any]) -> list[float]:
+    """Plan adetleri. İlk değer canlı plandan gelir, kişi başı gündür."""
+    st.caption("planlanan adet, kişi başı gün")
+    scope = rep_id or "ekip"
+    rows = board.get("rows") or []
+    counts: list[float] = []
+    width = 4
+    for start in range(0, len(WORKLOAD_ROWS), width):
+        chunk = WORKLOAD_ROWS[start : start + width]
+        cols = st.columns(width)
+        for offset, (key, label, _kaynak) in enumerate(chunk):
+            row = rows[start + offset] if start + offset < len(rows) else {}
+            seeded = float(row.get("planlanan") or 0.0)
+            counts.append(
+                float(
+                    cols[offset].number_input(
+                        label,
+                        min_value=0.0,
+                        max_value=1000.0,
+                        value=seeded,
+                        step=0.1,
+                        format="%.1f",
+                        key=f"doluluk_plan_{scope}_{key}",
+                    )
+                )
+            )
+    return counts
+
+
 @st.cache_data(ttl=CACHE_TTL)
 def _board(
-    rep_id: str | None, arama_per_lead: float, toplanti_gun: float
+    rep_id: str | None,
+    arama_per_lead: float,
+    toplanti_gun: float,
+    varsayim: tuple[float, ...] | None = None,
 ) -> dict[str, Any]:
-    return workload_board(rep_id, arama_per_lead, toplanti_gun)
+    parsed = DolulukVarsayim(*varsayim) if varsayim is not None else None
+    return workload_board(rep_id, arama_per_lead, toplanti_gun, varsayim=parsed)
 
 
 @st.cache_data(ttl=CACHE_TTL)
@@ -2167,7 +2289,10 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
     if report == "Ekip":
         dip = _team_dip(start, end)
         team_board = _board(
-            None, float(DEFAULT_ARAMA_PER_LEAD), float(DEFAULT_TOPLANTI_GUN)
+            None,
+            float(DEFAULT_ARAMA_PER_LEAD),
+            float(DEFAULT_TOPLANTI_GUN),
+            _varsayim_tuple(),
         )
         with st.container(border=True):
             _stat_row(
@@ -2212,23 +2337,17 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
 
     if report == "İş yükü":
         _heading("Günlük iş yükü (kişi başı)", HELP_ISYUKU, default_window())
-        p1, p2 = st.columns(2)
-        arama_per_lead = p1.number_input(
-            "lead başına arama (plan)",
-            min_value=0.5,
-            max_value=20.0,
-            value=float(DEFAULT_ARAMA_PER_LEAD),
-            step=0.5,
+        varsayim_t = _render_doluluk_varsayim()
+        board = _board(
+            rep_id,
+            float(DEFAULT_ARAMA_PER_LEAD),
+            float(DEFAULT_TOPLANTI_GUN),
+            varsayim_t,
         )
-        toplanti_gun = p2.number_input(
-            "günde gerçekleşen toplantı (plan)",
-            min_value=0.0,
-            max_value=20.0,
-            value=float(DEFAULT_TOPLANTI_GUN),
-            step=0.5,
-        )
-        board = _board(rep_id, float(arama_per_lead), float(toplanti_gun))
-        bframe = _df(board["rows"]).rename(
+        counts = _render_plan_counts(rep_id, board)
+        shown = apply_plan_counts(board, counts, DolulukVarsayim(*varsayim_t))
+        v = shown["varsayim"]
+        bframe = _df(shown["rows"]).rename(
             columns={
                 "planlanan": "PLANLANAN",
                 "plan dk": "PLANLANAN dk",
@@ -2243,11 +2362,11 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
                 [
                     {
                         "label": "planlanan toplam",
-                        "value": f"{board['plan_saat']} saat",
+                        "value": f"{shown['plan_saat']} saat",
                     },
                     {
                         "label": "gerçekleşen toplam",
-                        "value": f"{board['gercek_saat']} saat",
+                        "value": f"{shown['gercek_saat']} saat",
                     },
                     {
                         "label": (
@@ -2255,22 +2374,22 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
                             if rep_id is None
                             else "gün doluluk oranı"
                         ),
-                        "value": fmt_pct(board.get("doluluk")),
+                        "value": fmt_pct(shown.get("doluluk")),
                         "help": HELP_DOLULUK,
                     },
                 ]
             )
         st.caption(
-            f"plan gerçekleşme (süre) {fmt_pct(board.get('toplam_oran'))} · "
-            f"ulaşılamayan arama ort. {fmt_duration(board.get('miss_sn'))} · "
-            f"ulaşılan görüşme ort. {fmt_duration(board.get('hit_sn'))} · "
-            f"toplantı plan {int(TOPLANTI_DK)} dk · "
-            f"CRM ulaşılamayan {int(CRM_SN_PER_ULASILAMAYAN)} sn · "
-            f"CRM ulaşılan {CRM_DK_PER_GORUSME} dk/görüşme · "
-            f"ölü zaman {fmt_duration(OLU_ZAMAN_SN)}/arama · "
-            f"{int(board.get('workdays') or 0)} iş günü · "
-            f"mesai hafta içi {MESAI_WD_SAAT:.0f} saat · "
-            f"cumartesi {MESAI_SAT_SAAT:.0f} saat"
+            f"plan gerçekleşme (süre) {fmt_pct(shown.get('toplam_oran'))} · "
+            f"ulaşılamayan arama ort. {fmt_duration(shown.get('miss_sn'))} · "
+            f"ulaşılan görüşme ort. {fmt_duration(shown.get('hit_sn'))} · "
+            f"toplantı plan {v.toplanti_dk:g} dk · "
+            f"CRM ulaşılamayan {v.crm_sn_miss:g} sn · "
+            f"CRM ulaşılan {v.crm_dk_hit:g} dk/görüşme · "
+            f"ölü zaman {fmt_duration(v.olu_sn)}/arama · "
+            f"{int(shown.get('workdays') or 0)} iş günü · "
+            f"mesai hafta içi {v.mesai_wd:g} saat · "
+            f"cumartesi {v.mesai_sat:g} saat"
         )
         return
 
@@ -2623,11 +2742,18 @@ def render_temsilci(
                     },
                 ]
             )
+            varsayim_t = _varsayim_tuple()
             own_board = _board(
-                rep_id, float(DEFAULT_ARAMA_PER_LEAD), float(DEFAULT_TOPLANTI_GUN)
+                rep_id,
+                float(DEFAULT_ARAMA_PER_LEAD),
+                float(DEFAULT_TOPLANTI_GUN),
+                varsayim_t,
             )
             team_board = _board(
-                None, float(DEFAULT_ARAMA_PER_LEAD), float(DEFAULT_TOPLANTI_GUN)
+                None,
+                float(DEFAULT_ARAMA_PER_LEAD),
+                float(DEFAULT_TOPLANTI_GUN),
+                varsayim_t,
             )
             with st.container():
                 st.metric(
@@ -2638,7 +2764,8 @@ def render_temsilci(
                 st.caption(
                     f"ekip ortalaması {fmt_pct(team_board.get('doluluk'))}"
                 )
-            st.caption(f"CRM kayıt tahmini {CRM_DK_PER_GORUSME} dk/görüşme")
+            crm_dk = DolulukVarsayim(*varsayim_t).crm_dk_hit
+            st.caption(f"CRM kayıt tahmini {crm_dk:g} dk/görüşme")
         return
 
     if report == "Ulaşma":
