@@ -812,3 +812,166 @@ def test_huni_shows_period_rates_and_names_the_gap() -> None:
     assert records[2]["görüşmeye dönme"] == "%30.0"
     assert records[2]["katılım"] == "%45.0"
     assert records[2]["randevu"] == "20"
+
+
+def _screenshot_activity_rows() -> list[dict]:
+    """Ekrandaki süreler. Yazı sırası ile sayı sırası ayrışır."""
+    from pusula.panel_activity import apply_efficiency_notes, rank_activity_rows
+
+    return apply_efficiency_notes(
+        rank_activity_rows(
+            [
+                {
+                    "rep_id": "3",
+                    "temsilci": "Beytullah Aras",
+                    "phone_sec": 1 * 3600 + 46 * 60,
+                    "meet_min": 0,
+                    "talk_n": 21,
+                    "meet_n": 0,
+                },
+                {
+                    "rep_id": "5",
+                    "temsilci": "Abdullah Benli",
+                    "phone_sec": 2 * 60,
+                    "meet_min": 0,
+                    "talk_n": 4,
+                    "meet_n": 0,
+                },
+                {
+                    "rep_id": "1",
+                    "temsilci": "Ayşe Kar",
+                    "phone_sec": 30 * 60,
+                    "meet_min": 90,
+                    "talk_n": 15,
+                    "meet_n": 3,
+                },
+                {
+                    "rep_id": "2",
+                    "temsilci": "Serkan Şahin",
+                    "phone_sec": 47 * 60,
+                    "meet_min": 60,
+                    "talk_n": 12,
+                    "meet_n": 2,
+                },
+                {
+                    "rep_id": "4",
+                    "temsilci": "Miray Aksel",
+                    "phone_sec": 48 * 60,
+                    "meet_min": 0,
+                    "talk_n": 14,
+                    "meet_n": 0,
+                },
+            ]
+        )
+    )
+
+
+def test_verim_default_sort_is_phone_plus_meeting() -> None:
+    from app.panel import _verim_records, _verim_table_html, verim_people_order
+    from pusula.panel_data import fmt_clock_span
+
+    rows = _screenshot_activity_rows()
+    ordered = verim_people_order(rows)
+    assert [row["temsilci"] for row in ordered] == [
+        "Ayşe Kar",
+        "Serkan Şahin",
+        "Beytullah Aras",
+        "Miray Aksel",
+        "Abdullah Benli",
+    ]
+    assert [row["sira"] for row in ordered] == [1, 2, 3, 4, 5]
+    assert ordered[0]["total_sec"] == 2 * 3600
+    assert ordered[1]["total_sec"] == 47 * 60 + 60 * 60
+
+    lexical = sorted(
+        rows,
+        key=lambda row: fmt_clock_span(row["phone_sec"], day_total=True),
+    )
+    phone = verim_people_order(rows, sort_by="phone_sec", descending=False)
+    assert [row["temsilci"] for row in lexical] == [
+        "Beytullah Aras",
+        "Abdullah Benli",
+        "Ayşe Kar",
+        "Serkan Şahin",
+        "Miray Aksel",
+    ]
+    assert [row["temsilci"] for row in phone] == [
+        "Abdullah Benli",
+        "Ayşe Kar",
+        "Serkan Şahin",
+        "Miray Aksel",
+        "Beytullah Aras",
+    ]
+    assert [row["temsilci"] for row in lexical] != [row["temsilci"] for row in phone]
+
+    longest_phone = verim_people_order(rows, sort_by="phone_sec", descending=True)
+    records = _verim_records(longest_phone)
+    assert [row["temsilci"] for row in records][:1] == ["Beytullah Aras"]
+    assert records[-1]["temsilci"] == "toplam"
+    page = _verim_table_html(
+        records,
+        sort_column="gerçekleşen görüşme süresi",
+        descending=True,
+    )
+    assert page.index("Beytullah Aras") < page.index("Abdullah Benli")
+    assert page.index("Abdullah Benli") < page.index('class="is-total"')
+    assert "gerçekleşen<br>görüşme süresi" in page
+    assert page.index("is-sorted") < page.index("Beytullah Aras")
+    assert "<script" not in page
+    assert "&lt;" not in page
+
+    marked = _verim_records(ordered)
+    marked[0]["yorum"] = "küçüktür < ekip"
+    safe = _verim_table_html(
+        marked,
+        sort_column="toplam süre",
+        descending=True,
+    )
+    assert "küçüktür &lt; ekip" in safe
+    assert "küçüktür < ekip" not in safe
+    assert 'class="is-sorted"' in safe
+    assert "toplam süre <span" in safe
+    default_page_names = [
+        "Ayşe Kar",
+        "Serkan Şahin",
+        "Beytullah Aras",
+        "Miray Aksel",
+        "Abdullah Benli",
+    ]
+    positions = [safe.index(name) for name in default_page_names]
+    assert positions == sorted(positions)
+    assert safe.index('class="is-total"') > positions[-1]
+
+
+def test_verim_average_missing_sorts_last() -> None:
+    from app.panel import verim_people_order
+
+    rows = [
+        {
+            "rep_id": "a",
+            "temsilci": "Ayşe",
+            "avg_sec": None,
+            "total_sec": 10,
+        },
+        {
+            "rep_id": "b",
+            "temsilci": "Miray",
+            "avg_sec": 30,
+            "total_sec": 10,
+        },
+    ]
+    assert [row["temsilci"] for row in verim_people_order(rows, sort_by="avg_sec")] == [
+        "Miray",
+        "Ayşe",
+    ]
+    assert [
+        row["temsilci"]
+        for row in verim_people_order(rows, sort_by="avg_sec", descending=False)
+    ] == ["Miray", "Ayşe"]
+    tied = verim_people_order(
+        [
+            {"rep_id": "2", "temsilci": "Serkan", "total_sec": 100},
+            {"rep_id": "1", "temsilci": "Abdullah", "total_sec": 100},
+        ]
+    )
+    assert [row["temsilci"] for row in tied] == ["Abdullah", "Serkan"]
