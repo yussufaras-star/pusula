@@ -3,8 +3,9 @@
 temas_mi(event) / is_temas_sql: görüşme açıldı mı.
   call_result dolu → no_answer ve invalid_number hariç temas.
   call_result boş → duration_sec > 0 ise temas.
-  overdue / scheduled faaliyet ve temasa girmez.
-  occurred_at > now() faaliyet ve temasa girmez.
+  Henüz gerçekleşmemiş plan faaliyet ve temasa girmez.
+  Geçmişte süresi veya sonucu olan plan gerçekleşmiş çağrıdır.
+  occurred_at > now() ileri tarihli randevu planıdır, girmez.
 
 cevirme_mi / is_cevirme_sql: call_status = connected (temas olmasa da).
 Temsilcinin çevirmesi faaliyet, açılması sonuç.
@@ -119,10 +120,10 @@ def _result_token(meta: Mapping[str, Any]) -> str | None:
     return None
 
 
-def is_planned_call(event: Event | Mapping[str, Any]) -> bool:
-    """Planlanmış iş: overdue / scheduled. Yapılmış çağrı değil."""
+def _looks_planned(event: Event | Mapping[str, Any]) -> bool:
+    """CRM'de plan olarak işaretli. Gerçekleşip gerçekleşmediği ayrı."""
     meta = _meta_of(event)
-    status = str(meta.get("call_status") or "").strip()
+    status = str(meta.get("call_status") or "").strip().casefold()
     if status in PLANNED_STATUSES:
         return True
     scheduled = meta.get("scheduled")
@@ -131,6 +132,28 @@ def is_planned_call(event: Event | Mapping[str, Any]) -> bool:
     if isinstance(scheduled, str) and scheduled.strip().lower() == "true":
         return True
     return False
+
+
+def _plan_was_realized(event: Event | Mapping[str, Any]) -> bool:
+    """Planlanan çağrı yapıldı mı. İleri tarih gerçekleşmiş sayılmaz.
+
+    Sonuç doluysa cevapsız ve geçersiz numara hariç gerçekleşmiştir.
+    Sonuç boşsa süre > 0 gerçekleşmiştir.
+    """
+    if _is_future_occurred(event):
+        return False
+    meta = _meta_of(event)
+    token = _result_token(meta)
+    if token is not None:
+        return token not in NOT_TEMAS_KEYS and token not in NOT_TEMAS_RAW
+    return _duration_value(meta) > 0
+
+
+def is_planned_call(event: Event | Mapping[str, Any]) -> bool:
+    """Henüz gerçekleşmemiş plan. İleri tarihli randevu veya boş kayıt."""
+    if not _looks_planned(event):
+        return False
+    return not _plan_was_realized(event)
 
 
 def _occurred_at_of(event: Event | Mapping[str, Any]) -> datetime | None:
@@ -153,7 +176,7 @@ def _is_future_occurred(event: Event | Mapping[str, Any]) -> bool:
 
 
 def temas_mi(event: Event | Mapping[str, Any]) -> bool:
-    """Görüşme açıldı mı. Planlanmış ve gelecek tarihli kayıt temas değildir."""
+    """Görüşme açıldı mı. Boş plan ve ileri tarih temas değildir."""
     if is_planned_call(event) or _is_future_occurred(event):
         return False
     meta = _meta_of(event)
@@ -164,19 +187,56 @@ def temas_mi(event: Event | Mapping[str, Any]) -> bool:
 
 
 def cevirme_mi(event: Event | Mapping[str, Any]) -> bool:
-    """Faaliyet: bağlı çağrı. Planlanmış ve gelecek tarihli kayıt çevirme değildir."""
+    """Faaliyet: bağlı çağrı veya gerçekleşmiş plan. İleri tarih değildir."""
     if is_planned_call(event) or _is_future_occurred(event):
         return False
     meta = _meta_of(event)
-    return str(meta.get("call_status") or "").strip() == "connected"
+    if str(meta.get("call_status") or "").strip().casefold() == "connected":
+        return True
+    return _looks_planned(event)
+
+
+def _looks_planned_sql(alias: str = "e") -> str:
+    """Plan işareti: overdue / scheduled veya meta.scheduled."""
+    return f"""
+        (
+            lower(coalesce({alias}.meta->>'call_status', ''))
+                IN ('overdue', 'scheduled')
+            OR coalesce({alias}.meta->>'scheduled', 'false') = 'true'
+        )
+    """
+
+
+def _plan_was_realized_sql(alias: str = "e") -> str:
+    """Geçmiş plan, süresi veya geçerli sonucu varsa gerçekleşmiştir."""
+    dur = duration_sec(alias)
+    result = f"nullif(btrim(coalesce({alias}.meta->>'call_result', '')), '')"
+    key = f"nullif(btrim(coalesce({alias}.meta->>'outcome_key', '')), '')"
+    token = f"coalesce({result}, {key})"
+    not_keys = ", ".join(f"'{k}'" for k in sorted(NOT_TEMAS_KEYS | NOT_TEMAS_RAW))
+    return f"""
+        (
+            {alias}.occurred_at <= now()
+            AND (
+                CASE
+                    WHEN {token} IS NOT NULL
+                        THEN {token} NOT IN ({not_keys})
+                    ELSE coalesce({dur}, 0) > 0
+                END
+            )
+        )
+    """
 
 
 def is_planned_sql(alias: str = "e") -> str:
-    """overdue / scheduled — faaliyet ve temas dışı."""
+    """Henüz gerçekleşmemiş plan. İleri tarih ve boş kayıt dışarıda.
+
+    Geçmişte süresi veya sonucu olan plan gerçekleşmiş çağrıdır.
+    """
     return f"""
         (
-            coalesce({alias}.meta->>'call_status', '') IN ('overdue', 'scheduled')
-            OR coalesce({alias}.meta->>'scheduled', 'false') = 'true'
+            {_looks_planned_sql(alias)}
+            AND NOT ({_plan_was_realized_sql(alias)})
         )
     """
 
@@ -211,11 +271,14 @@ def is_temas_sql(alias: str = "e") -> str:
 
 
 def is_cevirme_sql(alias: str = "e") -> str:
-    """SQL karşılığı cevirme_mi."""
+    """SQL karşılığı cevirme_mi. Gerçekleşmiş plan da çevirmedir."""
     return f"""
         {is_not_planned_sql(alias)}
         AND {is_not_future_sql(alias)}
-        AND {alias}.meta->>'call_status' = 'connected'
+        AND (
+            lower(coalesce({alias}.meta->>'call_status', '')) = 'connected'
+            OR ({_looks_planned_sql(alias)})
+        )
     """
 
 

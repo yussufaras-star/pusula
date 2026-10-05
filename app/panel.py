@@ -235,7 +235,9 @@ HELP_BUGUN = (
 )
 HELP_SURE_SIRA = (
     "Telefon: açılan görüşmenin süresi. Giden temas ve süreli "
-    "gelen arama. Cevapsız arama yok. Toplantı: katılınan "
+    "gelen arama. Cevapsız arama yok. Planlanan çağrı "
+    "gerçekleştiyse süreye girer. İleri tarihli randevu girmez. "
+    "Toplantı: katılınan "
     "randevunun planlanan süresi. Gerçekleşen süre kaydı yok. "
     "Ortalama görüşme: telefon süresinin görüşme sayısına bölümü. "
     "Sıra, telefon ile toplantının toplamına göre. "
@@ -285,7 +287,8 @@ COL_HELP: dict[str, str] = {
     "görüşme süresi": HELP_SURE,
     "telefon süresi": (
         "Açılan görüşmenin süresi. Giden temas ve süreli gelen "
-        "arama. Cevapsız arama yok."
+        "arama. Cevapsız arama yok. Planlanan çağrı gerçekleştiyse "
+        "süreye girer. İleri tarihli randevu girmez."
     ),
     "toplam süre": (
         "Telefon süresi ile katılınan toplantının planlanan "
@@ -302,7 +305,8 @@ COL_HELP: dict[str, str] = {
     ),
     "gerçekleşen görüşme süresi": (
         "Açılan telefonun toplam süresi. Giden temas ve "
-        "süreli gelen arama. Cevapsız arama yok."
+        "süreli gelen arama. Cevapsız arama yok. Planlanan çağrı "
+        "gerçekleştiyse süreye girer. İleri tarihli randevu girmez."
     ),
     "gerçekleşen toplantı süresi": (
         "Katılınan randevunun planlanan süresi. "
