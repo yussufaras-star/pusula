@@ -302,15 +302,17 @@ def activity_rank_between(start: date, end: date) -> list[dict[str, Any]]:
     """Satış ekibi, kapalı tarih aralığı. Toplam süreye göre sıra.
 
     Telefon: giden temas ve süreli gelen. Toplantı: katılınan
-    randevunun planlanan süresi.
+    randevunun Zoho Meeting giriş-çıkış süresi. Planlanan aralık
+    gerçekleşen süreye girmez.
     """
     from pusula.config import get_org_id
     from pusula.panel_ciro import SALES_TEAM_IDS
     from pusula.panel_data import (
         DateWindow,
         _DUR_E,
+        _attended_meet_minutes_sql,
         _bounds,
-        _meet_duration_parsed_sql,
+        _corrupt_actual_meet_sql,
         connect,
     )
 
@@ -322,7 +324,8 @@ def activity_rank_between(start: date, end: date) -> list[dict[str, Any]]:
     attended = _attended_meeting_sql("e")
     dial = _outbound_dial_sql("e")
     out_talk = _outbound_talk_sql("e")
-    meet_parsed = _meet_duration_parsed_sql("e")
+    meet_minutes = _attended_meet_minutes_sql("e")
+    meet_bad = _corrupt_actual_meet_sql("e")
     sql = f"""
         SELECT r.rep_id,
                r.full_name,
@@ -331,7 +334,7 @@ def activity_rank_between(start: date, end: date) -> list[dict[str, Any]]:
                count(*) FILTER (WHERE {phone})::int AS talks,
                count(*) FILTER (WHERE {dial})::int AS dials,
                count(*) FILTER (WHERE {out_talk})::int AS out_talks,
-               coalesce(sum({meet_parsed}) FILTER (WHERE {attended}), 0)::float
+               coalesce(sum({meet_minutes}) FILTER (WHERE {attended}), 0)::float
                  AS meet_min,
                count(*) FILTER (WHERE {attended})::int AS meets,
                count(*) FILTER (
@@ -340,7 +343,7 @@ def activity_rank_between(start: date, end: date) -> list[dict[str, Any]]:
                )::int AS noshows,
                count(*) FILTER (WHERE e.channel = 'meeting')::int AS books,
                count(*) FILTER (
-                 WHERE {attended} AND ({meet_parsed}) IS NULL
+                 WHERE {attended} AND ({meet_bad})
                )::int AS meet_err
         FROM unnest(%s::text[]) AS t(rep_id)
         JOIN reps r ON r.org_id = %s AND r.rep_id = t.rep_id
@@ -389,7 +392,7 @@ def activity_rank_between(start: date, end: date) -> list[dict[str, Any]]:
         meet_err += int(err or 0)
     if meet_err:
         logger.warning(
-            "toplantı süresi çevrilemedi: %s kayıt (aralık, katildi)",
+            "toplantı süresi bozuk: %s kayıt (aralık, katildi)",
             meet_err,
         )
     rows = apply_efficiency_notes(rank_activity_rows(raw))

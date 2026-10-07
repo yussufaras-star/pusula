@@ -6,6 +6,7 @@ Kullanım:
     python scripts/block_ingest.py --dry-run
 
 Sıra: aramalar → randevular → lead'ler → kişiler.
+Randevu adımı Bookings'ten sonra Zoho Meeting oturum süresini yazar.
 Aynı saat penceresinde ikinci çalıştırma Zoho'ya gitmez.
 Günlük ingest sırasına dokunmaz; watermark geri yazılır.
 """
@@ -37,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 _CALLS = "zoho_crm_calls"
 _BOOKINGS = "zoho_bookings"
+_MEETINGS = "zoho_meeting"
 _LEADS = "zoho_leads"
 _CONTACTS = "zoho_contacts"
 
@@ -234,8 +236,37 @@ def _run_bookings(*, dry_run: bool, now: datetime) -> SourceResult:
         skipped=result.skipped,
         failed=result.failed,
     )
-    if not dry_run and result.failed == 0:
+    meeting = _run_meeting_durations(dry_run=dry_run, now=now)
+    failed = result.failed + meeting.failed
+    if not dry_run and failed == 0:
         _mark_done(now, "randevular")
+    return SourceResult(
+        key="randevular",
+        fetched=result.fetched + meeting.fetched,
+        written=result.inserted + meeting.written,
+        short_circuit=False,
+        failed=failed,
+    )
+
+
+def _run_meeting_durations(*, dry_run: bool, now: datetime) -> SourceResult:
+    """Katıldı randevularına oturum süresini yazar. API yoksa iş düşmez."""
+    since = now - timedelta(hours=LOOKBACK_HOURS)
+    print(f"since: {since.isoformat(timespec='seconds')} (lookback {LOOKBACK_HOURS} saat)")
+    ingester = get(_MEETINGS)()
+    setattr(ingester, "lookback", timedelta(hours=LOOKBACK_HOURS))
+    prior = None if dry_run else client.get_sync_state(_MEETINGS)
+    result = ingester.run(since=since, dry_run=dry_run)
+    if prior is not None:
+        client.set_sync_state(prior)
+    _print_source_detail(
+        result.source_name,
+        fetched=result.fetched,
+        written=result.inserted,
+        duplicated=result.duplicated,
+        skipped=result.skipped,
+        failed=result.failed,
+    )
     return SourceResult(
         key="randevular",
         fetched=result.fetched,
