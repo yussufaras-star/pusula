@@ -1,8 +1,9 @@
 """Zoho Meeting oturum süresi → katılınan Bookings kaydı.
 
 Liste API'sindeki duration planlanan penceredir (ör. 3600000 ms = 1 saat).
-Gerçek süre katılımcı raporundaki duration alanıdır; aynı e-postanın
-yeniden girişleri toplanır, milisaniye saniyeye yuvarlanır.
+Gerçek süre meetings.zoho.com katılımcı raporundaki giriş-çıkıştır
+(leaveTime - joinTime). duration alanı bu pencereyle aynıysa yazılmaz.
+Aynı e-postanın yeniden girişleri toplanır, milisaniye saniyeye yuvarlanır.
 
 Yalnız satış ekibinin sunduğu ve bir katildi randevuya (±90 dk)
 eşleşen oturum yazılır. Eşleşmeyen iç toplantı süreye girmez.
@@ -174,7 +175,7 @@ class MeetingDurationIngester(Ingester):
 
 
 def duration_sec_from_ms(raw: Any) -> int | None:
-    """Katılımcı duration alanı milisaniyedir. 3600000 → 3600.
+    """Milisaniye → saniye. 82790 → 83. 3600000 → 3600.
 
     Sıfır ve negatif yok sayılır. Saniye sanılıp bölünmez.
     """
@@ -184,21 +185,46 @@ def duration_sec_from_ms(raw: Any) -> int | None:
     return int(round(ms / 1000.0))
 
 
+def attendance_ms(row: dict[str, Any], scheduled_ms: int | None = None) -> int | None:
+    """Katılımcının oturumda kaldığı milisaniye.
+
+    meetings.zoho.com raporu joinTime ve leaveTime gösterir.
+    duration alanı planlanan pencereyle aynıysa gerçekleşen süre değildir.
+    """
+    join_ms = _as_ms(row.get("joinTime"))
+    leave_ms = _as_ms(row.get("leaveTime"))
+    if join_ms is not None and leave_ms is not None and leave_ms > join_ms:
+        return leave_ms - join_ms
+    raw = _as_ms(row.get("duration"))
+    if raw is None or raw <= 0:
+        return None
+    if scheduled_ms is not None and abs(raw - scheduled_ms) <= 1000:
+        return None
+    return raw
+
+
 def rep_duration_sec(
-    participants: list[dict[str, Any]], email: str
+    participants: list[dict[str, Any]],
+    email: str,
+    scheduled_ms: int | None = None,
 ) -> int | None:
     """Temsilcinin oturumda kaldığı saniye. Yeniden girişler toplanır.
 
     Önce e-posta. E-posta boşsa ve oturumun sunucusu bu temsilciyse
     role=presenter satırları. Başka katılımcının süresi eklenmez.
+    scheduled_ms, liste API'sindeki planlanan penceredir.
     """
     target = normalize_email(email)
     if target is None:
         return None
-    matched, by_email = _sum_ms(participants, email=target, role=None)
+    matched, by_email = _sum_ms(
+        participants, email=target, role=None, scheduled_ms=scheduled_ms
+    )
     if matched:
         return duration_sec_from_ms(by_email)
-    matched_role, by_role = _sum_ms(participants, email=None, role="presenter")
+    matched_role, by_role = _sum_ms(
+        participants, email=None, role="presenter", scheduled_ms=scheduled_ms
+    )
     if not matched_role:
         return None
     return duration_sec_from_ms(by_role)
@@ -297,6 +323,7 @@ def _sum_ms(
     *,
     email: str | None,
     role: str | None,
+    scheduled_ms: int | None = None,
 ) -> tuple[bool, int]:
     """(satır eşleşti mi, pozitif milisaniye toplamı).
 
@@ -314,7 +341,7 @@ def _sum_ms(
             if row_role != role:
                 continue
         seen = True
-        ms = _as_ms(row.get("duration"))
+        ms = attendance_ms(row, scheduled_ms)
         if ms is None or ms <= 0:
             continue
         total += ms
@@ -462,7 +489,9 @@ def _span_for_row(
     except MeetingRequestError as exc:
         logger.warning("zoho_meeting %s katilimci okunamadi: %s", key, exc)
         return None
-    seconds = rep_duration_sec(participants, presenter)
+    seconds = rep_duration_sec(
+        participants, presenter, _as_ms(row.get("duration"))
+    )
     if seconds is None or seconds <= 0:
         return None
     return SessionSpan(

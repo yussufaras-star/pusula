@@ -205,7 +205,8 @@ HELP_DOLULUK = (
     "eksi 1 saat mola = 8 saat; cumartesi 09:00-15:00 eksi 1 saat "
     "mola = 5 saat; pazar yok). Pay ölçülen arama süresi "
     "(call_status=connected, duration_sec) ve katılınan toplantı "
-    "süresi artı varsayılan CRM (ulaşılamayan 30 sn, ulaşılan "
+    "süresi (Zoho Meeting giriş-çıkış; planlanan aralık değil) "
+    "artı varsayılan CRM (ulaşılamayan 30 sn, ulaşılan "
     "1.5 dk) ve ölü zaman. WhatsApp bu hesaba dahil değil. "
     "Ulaşılan görüşme süresi arama satırında sayılır, ikinci "
     "kez eklenmez."
@@ -237,8 +238,8 @@ HELP_SURE_SIRA = (
     "Telefon: açılan görüşmenin süresi. Giden temas ve süreli "
     "gelen arama. Cevapsız arama yok. Toplantı: katılınan "
     "randevunun gerçekleşen süresi. Süre, Zoho Meeting'de "
-    "temsilcinin oturumda kaldığı dakikadır. Oturum kaydı yoksa "
-    "planlanan süre durur. "
+    "giriş ile çıkış arasındaki dakikadır. Planlanan aralık "
+    "süreye girmez. Oturum kaydı yoksa toplantı dakikası yok. "
     "Ortalama görüşme: telefon süresinin görüşme sayısına bölümü. "
     "Sıra, telefon ile toplantının toplamına göre. "
     "Yorum, toplam süreyi ve görüşme ortalamasını ekiple kıyaslar. "
@@ -291,8 +292,8 @@ COL_HELP: dict[str, str] = {
     ),
     "toplam süre": (
         "Telefon süresi ile katılınan toplantının gerçekleşen "
-        "süresinin toplamı. Oturum kaydı yoksa planlanan süre. "
-        "Sıra buna göre."
+        "süresinin toplamı. Oturum kaydı yoksa toplantı dakikası "
+        "eklenmez. Sıra buna göre."
     ),
     "ortalama görüşme": (
         "Telefon süresinin görüşme sayısına bölümü. "
@@ -309,8 +310,8 @@ COL_HELP: dict[str, str] = {
     ),
     "gerçekleşen toplantı süresi": (
         "Katılınan randevunun gerçekleşen süresi. "
-        "Zoho Meeting'de temsilcinin oturumda kaldığı süre. "
-        "Kayıt yoksa planlanan süre."
+        "Zoho Meeting'de giriş ile çıkış arası. "
+        "Planlanan aralık değil. Kayıt yoksa süre yok."
     ),
     "görüşme adedi": "Açılan telefon adedi.",
     "görüşmeye dönme": (
@@ -324,9 +325,9 @@ COL_HELP: dict[str, str] = {
         "Payda 5'in altındaysa veri yetersiz."
     ),
     "toplantı süresi": (
-        "Planlanan süre. Yalnız katılınan toplantılar. "
-        "Kaynak events.meta.duration. "
-        "Gerçekleşen süre Bookings'te tutulmuyor."
+        "Katılınan toplantının gerçekleşen süresi. "
+        "Zoho Meeting'de giriş ile çıkış arası. "
+        "Planlanan aralık süreye girmez. Kayıt yoksa dakika yok."
     ),
     "katıldı": HELP_KATILIM,
     "oran": HELP_ULASMA,
@@ -362,7 +363,8 @@ COL_HELP: dict[str, str] = {
         "Her satır ve toplam süre için ayrı hesaplanır."
     ),
     "süre kaynağı": (
-        "Ölçülen: events.meta.duration_sec veya Bookings duration. "
+        "Ölçülen: telefon süresi ve Zoho Meeting oturum süresi. "
+        "Planlanan randevu aralığı değil. "
         "Varsayım: CRM kayıt ve ölü zaman."
     ),
     "kayıt sayısı": HELP_KAYIT,
@@ -1594,10 +1596,10 @@ def _render_verimlilik() -> None:
     meet_err = int(rows[0].get("meet_err") or 0)
     if meet_err:
         logger.warning(
-            "toplantı süresi çevrilemedi: %s kayıt (aralık, katildi)",
+            "toplantı süresi bozuk: %s kayıt (aralık, katildi)",
             meet_err,
         )
-        st.caption(f"toplantı süresi çevrilemedi: {meet_err} kayıt")
+        st.caption(f"toplantı süresi bozuk: {meet_err} kayıt")
 
 
 def _hour_table_frame(
@@ -1696,10 +1698,10 @@ def _render_bugun(
         failed = sum(int(row.get("toplanti_dk_hata") or 0) for row in hour_rows)
         if failed:
             logger.warning(
-                "toplantı süresi çevrilemedi: %s kayıt (katildi, meta.duration)",
+                "toplantı süresi bozuk: %s kayıt (katildi, actual_duration_sec)",
                 failed,
             )
-            st.caption(f"toplantı süresi çevrilemedi: {failed} kayıt")
+            st.caption(f"toplantı süresi bozuk: {failed} kayıt")
         frame = _hour_table_frame(hour_rows, day)
         _report_meeting_split(hour_rows)
         _hour_table(frame)

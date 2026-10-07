@@ -13,6 +13,7 @@ from pusula.ingest.zoho_meeting import (
     MeetingDurationIngester,
     MeetingRequestError,
     SessionSpan,
+    attendance_ms,
     duration_sec_from_ms,
     extract_participants,
     extract_session_rows,
@@ -39,6 +40,39 @@ def test_duration_ms_is_not_minutes() -> None:
     assert duration_sec_from_ms(-5) is None
     assert duration_sec_from_ms(None) is None
     assert duration_sec_from_ms("yok") is None
+
+
+def test_join_leave_is_the_real_duration() -> None:
+    # meetings.zoho.com örneği: 02:20-02:21, duration 82790 ms.
+    row = {
+        "email": "ayse.kar@rexven.com",
+        "role": "presenter",
+        "joinTime": 1693903804737,
+        "leaveTime": 1693903887527,
+        "duration": 82790,
+    }
+    assert attendance_ms(row) == 82790
+    assert rep_duration_sec([row], "ayse.kar@rexven.com") == 83
+
+
+def test_scheduled_window_is_not_attendance() -> None:
+    scheduled = 3600000
+    planned_only = {
+        "email": "ayse.kar@rexven.com",
+        "role": "presenter",
+        "duration": scheduled,
+    }
+    assert attendance_ms(planned_only, scheduled) is None
+    assert rep_duration_sec([planned_only], "ayse.kar@rexven.com", scheduled) is None
+
+    stayed = {
+        "email": "ayse.kar@rexven.com",
+        "role": "presenter",
+        "joinTime": 1_000,
+        "leaveTime": 1_000 + 12 * 60 * 1000,
+        "duration": scheduled,
+    }
+    assert rep_duration_sec([stayed], "ayse.kar@rexven.com", scheduled) == 12 * 60
 
 
 def test_rep_duration_sums_rejoins_and_ignores_others() -> None:
@@ -149,11 +183,10 @@ def test_bookings_keeps_meeting_duration_on_rebuild() -> None:
     assert merge_preserved_meta(meta, None) == meta
 
 
-def test_efficiency_sql_prefers_actual_seconds() -> None:
+def test_efficiency_sql_uses_only_actual_seconds() -> None:
     sql = _attended_meet_minutes_sql("e")
     assert "actual_duration_sec" in sql
-    assert "coalesce(" in sql
-    assert "meta->>'duration'" in sql
+    assert "meta->>'duration'" not in sql
     assert "%" not in sql
     src = inspect.getsource(activity_rank_between)
     query = src.split('sql = f"""', 1)[1].split('"""', 1)[0]
@@ -170,10 +203,13 @@ def test_help_says_session_duration() -> None:
 
     text = COL_HELP["gerçekleşen toplantı süresi"]
     assert "Zoho Meeting" in text
-    assert "planlanan süre" in text
-    assert "Gerçekleşen süre kaydı yok" not in text
+    assert "Planlanan aralık değil" in text
+    assert "planlanan süre" not in text.casefold()
     assert "Zoho Meeting" in HELP_SURE_SIRA
-    assert "planlanan süre durur" in HELP_SURE_SIRA
+    assert "Planlanan aralık" in HELP_SURE_SIRA
+    hour = COL_HELP["toplantı süresi"]
+    assert "giriş ile çıkış" in hour
+    assert "meta.duration" not in hour
 
 
 def test_fetch_does_not_raise_when_meeting_api_missing(monkeypatch) -> None:

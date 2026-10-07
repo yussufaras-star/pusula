@@ -302,8 +302,8 @@ def activity_rank_between(start: date, end: date) -> list[dict[str, Any]]:
     """Satış ekibi, kapalı tarih aralığı. Toplam süreye göre sıra.
 
     Telefon: giden temas ve süreli gelen. Toplantı: katılınan
-    randevunun gerçekleşen süresi. Zoho Meeting kaydı yoksa
-    planlanan süre.
+    randevunun Zoho Meeting giriş-çıkış süresi. Planlanan aralık
+    gerçekleşen süreye girmez.
     """
     from pusula.config import get_org_id
     from pusula.panel_ciro import SALES_TEAM_IDS
@@ -312,6 +312,7 @@ def activity_rank_between(start: date, end: date) -> list[dict[str, Any]]:
         _DUR_E,
         _attended_meet_minutes_sql,
         _bounds,
+        _corrupt_actual_meet_sql,
         connect,
     )
 
@@ -324,6 +325,7 @@ def activity_rank_between(start: date, end: date) -> list[dict[str, Any]]:
     dial = _outbound_dial_sql("e")
     out_talk = _outbound_talk_sql("e")
     meet_minutes = _attended_meet_minutes_sql("e")
+    meet_bad = _corrupt_actual_meet_sql("e")
     sql = f"""
         SELECT r.rep_id,
                r.full_name,
@@ -341,7 +343,7 @@ def activity_rank_between(start: date, end: date) -> list[dict[str, Any]]:
                )::int AS noshows,
                count(*) FILTER (WHERE e.channel = 'meeting')::int AS books,
                count(*) FILTER (
-                 WHERE {attended} AND ({meet_minutes}) IS NULL
+                 WHERE {attended} AND ({meet_bad})
                )::int AS meet_err
         FROM unnest(%s::text[]) AS t(rep_id)
         JOIN reps r ON r.org_id = %s AND r.rep_id = t.rep_id
@@ -390,7 +392,7 @@ def activity_rank_between(start: date, end: date) -> list[dict[str, Any]]:
         meet_err += int(err or 0)
     if meet_err:
         logger.warning(
-            "toplantı süresi çevrilemedi: %s kayıt (aralık, katildi)",
+            "toplantı süresi bozuk: %s kayıt (aralık, katildi)",
             meet_err,
         )
     rows = apply_efficiency_notes(rank_activity_rows(raw))
