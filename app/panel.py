@@ -6,6 +6,7 @@ Giriş: st.session_state + st.secrets[passwords]. Salt okuma.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import urllib.error
@@ -325,6 +326,15 @@ def _apply_secrets() -> None:
 
 
 def _passwords() -> dict[str, str]:
+    """Giriş şifreleri. Fly'da PUSULA_PASSWORDS (JSON), yerelde st.secrets."""
+    raw_env = os.environ.get("PUSULA_PASSWORDS")
+    if raw_env and raw_env.strip() and raw_env.strip() != "...":
+        try:
+            parsed = json.loads(raw_env)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict) and parsed:
+            return {str(k): str(v) for k, v in parsed.items()}
     try:
         raw = st.secrets.get("passwords")
     except Exception:
