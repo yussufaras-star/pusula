@@ -51,11 +51,11 @@ from pusula.panel_data import (
     CRM_SN_PER_ULASILAMAYAN,
     DEFAULT_ARAMA_PER_LEAD,
     DEFAULT_TOPLANTI_GUN,
+    DEFAULT_WP_GUN,
     FUNNEL_DROPPED_STATUS,
-    MESAI_SAT_SAAT,
-    MESAI_WD_SAAT,
     OLU_ZAMAN_SN,
     TOPLANTI_DK,
+    WP_DK_PER_MESAJ,
     DateWindow,
     all_data_window,
     arrow,
@@ -185,13 +185,14 @@ HELP_ISYUKU = (
 )
 HELP_DOLULUK = (
     "Gün doluluk oranı. Payda mesai süresi (hafta içi 09:00-18:00 "
-    "eksi 1 saat mola = 8 saat; cumartesi 09:00-15:00 eksi 1 saat "
-    "mola = 5 saat; pazar yok). Pay ölçülen arama süresi "
-    "(call_status=connected, duration_sec) ve katılınan toplantı "
-    "süresi artı varsayılan CRM (ulaşılamayan 30 sn, ulaşılan "
-    "1.5 dk) ve ölü zaman. WhatsApp bu hesaba dahil değil. "
-    "Ulaşılan görüşme süresi arama satırında sayılır, ikinci "
-    "kez eklenmez."
+    "eksi 1 saat 15 dakika mola = 7 saat 45 dakika; cumartesi "
+    "09:00-15:00 eksi 1 saat 15 dakika mola = 4 saat 45 dakika; "
+    "pazar yok). Pay ölçülen arama süresi (call_status=connected, "
+    "duration_sec) ve katılınan toplantı süresi artı varsayılan "
+    "CRM (ulaşılamayan 30 sn, ulaşılan 1.5 dk), ölü zaman ve "
+    "giden WhatsApp (1 dk). Ulaşılan görüşme süresi arama "
+    "satırında sayılır, ikinci kez eklenmez. WhatsApp, Zoho "
+    "konuşmasının son giden mesaj zamanıdır."
 )
 HELP_LEAD = "Temsilciye atanan yeni lead sayisi."
 HELP_HUNI = (
@@ -420,9 +421,12 @@ def _reach_break(
 
 @st.cache_data(ttl=CACHE_TTL)
 def _board(
-    rep_id: str | None, arama_per_lead: float, toplanti_gun: float
+    rep_id: str | None,
+    arama_per_lead: float,
+    toplanti_gun: float,
+    wp_gun: float = DEFAULT_WP_GUN,
 ) -> dict[str, Any]:
-    return workload_board(rep_id, arama_per_lead, toplanti_gun)
+    return workload_board(rep_id, arama_per_lead, toplanti_gun, wp_gun)
 
 
 @st.cache_data(ttl=CACHE_TTL)
@@ -1428,7 +1432,7 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
     _show_reach_break(_reach_break(start, end, None, True), named=True)
 
     _heading("Günlük iş yükü (kişi başı)", HELP_ISYUKU, default_window())
-    p1, p2 = st.columns(2)
+    p1, p2, p3 = st.columns(3)
     arama_per_lead = p1.number_input(
         "lead başına arama (plan)",
         min_value=0.5,
@@ -1443,7 +1447,16 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
         value=float(DEFAULT_TOPLANTI_GUN),
         step=0.5,
     )
-    board = _board(rep_id, float(arama_per_lead), float(toplanti_gun))
+    wp_gun = p3.number_input(
+        "günde giden WhatsApp (plan)",
+        min_value=0.0,
+        max_value=200.0,
+        value=float(DEFAULT_WP_GUN),
+        step=1.0,
+    )
+    board = _board(
+        rep_id, float(arama_per_lead), float(toplanti_gun), float(wp_gun)
+    )
     bframe = _df(board["rows"]).rename(
         columns={
             "planlanan": "PLANLANAN",
@@ -1484,9 +1497,11 @@ def render_yonetici(window: DateWindow, block_day: date) -> None:
         f"CRM ulaşılamayan {int(CRM_SN_PER_ULASILAMAYAN)} sn · "
         f"CRM ulaşılan {CRM_DK_PER_GORUSME} dk/görüşme · "
         f"ölü zaman {fmt_duration(OLU_ZAMAN_SN)}/arama · "
+        f"WhatsApp {WP_DK_PER_MESAJ:g} dk/mesaj · "
         f"{int(board.get('workdays') or 0)} iş günü · "
-        f"mesai hafta içi {MESAI_WD_SAAT:.0f} saat · "
-        f"cumartesi {MESAI_SAT_SAAT:.0f} saat"
+        f"mola 1 sa 15 dk · "
+        f"hafta içi payda 7 sa 45 dk · "
+        f"cumartesi payda 4 sa 45 dk"
     )
 
     _heading("Görüşme süresi", HELP_SURE, window)

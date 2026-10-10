@@ -92,15 +92,20 @@ TOPLANTI_DK = 30.0
 CRM_DK_PER_GORUSME = 1.5
 CRM_SN_PER_ULASILAMAYAN = 30.0
 OLU_ZAMAN_SN = 20.0
+# Zoho süre vermez; bir giden WhatsApp teması için varsayılan.
+WP_DK_PER_MESAJ = 1.0
 # Saatlik tablo penceresi (mola düşülmez). Doluluk paydası MESAI_* .
 GUN_SAAT = 9.0
 SAT_SAAT = 6.0
-MESAI_WD_SAAT = 8.0
-MESAI_SAT_SAAT = 5.0
+# Günde 1 saat 15 dakika. Hafta içi 09:00-18:00, cumartesi 09:00-15:00.
+MOLA_SAAT = 1.25
+MESAI_WD_SAAT = GUN_SAAT - MOLA_SAAT
+MESAI_SAT_SAAT = SAT_SAAT - MOLA_SAAT
 # Bookings ingest: meta.duration (ör. '30 mins'). Probe panel_check.
 MEET_DURATION_KEY = "duration"
 DEFAULT_ARAMA_PER_LEAD = 3.0
 DEFAULT_TOPLANTI_GUN = 6.0
+DEFAULT_WP_GUN = 0.0
 # Eski ad: panel import kırılmasın.
 CRM_DK_PER_ARAMA = CRM_DK_PER_GORUSME
 TOPLANTI_DK_VARSAYILAN = TOPLANTI_DK
@@ -1430,8 +1435,9 @@ def occupancy_pay_dk(
     unreached: float,
     reached: float,
     arama: float,
+    whatsapp: float = 0.0,
 ) -> float:
-    """Doluluk payı (dk): ölçülen arama+toplantı + varsayılan CRM ve ölü zaman.
+    """Doluluk payı (dk): ölçülen arama+toplantı + varsayılan CRM, ölü zaman, WhatsApp.
 
     Arama süresi tek kalem; ulaşılan görüşme ayrıca eklenmez.
     """
@@ -1441,11 +1447,12 @@ def occupancy_pay_dk(
         + float(unreached) * (CRM_SN_PER_ULASILAMAYAN / 60.0)
         + float(reached) * CRM_DK_PER_GORUSME
         + float(arama) * (OLU_ZAMAN_SN / 60.0)
+        + float(whatsapp) * WP_DK_PER_MESAJ
     )
 
 
 def mesai_avail_dk(n_wd: int, n_sat: int, n_reps: int = 1) -> float:
-    """Mesai paydası (dk). Hafta içi 8 saat, cumartesi 5 saat, pazar yok."""
+    """Mesai paydası (dk). Hafta içi ve cumartesi, 1 saat 15 dk mola düşülmüş."""
     return (
         float(n_reps)
         * (float(n_wd) * MESAI_WD_SAAT + float(n_sat) * MESAI_SAT_SAAT)
@@ -1516,7 +1523,10 @@ def occupancy_breakdown(
           avg({_DUR_E}) FILTER (
             WHERE e.channel = 'call' AND e.direction = 'outbound'
               AND {_TEMAS_E}
-          )::float AS hit_sn
+          )::float AS hit_sn,
+          count(*) FILTER (
+            WHERE e.channel = 'whatsapp' AND e.direction = 'outbound'
+          )::int AS whatsapp
         FROM events e
         JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
         WHERE e.org_id = %s
@@ -1536,16 +1546,19 @@ def occupancy_breakdown(
     meet_dk_val = float(row[4] or 0) if row else 0.0
     miss_sn = float(row[5]) if row and row[5] is not None else 0.0
     hit_sn = float(row[6]) if row and row[6] is not None else 0.0
+    whatsapp = int(row[7] or 0) if row else 0
     unreached = max(arama - ulasilan, 0)
     crm_miss_dk = unreached * (CRM_SN_PER_ULASILAMAYAN / 60.0)
     crm_hit_dk = ulasilan * CRM_DK_PER_GORUSME
     olu_dk = arama * (OLU_ZAMAN_SN / 60.0)
+    wp_dk = whatsapp * WP_DK_PER_MESAJ
     pay_dk = occupancy_pay_dk(
         call_sec=call_sec,
         meet_dk=meet_dk_val,
         unreached=unreached,
         reached=ulasilan,
         arama=arama,
+        whatsapp=whatsapp,
     )
     payda_dk = mesai_avail_dk(n_wd, n_sat, n_reps)
     raw = _ratio(pay_dk, payda_dk)
@@ -1564,6 +1577,8 @@ def occupancy_breakdown(
         "crm_miss_dk": crm_miss_dk,
         "crm_hit_dk": crm_hit_dk,
         "olu_dk": olu_dk,
+        "whatsapp": whatsapp,
+        "wp_dk": wp_dk,
         "pay_dk": pay_dk,
         "payda_dk": payda_dk,
         "doluluk_raw": raw,
@@ -1701,6 +1716,7 @@ def workload_board(
     rep_id: str | None,
     arama_per_lead: float,
     toplanti_gun: float,
+    wp_gun: float = DEFAULT_WP_GUN,
 ) -> dict[str, Any]:
     """Kişi başı günlük PLANLANAN / GERÇEKLEŞEN + doluluk."""
     org_id = get_org_id()
@@ -1780,6 +1796,7 @@ def workload_board(
         "crm_miss": unreached_t / scale,
         "crm_hit": ulasilan_t / scale,
         "olu": arama_t / scale,
+        "whatsapp": occ["whatsapp"] / scale,
     }
     ulasma = _ratio(ulasilan_t, arama_t)
     randevu_orani = _ratio(randevu_t, ulasilan_t)
@@ -1800,6 +1817,7 @@ def workload_board(
         "crm_miss": unreached_plan,
         "crm_hit": ulasilan_plan,
         "olu": arama_plan,
+        "whatsapp": float(wp_gun),
     }
     plan_dk = _minutes_for(
         arama=plan["arama"],
@@ -1811,6 +1829,7 @@ def workload_board(
     plan_dk["crm_miss"] = unreached_plan * (CRM_SN_PER_ULASILAMAYAN / 60.0)
     plan_dk["crm_hit"] = ulasilan_plan * CRM_DK_PER_GORUSME
     plan_dk["olu"] = arama_plan * (OLU_ZAMAN_SN / 60.0)
+    plan_dk["whatsapp"] = float(wp_gun) * WP_DK_PER_MESAJ
     # Plan arama satırındaki ölü zaman ayrı satıra taşındı; çift yazılmasın.
     plan_dk["arama"] = (
         max(plan["arama"] - plan["ulasilan"], 0.0) * miss_sn
@@ -1828,6 +1847,7 @@ def workload_board(
         "crm_miss": occ["crm_miss_dk"] / occ_scale,
         "crm_hit": occ["crm_hit_dk"] / occ_scale,
         "olu": occ["olu_dk"] / occ_scale,
+        "whatsapp": occ["wp_dk"] / occ_scale,
     }
     labels = [
         ("lead", "gelen lead", "—"),
@@ -1837,6 +1857,7 @@ def workload_board(
         ("toplanti", "gerçekleşen toplantı", "ölçülen"),
         ("crm_miss", "CRM ulaşılamayan", "varsayım"),
         ("crm_hit", "CRM ulaşılan", "varsayım"),
+        ("whatsapp", "giden WhatsApp", "varsayım"),
         ("olu", "ölü zaman", "varsayım"),
     ]
     rows: list[dict[str, Any]] = []

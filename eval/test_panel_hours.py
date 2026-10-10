@@ -195,8 +195,8 @@ def test_occupancy_hours_constants() -> None:
 
     assert GUN_SAAT == 9.0
     assert SAT_SAAT == 6.0
-    assert MESAI_WD_SAAT == 8.0
-    assert MESAI_SAT_SAAT == 5.0
+    assert MESAI_WD_SAAT == 7.75
+    assert MESAI_SAT_SAAT == 4.75
 
 
 def test_occupancy_pay_no_double_count() -> None:
@@ -232,7 +232,7 @@ def test_occupancy_pay_no_double_count() -> None:
     # Ulaşılan görüşme süresi call_sec içinde; ikinci kez eklenmez.
     doubled = pay + call_sec / 60.0
     assert doubled != pay
-    assert mesai_avail_dk(1, 0, 1) == 8.0 * 60.0
-    assert mesai_avail_dk(0, 1, 1) == 5.0 * 60.0
+    assert mesai_avail_dk(1, 0, 1) == 7.75 * 60.0
+    assert mesai_avail_dk(0, 1, 1) == 4.75 * 60.0
     assert _cap_doluluk(80.0, detail="ok") == 80.0
     assert _cap_doluluk(140.0, detail="test asim") == 100.0
