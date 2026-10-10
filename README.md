@@ -97,28 +97,19 @@ Giriş noktası `app/panel.py`. Bağlantı `DATABASE_URL_POOLED` (yoksa
 `DATABASE_URL`). Sorgu önbelleği 15 dakika. Temsilci yalnız kendi
 sekmesini görür; yönetici (`yusuf.aras@rexven.com`) iki sekmeyi de.
 
-## Panel yayını (Fly)
+## Streamlit Cloud
 
-Panel `main` dalına her push'ta Fly'da yeniden kalkar. Adres sabittir.
-Streamlit Cloud kullanılmaz.
+Panelin temsilcilere açık adresi Cloud üzerinden yayınlanır. IP sabit
+olmadığı için Postgres bağlantısı havuz portu 6543 olmalıdır.
 
-Bağlantı hâlâ `DATABASE_URL_POOLED` (port 6543). Şifreler
-`PUSULA_PASSWORDS` içindedir; JSON, anahtar `reps.email`:
-
-```json
-{"yusuf.aras@rexven.com": "...", "ornek@rexven.com": "..."}
-```
-
-İlk kurulum, bir kez:
-
-```bash
-fly auth login
-fly apps create rexven-pusula
-fly secrets set DATABASE_URL_POOLED="..." PUSULA_PASSWORDS='{"yusuf.aras@rexven.com":"..."}'
-fly deploy
-```
-
-GitHub'da repo sırrı `FLY_API_TOKEN` (fly tokens create deploy).
-Bundan sonra `main`'e push yayını günceller. Şifre koda veya imaja
-yazılmaz.
+1. Bu repoyu GitHub'a bağla. Cloud uygulamasında **Main file path**
+   olarak `app/panel.py` seç; Python 3.11.
+2. Advanced settings → Secrets. `.streamlit/secrets.toml.example`
+   yapısını doldur:
+   - `DATABASE_URL_POOLED` — Supabase transaction pooler URL'si
+     (`...pooler.supabase.com:6543/...`). Doğrudan `5432` kullanma.
+   - `[passwords]` — her temsilcinin `reps.email` adresi ve şifresi.
+     Yönetici için `yusuf.aras@rexven.com` anahtarını da ekle.
+3. Deploy. Şifreleri koda veya GitHub'a yazma; yalnız Cloud Secrets
+   (veya git dışı yerel `secrets.toml`) içinde tut.
 
