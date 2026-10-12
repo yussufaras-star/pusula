@@ -230,3 +230,39 @@ export interface Portfolio {
   by_status: { rep_id: string; status: string; count: number }[];
   untouched: UntouchedLead[];
 }
+
+// pusula/sales_report.py build_sales_report.
+export interface ReportRow extends Kpis {
+  rep_id?: string;
+  name?: string;
+  atanan: number;
+  satis: number;
+  ciro: number;
+  dongu_gun: number | null;
+  toplanti_donus: number | null;
+  satis_orani: number | null;
+  ort_satis: number | null;
+  gunluk_arama: number;
+  gunluk_ciro: number;
+  work_days: number;
+}
+
+export interface CiroMonth {
+  ay: string;
+  ay_etiket: string;
+  satis: number;
+  ciro: number;
+  ortalama: number | null;
+  kisi_basi: number;
+}
+
+export interface SalesReport {
+  start: string;
+  end: string;
+  data_start: string;
+  work_days: number;
+  reps: ReportRow[];
+  team: ReportRow;
+  avg: ReportRow;
+  ciro_monthly: CiroMonth[];
+}

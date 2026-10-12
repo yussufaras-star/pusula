@@ -1695,3 +1695,200 @@ table.meet-list {
 .pf-list-head {
   color: var(--ink-2);
 }
+
+/* --- raporlar ------------------------------------------------------------ */
+
+.chip.on {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--page);
+}
+
+.funnel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.fn-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fn-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 12px;
+  font-size: 13px;
+}
+
+.fn-label {
+  font-weight: 600;
+}
+
+.fn-rate {
+  color: var(--ink-2);
+}
+
+.fn-diff {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.fn-diff.up {
+  color: var(--good-ink);
+}
+
+.fn-diff.down {
+  color: var(--critical-ink);
+}
+
+.fn-bar-row {
+  display: grid;
+  grid-template-columns: 1fr 64px;
+  align-items: center;
+  gap: 8px;
+}
+
+.fn-track {
+  height: 14px;
+}
+
+.fn-bar {
+  height: 100%;
+  border-radius: 0 4px 4px 0;
+}
+
+.fn-bar.fn-a {
+  background: var(--series-1);
+}
+
+.fn-bar.fn-b {
+  background: var(--series-2);
+}
+
+.fn-val {
+  text-align: right;
+  font-size: 13px;
+}
+
+.fn-ciro-vals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  font-size: 15px;
+}
+
+.fn-note {
+  margin: 14px 0 0;
+  font-size: 12px;
+}
+
+.fn-pickers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.fn-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fn-picker select {
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  max-width: 180px;
+}
+
+.ciro-bar {
+  fill: var(--series-1);
+}
+
+.ciro-bar.on {
+  fill: var(--heat-4);
+}
+
+.rank .sort-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.rank .sort-btn.on {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.rank td.sorted {
+  font-weight: 600;
+}
+
+.rank td.best {
+  color: var(--good-ink);
+}
+
+.rank .rank-no {
+  color: var(--muted);
+}
+
+.rank tfoot td {
+  border-top: 1px solid var(--axis);
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.ciro-share {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ciro-share-head {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.cs-row {
+  display: grid;
+  grid-template-columns: 16px minmax(90px, 130px) 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.cs-rank {
+  color: var(--muted);
+  text-align: right;
+}
+
+.cs-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cs-track {
+  height: 10px;
+}
+
+.cs-bar {
+  height: 100%;
+  border-radius: 0 4px 4px 0;
+  background: var(--series-1);
+}
+
+.cs-val {
+  white-space: nowrap;
+}

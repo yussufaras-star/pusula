@@ -10,6 +10,8 @@ import type {
   Me,
   NudgeItem,
   Portfolio,
+  ReportRow,
+  SalesReport,
   RepCard,
   RepStatus,
   Segment,
@@ -340,6 +342,63 @@ const STATUSES: [string, number][] = [
   ["Almadı-Fiyat Şoku/Bütçe Yetersizliği", 18],
 ];
 
+function reportRow(name: string, rep_id: string | undefined, perf: number, k = 1): ReportRow {
+  const lead_payda = Math.round(620 * perf * k);
+  const lead_pay = Math.round(lead_payda * (0.62 + perf * 0.06));
+  const randevu = Math.round(lead_pay * (0.12 + perf * 0.04));
+  const katildi = Math.round(randevu * 0.36);
+  const satis = Math.round(lead_pay * 0.05 * perf);
+  const ciro = satis * (30000 + perf * 4000);
+  const base = kpis(Math.round(900 * perf * k), 4000 * k, rng(3));
+  return {
+    ...base,
+    rep_id,
+    name,
+    lead_payda,
+    lead_pay,
+    ulasma_orani: lead_payda ? (100 * lead_pay) / lead_payda : null,
+    randevu,
+    katildi,
+    katilim_orani: 36,
+    satis,
+    ciro,
+    ort_satis: satis ? ciro / satis : null,
+    toplanti_donus: lead_pay ? (100 * randevu) / lead_pay : null,
+    satis_orani: lead_pay ? (100 * satis) / lead_pay : null,
+    atanan: Math.round(700 * perf * k),
+    dongu_gun: 6 + perf * 3,
+    gunluk_arama: Math.round((900 * perf * k) / 11),
+    gunluk_ciro: ciro / 11,
+    work_days: 11,
+    whatsapp: Math.round(80 * perf * k),
+  };
+}
+
+function mockReport(): SalesReport {
+  const reps = REPS.filter(([, , perf]) => perf > 0).map(([id, name, perf]) => reportRow(name, id, perf));
+  const team = reportRow("Ekip", undefined, reps.length * 0.9);
+  const avg = reportRow("Ortalama", undefined, 0.9);
+  const months = ["Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim"];
+  const ciro = [1375436, 1136657, 1652908, 1812934, 1509546, 3208348, 1064787];
+  return {
+    start: "2026-10-01",
+    end: "2026-10-13",
+    data_start: "2026-06-01",
+    work_days: 11,
+    reps,
+    team,
+    avg,
+    ciro_monthly: months.map((m, i) => ({
+      ay: `2026-${String(i + 4).padStart(2, "0")}-01`,
+      ay_etiket: `${m} 2026`,
+      satis: Math.round(ciro[i] / 33000),
+      ciro: ciro[i],
+      ortalama: 33000,
+      kisi_basi: ciro[i] / 5,
+    })),
+  };
+}
+
 function mockPortfolio(now: Date): Portfolio {
   const by_status = REPS.flatMap(([rep_id, , perf], i) =>
     STATUSES.map(([status, base]) => ({ rep_id, status, count: Math.max(0, Math.round(base * (0.6 + perf / 2) + i * 2 - 3)) })),
@@ -412,6 +471,7 @@ export function mockApi(method: string, url: string): unknown {
     LEAVES.has("r5") ? LEAVES.delete("r5") : LEAVES.add("r5");
     return { ok: true };
   }
+  if (path === "/api/sales-report") return mockReport();
   if (path === "/api/nudges") return { items: NUDGES, approval_required: true, ai: true };
   if (path.startsWith("/api/nudges/") && method === "POST") {
     const item = NUDGES.find((n) => String(n.id) === path.split("/").pop());

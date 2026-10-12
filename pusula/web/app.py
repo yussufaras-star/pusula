@@ -53,6 +53,7 @@ from pusula.web.auth import (
     passwords,
     require_cron,
 )
+from pusula.sales_report import REPORT_START, build_sales_report
 from pusula.web.reports import build_reports, selected_rep
 
 load_dotenv()
@@ -372,6 +373,32 @@ def reports(
         REPORT_TTL,
         lambda: jsonable_encoder(build_reports(user, chosen_rep, days, today)),
     )
+
+
+def scope_report(payload: dict[str, Any], user: AuthUser) -> dict[str, Any]:
+    """Temsilci yalnız kendi satırını, ekip toplamını ve ortalamayı görür."""
+    if user.role == "admin":
+        return payload
+    return {**payload, "reps": [r for r in payload["reps"] if r["rep_id"] == user.rep_id]}
+
+
+@app.get("/api/sales-report")
+def sales_report(
+    start: str, end: str, user: AuthUser = Depends(current_user)
+) -> Any:
+    require_database()
+    now = _now()
+    today = now.date()
+    first = max(parse_day(start, today), REPORT_START)
+    last = parse_day(end, today)
+    if last < first:
+        raise HTTPException(status_code=400, detail="Bitiş başlangıçtan önce olamaz")
+    payload = cache.cached(
+        ("sales-report", first.isoformat(), last.isoformat(), today.isoformat()),
+        REPORT_TTL if last >= today else HISTORY_TTL,
+        lambda: jsonable_encoder(build_sales_report(first, last, now)),
+    )
+    return scope_report(payload, user)
 
 
 @app.get("/api/profiles")

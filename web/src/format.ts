@@ -68,3 +68,17 @@ export function paceTone(ratio: number | null): Tone {
   if (ratio >= 0.8) return "warning";
   return "critical";
 }
+
+const tlFmt = new Intl.NumberFormat("tr-TR", { maximumFractionDigits: 0 });
+
+/** 1.225.478 TL — kuruş yok. */
+export const tl = (v: number | null | undefined): string =>
+  v === null || v === undefined ? "—" : `${tlFmt.format(Math.round(v))} TL`;
+
+/** Kısa: 1,2 Mn TL / 845 B TL. Eksen ve sıkışık hücreler için. */
+export function tlShort(v: number | null | undefined): string {
+  if (v === null || v === undefined) return "—";
+  if (Math.abs(v) >= 1_000_000) return `${nf.format(Math.round(v / 100_000) / 10)} Mn TL`;
+  if (Math.abs(v) >= 1_000) return `${nf0.format(Math.round(v / 1000))} B TL`;
+  return `${nf0.format(v)} TL`;
+}
