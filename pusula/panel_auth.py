@@ -1,4 +1,4 @@
-"""Panel girisi: sifre st.secrets'te, oturum session_state'te.
+"""Panel girisi: sifreler PUSULA_PASSWORDS_JSON'da, oturum imzali cerezde.
 
 Harici kimlik kutuphanesi yok. Yanlis sifre ile bilinmeyen
 kullanici ayni mesaji gorur; e-posta varligi sizdirilmaz.

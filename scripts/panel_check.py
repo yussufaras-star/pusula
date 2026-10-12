@@ -348,6 +348,31 @@ def main() -> int:
     _timed("ciro_rep_monthly", lambda: ciro_rep_monthly(rep_id))
     _timed("performance_profiles", lambda: load_profiles(window))
 
+    # Canlı kokpit: yeni tek sorgu eski tanımlarla aynı sayıyı vermeli.
+    from pusula.live import load_live
+    from pusula.metrics import Span, query_kpis, shift_bounds
+
+    live = _timed("load_live", lambda: load_live(day, now))
+    print(
+        f"  canli: {len(live['reps'])} temsilci, veri {live['data_as_of']}, "
+        f"ekip arama {live['team']['today']['arama']}"
+    )
+    bounds = shift_bounds(day)
+    if bounds is not None:
+        old = sum_hour_rows(today_hours(None, day))
+        new_rows = query_kpis(Span(*bounds), group="team", now=now)
+        new = new_rows[0] if new_rows else {}
+        for key in ("arama", "ulasilan", "randevu", "katildi", "sonuc_girilmedi"):
+            if int(old.get(key) or 0) != int(new.get(key) or 0):
+                print(f"hata: canli {key} eski={old.get(key)} yeni={new.get(key)}")
+                return 1
+        occ_old = occupancy_breakdown(None, day)["pay_dk"]
+        occ_new = live["team"]["today"]["dolu_dk"]
+        if abs(float(occ_old) - float(occ_new)) > 0.5:
+            print(f"hata: canli doluluk payi eski={occ_old:.1f} yeni={occ_new:.1f}")
+            return 1
+        print("  canli tanim esitligi: tamam")
+
     tem_keys = (
         "today_hours temsilci",
         "hour_history temsilci",

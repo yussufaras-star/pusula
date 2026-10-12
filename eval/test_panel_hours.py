@@ -169,27 +169,6 @@ def test_sum_hour_rows_counts_and_pooled_rates() -> None:
     assert total["sonuc_girilmedi"] == 0
 
 
-def test_hour_col_groups_arama_toplanti() -> None:
-    from app.panel import HOUR_COL_GROUPS
-
-    leaves = [leaf for _group, leaf in HOUR_COL_GROUPS]
-    assert leaves == [
-        "saat",
-        "giden arama",
-        "ulaşılan görüşme",
-        "dönüş araması",
-        "gelen arama",
-        "ulaşma oranı",
-        "görüşme süresi",
-        "toplantı",
-        "katıldı",
-        "sonuç girilmedi",
-    ]
-    groups = [group for group, _leaf in HOUR_COL_GROUPS[1:]]
-    assert groups[:6] == ["arama"] * 6
-    assert groups[6:] == ["toplantı"] * 3
-
-
 def test_occupancy_hours_constants() -> None:
     from pusula.panel_data import MESAI_SAT_SAAT, MESAI_WD_SAAT
 

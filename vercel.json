@@ -1,0 +1,9 @@
+{
+  "buildCommand": "npm --prefix web ci && npm --prefix web run build",
+  "functions": {
+    "vercel_app.py": {
+      "maxDuration": 60,
+      "includeFiles": "public/index.html"
+    }
+  }
+}
