@@ -12,7 +12,32 @@ ve proaktif uyarı.
   Yüzde ancak öncesi/sonrası ölçümle verilir.
 - Anomali tespiti deterministik koddur, LLM değildir. LLM sadece
   tespit edilmiş sapmayı cümleye döker.
-- Cliq'e onaysız mesaj gitmez (kalibrasyon dönemi boyunca).
+- CRM'e otomatik yazılmaz. Ölçülebilir, deterministik KPI eşik uyarıları
+  Cliq'e anında gidebilir. LLM/koçluk mesajları ilk 2 hafta yönetici
+  onayından geçer, kalibrasyon sonrası doğrudan gider (karar: 2026-10-12).
+
+## Canlı operasyon pusulası (2026-10)
+
+Streamlit bırakıldı; React + FastAPI, Vercel. KPI hesabı tek sorguda
+(`pusula/metrics.py`), tanımlar `pusula/temas.py`'de kalır.
+
+1. **Canlı kokpit** ✅ — gün içi KPI'lar ekip/temsilci/saat, aynı saatin
+   90 günlük temposu, doluluk, hareketsizlik, dikkat listesi.
+2. **Canlı veri** (kod ✅, canlıda doğrulanacak) — panelde "Verileri
+   güncelle" butonu ile anında ingest (otomatik tazelik saatlik; istenirse
+   5 dk zamanlama veya harici tetikleyici), WhatsApp ingest,
+   CRM işlem akışı (`crm_actions`: Notes/Tasks oluşturma, kayıt
+   `Modified_By`/`Modified_Time`) → "son CRM işlemi". WhatsApp adımı açık
+   (karar 2026-10-12; `PUSULA_WHATSAPP_INGEST=0` kapatır).
+3. **Karşılaştırma** — iki dönem veya iki temsilci yan yana; her aralık
+   aynı KPI vektörünü döndürür.
+4. **Hedefler + dürtme + AI yorum** — yönetici panelden günlük hedef girer
+   (boşsa geçmiş ortalama); tempo gerisinde kalınca Cliq'e anında uyarı;
+   sapmayı kod bulur, LLM rehberlik cümlesine döker (onay kuralı yukarıda).
+5. **Ekip Panosu** — ekip hedefi, kişisel rekor ve TV modu. (Arena adı
+   kullanılmaz: Arena ayrı üründür, bkz. "Arena köprüsü".) Küçük ekipte sıralama ters etki
+   yapabilir (aşağıdaki not); varsayılan ekip hedefi ve kişisel rekor
+   odaklı, sıralama yöneticinin açabileceği bir seçenek.
 
 ## Katmanlar
 
@@ -49,6 +74,7 @@ ve proaktif uyarı.
 - **Forecasting** — en az bir çeyrek kapanmış sonuç verisi birikmeden yapılmaz.
 - **CRM'e otomatik yazma** — yapılacaksa taslak + onay modeliyle. Faz 2.
 - **Oyunlaştırma / liderlik tablosu** — 4 kişilik ekipte ters etki yapar.
+  2026-10-12: Ekip Panosu istendi; bu risk tasarımda gözetilir (bkz. aşama 5).
 - **Kullanıcı konuşma tarzı taklidi** — iki register yeter: temsilci, direktör.
 
 ## Hata kodları
@@ -94,4 +120,6 @@ ve proaktif uyarı.
 ## KVKK notu
 Çalışan e-posta ve mesaj içeriğinin sistematik analizi yapılıyor.
 GmbH tarafı da kapsamda. Ekibe yazılı aydınlatma yapılmadan
-mail ve WhatsApp ingester'ları canlıya alınmaz.
+mail ve WhatsApp ingester'ları canlıya alınmaz. Canlı kokpitteki
+hareketsizlik ve son CRM işlemi takibi de çalışan izleme verisidir;
+aynı aydınlatma kapsamına alınmalıdır.

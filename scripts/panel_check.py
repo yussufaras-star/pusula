@@ -277,9 +277,6 @@ def main() -> int:
         team_reach_and_join,
         today_blocks,
         today_hours,
-        fmt_clock_span,
-        fmt_duration,
-        fmt_meet_minutes,
         parse_meet_duration_min,
         get_org_id,
         _sales_rep_sql,
@@ -384,6 +381,31 @@ def main() -> int:
     _timed("ciro_rep_monthly", lambda: ciro_rep_monthly(rep_id))
     _timed("performance_profiles", lambda: load_profiles(window))
 
+    # Canlı kokpit: yeni tek sorgu eski tanımlarla aynı sayıyı vermeli.
+    from pusula.live import load_live
+    from pusula.metrics import Span, query_kpis, shift_bounds
+
+    live = _timed("load_live", lambda: load_live(day, now))
+    print(
+        f"  canli: {len(live['reps'])} temsilci, veri {live['data_as_of']}, "
+        f"ekip arama {live['team']['today']['arama']}"
+    )
+    bounds = shift_bounds(day)
+    if bounds is not None:
+        old = sum_hour_rows(today_hours(None, day))
+        new_rows = query_kpis(Span(*bounds), group="team", now=now)
+        new = new_rows[0] if new_rows else {}
+        for key in ("arama", "ulasilan", "randevu", "katildi", "sonuc_girilmedi"):
+            if int(old.get(key) or 0) != int(new.get(key) or 0):
+                print(f"hata: canli {key} eski={old.get(key)} yeni={new.get(key)}")
+                return 1
+        occ_old = occupancy_breakdown(None, day)["pay_dk"]
+        occ_new = live["team"]["today"]["dolu_dk"]
+        if abs(float(occ_old) - float(occ_new)) > 0.5:
+            print(f"hata: canli doluluk payi eski={occ_old:.1f} yeni={occ_new:.1f}")
+            return 1
+        print("  canli tanim esitligi: tamam")
+
     tem_keys = (
         "today_hours temsilci",
         "hour_history temsilci",
@@ -482,134 +504,18 @@ def main() -> int:
             print(f"    {key}: satir_toplam={row_sum} gun_toplami={tot} {mark}")
         return total if ok else {}
 
-    def _leaf_val(series: object, leaf: str) -> str:
-        index = getattr(series, "index", ())
-        for col in index:
-            name = col[-1] if isinstance(col, tuple) else col
-            if name == leaf:
-                return str(series[col])  # type: ignore[index]
-        return ""
-
-    def _print_hour_display(label: str, rows: list[dict[str, Any]], probe_day: date) -> bool:
-        from app.panel import _hour_table_frame
-
-        frame = _hour_table_frame(rows, probe_day)
-        blob = frame.to_string()
-        print(f"saatlik tablo ekran ({label}):")
-        print(blob)
-        ok = True
-        if any(mark in blob for mark in ("↑", "↓", " · ekip ")):
-            print("  HATA: hucrede ok veya ekip ikincil deger var")
-            ok = False
-        else:
-            print("  hucrelerde ok ve ikincil deger yok")
-        ham = sum_hour_rows(rows)
-        last = frame.iloc[-1]
-        shown = {
-            "arama": _leaf_val(last, "giden arama"),
-            "ulasilan": _leaf_val(last, "ulaşılan görüşme"),
-            "donus": _leaf_val(last, "dönüş araması"),
-            "gelen": _leaf_val(last, "gelen arama"),
-            "randevu": _leaf_val(last, "toplantı"),
-            "katildi": _leaf_val(last, "katıldı"),
-            "katilmadi": _leaf_val(last, "katılmadı"),
-            "iptal_edildi": _leaf_val(last, "iptal edildi"),
-            "sonuc_girilmedi": _leaf_val(last, "sonuç girilmedi"),
-        }
-        print(
-            f"  gun toplami ham arama={ham['arama']} ulasilan={ham['ulasilan']} "
-            f"donus={ham['donus']} gelen={ham['gelen']} "
-            f"randevu={ham['randevu']} katildi={ham['katildi']} "
-            f"katilmadi={ham.get('katilmadi')} iptal={ham.get('iptal_edildi')} "
-            f"sonuc_girilmedi={ham['sonuc_girilmedi']}"
-        )
-        print(
-            "  gun toplami ekran "
-            f"arama={shown['arama']} ulasilan={shown['ulasilan']} "
-            f"donus={shown['donus']} gelen={shown['gelen']} "
-            f"randevu={shown['randevu']} katildi={shown['katildi']} "
-            f"katilmadi={shown['katilmadi']} iptal={shown['iptal_edildi']} "
-            f"sonuc_girilmedi={shown['sonuc_girilmedi']}"
-        )
-        kirilim = (
-            int(ham.get("katildi") or 0)
-            + int(ham.get("katilmadi") or 0)
-            + int(ham.get("iptal_edildi") or 0)
-            + int(ham.get("sonuc_girilmedi") or 0)
-        )
-        toplanti_n = int(ham.get("randevu") or 0)
-        split_mark = "ok" if kirilim == toplanti_n else "HATA"
-        print(
-            "  toplanti kirilim "
-            f"katildi={ham.get('katildi')} katilmadi={ham.get('katilmadi')} "
-            f"iptal={ham.get('iptal_edildi')} sonuc={ham.get('sonuc_girilmedi')} "
-            f"toplam={kirilim} toplanti={toplanti_n} {split_mark}"
-        )
-        if kirilim != toplanti_n:
-            print("  toplantı kırılımı toplantı sayısına eşit değil")
-        for key in (
-            "arama",
-            "ulasilan",
-            "donus",
-            "gelen",
-            "randevu",
-            "katildi",
-            "katilmadi",
-            "iptal_edildi",
-            "sonuc_girilmedi",
-        ):
-            left = str(ham.get(key) if ham.get(key) is not None else "—")
-            right = shown[key]
-            mark = "ok" if left == right else "HATA"
-            if left != right:
-                ok = False
-            print(f"    {key}: onceki_ham={left} sonra_ekran={right} {mark}")
-        gorusme = _leaf_val(last, "görüşme süresi")
-        toplanti_sure = _leaf_val(last, "toplantı süresi")
-        print(f"  gun toplami gorusme suresi={gorusme}")
-        print(f"  gun toplami toplanti suresi={toplanti_sure}")
-        if "toplantı süresi" not in blob:
-            print("  HATA: toplantı süresi sutunu yok")
-            ok = False
-        if " sn" in gorusme or gorusme.endswith("sn"):
-            print("  HATA: gun toplaminda gorusme suresi saniye iceriyor")
-            ok = False
-        if " sn" in toplanti_sure or toplanti_sure.endswith("sn"):
-            print("  HATA: gun toplaminda toplanti suresi saniye iceriyor")
-            ok = False
-        return ok
-
     def _print_sure_check(
         label: str, rows: list[dict[str, Any]], probe_day: date
     ) -> bool:
-        """Görüşme süresi ham saniye aynı kalsın. Toplantı süresi katıldı x duration."""
-        from app.panel import COL_HELP, _hour_table_frame
+        """Veri doğrulaması: görüşme süresi doğrudan SQL ile aynı; toplantı süresi çevrimi."""
         from pusula.temas import duration_sec, is_temas_sql
 
         ham = sum_hour_rows(rows)
         raw = ham.get("sure_toplam")
         raw_sn = float(raw or 0)
-        frame = _hour_table_frame(rows, probe_day)
-        last = frame.iloc[-1]
-        gorusme = _leaf_val(last, "görüşme süresi")
-        toplanti_sure = _leaf_val(last, "toplantı süresi")
-        onceki_bicim = (
-            "veri yetersiz" if raw is None else f"toplam {fmt_duration(raw_sn)}"
-        )
-        sonra_bicim = (
-            "veri yetersiz"
-            if raw is None
-            else f"toplam {fmt_clock_span(raw_sn, day_total=True)}"
-        )
         print(f"sure dogrulama ({label}):")
-        print(f"  gorusme suresi ham sn onceki=sonra={raw_sn}")
-        print(f"  onceki bicim={onceki_bicim}")
-        print(f"  sonra gun toplami ekran={gorusme}")
-        print(f"  beklenen sonra bicim={sonra_bicim}")
+        print(f"  gorusme suresi ham sn={raw_sn}")
         ok = True
-        if gorusme != sonra_bicim:
-            print("  HATA: gun toplami gorusme suresi bicimi")
-            ok = False
         wanted = list(display_hours(probe_day))
         hour = _hour_expr("e")
         day_ist = f"{istanbul_sql('e.occurred_at')}::date"
@@ -684,25 +590,12 @@ def main() -> int:
             f"sutun_dk={sutun_dk} {carpim_mark}"
         )
         print(f"  cevrim_hata kayit={hata} python={fail}")
-        print(f"  gun toplami toplanti suresi ekran={toplanti_sure}")
         if abs(sutun_dk - float(parsed_dk)) > 0.05 or hata != fail or katildi != attended:
             print(
                 "  HATA: toplantı süresi "
                 f"python_dk={parsed_dk} sutun_dk={sutun_dk} "
                 f"katildi_sql={attended} katildi_satir={katildi}"
             )
-            ok = False
-        elif toplanti_sure != fmt_meet_minutes(sutun_dk, day_total=True):
-            print("  HATA: toplantı süresi ekran bicimi")
-            ok = False
-        help_text = COL_HELP.get("toplantı süresi", "")
-        print(f"  balon={help_text}")
-        if (
-            "Planlanan süre" not in help_text
-            or "katılınan" not in help_text
-            or "Bookings" not in help_text
-        ):
-            print("  HATA: toplantı süresi balonu eksik")
             ok = False
         return ok
 
@@ -756,15 +649,6 @@ def main() -> int:
         return 1
     if tuple(int(r["saat"]) for r in fri_rows) != tuple(range(9, 18)):
         print("hata: cuma tablo saatleri 09-18 (9-17) degil")
-        return 1
-    display_ok = _print_hour_display(
-        f"ekip cuma {friday.isoformat()}", fri_rows, friday
-    )
-    display_ok = _print_hour_display(
-        f"ekip cumartesi {sat.isoformat()}", sat_rows, sat
-    ) and display_ok
-    if not display_ok:
-        print("hata: saatlik tablo ekraninda kiyas gostergesi duruyor")
         return 1
     sure_ok = _print_sure_check(
         f"ekip cuma {friday.isoformat()}", fri_rows, friday
@@ -832,8 +716,8 @@ def main() -> int:
     print(f"  GUN_SAAT={GUN_SAAT} SAT_SAAT={SAT_SAAT}")
     print(
         "doluluk mesai payda: "
-        f"hafta ici {MESAI_WD_SAAT:.0f} saat, "
-        f"cumartesi {MESAI_SAT_SAAT:.0f} saat, pazar yok"
+        f"hafta ici {MESAI_WD_SAAT:g} saat, "
+        f"cumartesi {MESAI_SAT_SAAT:g} saat, pazar yok (mola 1 sa 15 dk)"
     )
     print(f"  MESAI_WD_SAAT={MESAI_WD_SAAT} MESAI_SAT_SAAT={MESAI_SAT_SAAT}")
     print(
@@ -844,8 +728,8 @@ def main() -> int:
     if GUN_SAAT != 9.0 or SAT_SAAT != 6.0:
         print("hata: saatlik tablo saatleri 9/6 degil")
         return 1
-    if MESAI_WD_SAAT != 8.0 or MESAI_SAT_SAAT != 5.0:
-        print("hata: mesai payda 8/5 degil")
+    if MESAI_WD_SAAT != 7.75 or MESAI_SAT_SAAT != 4.75:
+        print("hata: mesai payda 7.75/4.75 degil")
         return 1
     if float(board.get("ulasilan_dk") or 0) != 0.0:
         print("hata: ulasilan gorusme suresi doluluk payina eklendi")
@@ -966,7 +850,7 @@ def main() -> int:
     print(
         f"  yeni pay={occ['pay_dk']:.2f} dk payda={occ['payda_dk']:.2f} dk "
         f"oran={occ['doluluk']} (olculen sure, payda mesai "
-        f"{MESAI_WD_SAAT:.0f}s)"
+        f"{MESAI_WD_SAAT:g}s)"
     )
 
     print("payda < 5 saatler:")

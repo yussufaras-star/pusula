@@ -13,6 +13,7 @@ from pusula.ingest.registry import all_ingesters, get, register
 # Somut ingester'lar import edilince @register çalışır.
 from pusula.ingest.bookings import BookingsIngester as _BookingsIngester  # noqa: F401
 from pusula.ingest.crm_calls import CrmCallsIngester as _CrmCallsIngester  # noqa: F401
+from pusula.ingest.crm_whatsapp import CrmWhatsappIngester as _CrmWhatsappIngester  # noqa: F401
 
 __all__ = [
     "Ingester",

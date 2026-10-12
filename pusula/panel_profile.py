@@ -524,8 +524,8 @@ def performance_profiles(
 
 PROFILE_WARNING = (
     "Bu bölüm karar önerisi değil, kanıt özetidir. Veri "
-    "penceresi kısadır ve ingest kesintileri yaşanmıştır. "
-    "Dürtü sistemi henüz gölge modda olduğu için hiçbir "
-    "temsilciye koçluk müdahalesi uygulanmamıştır; davranış "
-    "değişimi ölçümü için müdahale sonrası veri gereklidir."
+    "penceresi ve ingest sürekliliği sınırlı olabilir. Saatlik "
+    "KPI dürtmeleri ayrı, deterministik kurallara bağlıdır; bu "
+    "profil tek başına koçluk müdahalesi veya davranış değişimi "
+    "kanıtı sayılmaz."
 )

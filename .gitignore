@@ -15,6 +15,9 @@ transcripts/
 .DS_Store
 .idea/
 *.log
-.streamlit/secrets.toml
+node_modules/
+# web/ derlemesi; Vercel build sırasında üretilir.
+public/
 tmp_*
 tmp_*.py
+*.tsbuildinfo

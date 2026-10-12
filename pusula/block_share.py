@@ -62,7 +62,7 @@ def _webhook_url() -> str:
     return str(raw).strip()
 
 
-def _post_cliq(text: str, userids: str) -> None:
+def post_cliq(text: str, userids: str) -> None:
     payload = {"type": "message", "text": text, "userids": userids}
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
@@ -213,7 +213,7 @@ def _send(
     dest = shadow_dest if dest_is_shadow else live_userids
     if not dest:
         raise RuntimeError(f"Cliq alıcı yok: {intended}")
-    _post_cliq(text, dest)
+    post_cliq(text, dest)
     sent_at = _insert_send(
         rep_id=rep_id,
         day=day,

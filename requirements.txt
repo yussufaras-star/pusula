@@ -1,8 +1,7 @@
-# Pusula bağımlılıkları. anthropic ve fastapi ilgili modüller yazılınca eklenecek.
-# pandas ve altair streamlit 1.48 ile gelir; panel onları doğrudan import eder.
+# Vercel API + shared ingestion/analytics modules.
 psycopg[binary]==3.3.4
 psycopg-pool==3.3.1
 pydantic==2.13.4
 httpx==0.28.1
 python-dotenv==1.2.2
-streamlit==1.48.0
+fastapi==0.116.1
