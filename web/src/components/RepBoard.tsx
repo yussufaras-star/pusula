@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 
 import { ago, clock, duration, hourLabel, int, minutes, num, pace, paceTone, pct } from "../format";
-import type { RepCard, RepStatus } from "../types";
+import type { MeetingSummary, RepCard, RepStatus } from "../types";
 
 const STATUS_LABEL: Record<RepStatus, string> = {
   aktif: "Aktif",
@@ -84,9 +84,10 @@ interface Props {
   crmTracking: boolean;
   now: Date;
   onLeave?: (repId: string, on: boolean) => void;
+  meetings?: Record<string, MeetingSummary>;
 }
 
-export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now, onLeave }: Props) {
+export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now, onLeave, meetings }: Props) {
   const rows = useMemo(
     () =>
       [...reps].sort(
@@ -113,7 +114,7 @@ export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now, onLeave }:
             <th>Arama · tempo</th>
             <th className="num">Ulaşılan</th>
             <th className="num">Ulaşma</th>
-            <th className="num">Randevu</th>
+            <th className="num" title="Bugünkü toplantılar (iptal hariç); gelen bilgisi Toplantılar tablosuyla aynı">Toplantı</th>
             <th className="num">Ort. görüşme</th>
             <th>Doluluk</th>
             <th>Saatlik arama</th>
@@ -165,10 +166,14 @@ export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now, onLeave }:
                 <td className="num">{int(r.today.ulasilan)}</td>
                 <td className="num">{pct(r.today.ulasma_orani)}</td>
                 <td className="num">
-                  {int(r.today.randevu)}
-                  {r.today.katilim_payda ? (
-                    <div className="sub">{int(r.today.katildi)} katıldı</div>
-                  ) : null}
+                  {meetings?.[r.rep_id] ? (
+                    <>
+                      {int(meetings[r.rep_id].planlanan)}
+                      <div className="sub">{int(meetings[r.rep_id].gelen)} geldi</div>
+                    </>
+                  ) : (
+                    int(r.today.randevu)
+                  )}
                 </td>
                 <td className="num">{duration(r.today.sure_ort)}</td>
                 <td className="pace-cell" style={{ minWidth: 110 }}>

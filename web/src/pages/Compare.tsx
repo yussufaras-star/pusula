@@ -118,8 +118,8 @@ const SECTIONS: { title: string; metrics: Metric[] }[] = [
   {
     title: "Sonuç",
     metrics: [
-      { key: "randevu", label: "Randevu", kind: "count" },
-      { key: "katildi", label: "Katılan randevu", kind: "count" },
+      { key: "randevu", label: "Toplantı", kind: "count", hint: "Saati gelen, iptal hariç" },
+      { key: "katildi", label: "Katıldı (CRM sonucu)", kind: "count" },
       { key: "katilim_orani", label: "Katılım oranı", kind: "rate", sample: "katilim_payda" },
       {
         key: "sonuc_girilmedi",

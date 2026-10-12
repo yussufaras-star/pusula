@@ -215,7 +215,9 @@ def query_kpis(
           count(DISTINCT e.thread_id) FILTER (
             WHERE e.thread_id IS NOT NULL AND {is_lead_reached_sql('e')}
           )::int,
-          count(*) FILTER (WHERE {meet})::int,
+          count(*) FILTER (
+            WHERE {meet} AND coalesce(e.meta->>'randevu_durumu', '') <> 'iptal_edildi'
+          )::int,
           count(*) FILTER (
             WHERE {meet} AND e.meta->>'randevu_durumu' = 'katildi'
           )::int,
