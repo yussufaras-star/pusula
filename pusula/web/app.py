@@ -101,11 +101,16 @@ def parse_day(raw: str | None, today: date) -> date:
 
 
 def scope_live(payload: dict[str, Any], user: AuthUser) -> dict[str, Any]:
-    """Temsilci yalnız kendi kartını ve ekip toplamını görür."""
+    """Temsilci yalnız kendi kartını, toplantılarını ve ekip toplamını görür."""
     if user.role == "admin":
         return payload
     own = [card for card in payload["reps"] if card["rep_id"] == user.rep_id]
-    return {**payload, "reps": own}
+    meetings = payload.get("meetings") or {"items": [], "by_rep": {}}
+    own_meetings = {
+        "items": [m for m in meetings["items"] if m["rep_id"] == user.rep_id],
+        "by_rep": {k: v for k, v in meetings["by_rep"].items() if k == user.rep_id},
+    }
+    return {**payload, "reps": own, "meetings": own_meetings}
 
 
 # --- oturum ---------------------------------------------------------------

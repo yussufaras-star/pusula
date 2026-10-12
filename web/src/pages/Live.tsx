@@ -4,6 +4,7 @@ import { api, usePolling } from "../api";
 import { Attention } from "../components/Attention";
 import { HourChart } from "../components/HourChart";
 import { LostTime } from "../components/LostTime";
+import { MeetingBoard } from "../components/MeetingBoard";
 import { RepBoard, StatusPill } from "../components/RepBoard";
 import { StatTile } from "../components/StatTile";
 import { SyncButton } from "../components/SyncButton";
@@ -187,6 +188,18 @@ function LiveBody({ data, me, refresh }: { data: LivePayload; me: Me; refresh: (
           </div>
         </section>
       </div>
+
+      {data.meetings ? (
+        <section className="card">
+          <div className="card-head">
+            <h2>Toplantılar</h2>
+            <span className="hint">satıra tıkla: toplantı listesi</span>
+          </div>
+          <div className="card-body">
+            <MeetingBoard meetings={data.meetings} reps={data.reps} />
+          </div>
+        </section>
+      ) : null}
 
       <section className="card">
         <div className="card-head">

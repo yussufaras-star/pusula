@@ -1,5 +1,17 @@
 // Yalnız `npm run dev:mock`: veritabanı olmadan arayüz geliştirme. Üretime girmez.
-import type { CompareSide, Gap, HourRow, Kpis, LivePayload, Me, RepCard, RepStatus, Segment } from "../src/types";
+import type {
+  CompareSide,
+  Gap,
+  HourRow,
+  Kpis,
+  LivePayload,
+  MeetingItem,
+  Meetings,
+  Me,
+  RepCard,
+  RepStatus,
+  Segment,
+} from "../src/types";
 
 const REPS: [string, string, number][] = [
   ["r1", "Ayşe Yılmaz", 1.15],
@@ -173,6 +185,7 @@ function live(): LivePayload {
     hours: teamHours,
     reps: cards,
     idle_thresholds: { warn: 15, alert: 30 },
+    meetings: mockMeetings(cards.map((c) => c.rep_id), now),
   };
 }
 
@@ -222,6 +235,53 @@ function compareSide(q: URLSearchParams, p: "a" | "b"): CompareSide {
     series_group: oneDay ? "hour" : "day",
     series,
   };
+}
+
+function mockMeetings(repIds: string[], now: Date): Meetings {
+  const states: MeetingItem["state"][] = ["geldi", "gelmedi", "geldi", "bilinmiyor", "gelmedi", "suruyor", "bekleniyor"];
+  const names = ["Hakan Düz", "İlayda Ünaydın", "Seher Kaya", "Hilal Er", "Onur Tan", "Okan Tıraş", "Adem Kara"];
+  const items: MeetingItem[] = [];
+  repIds.slice(0, 4).forEach((rep, ri) => {
+    for (let i = 0; i < 4 + ri; i++) {
+      const state = states[(i + ri) % states.length];
+      const start = new Date(now.getTime() - (5 - i) * 50 * 60000);
+      items.push({
+        rep_id: rep,
+        start: start.toISOString(),
+        planned_min: 30,
+        customer: names[(i + ri * 2) % names.length],
+        state,
+        source: i % 3 ? "zoho_meeting" : "crm",
+        crm_status: state === "geldi" ? "katildi" : state === "gelmedi" && i % 2 ? "katilmadi" : "sonuc_girilmedi",
+        result_entered: state === "geldi" || (state === "gelmedi" && i % 2 === 1),
+        mismatch: ri === 1 && i === 1,
+        minutes: state === "geldi" ? 25 + i * 4 : state === "gelmedi" ? 10 : 0,
+        call_after: state === "gelmedi" && i % 2 ? new Date(start.getTime() + 18 * 60000).toISOString() : null,
+        wa_after: null,
+        followed_up: state === "gelmedi" && i % 2 === 1,
+      });
+    }
+  });
+  const by_rep: Meetings["by_rep"] = {};
+  for (const m of items) {
+    const s = (by_rep[m.rep_id] ??= {
+      planlanan: 0, gelen: 0, gelmeyen: 0, bilinmiyor: 0, bekleyen: 0, iptal: 0, sonuc_girilen: 0,
+      sonuc_girilmemis: 0, toplam_dk: 0, aranan: 0, aranmayan: 0, uyumsuz: 0, katilim_orani: null,
+    });
+    s.planlanan++;
+    s.toplam_dk += m.minutes;
+    if (m.state === "geldi") s.gelen++;
+    else if (m.state === "gelmedi") { s.gelmeyen++; m.followed_up ? s.aranan++ : s.aranmayan++; }
+    else if (m.state === "bilinmiyor") s.bilinmiyor++;
+    else s.bekleyen++;
+    if (!["bekleniyor", "suruyor"].includes(m.state)) m.result_entered ? s.sonuc_girilen++ : s.sonuc_girilmemis++;
+    if (m.mismatch) s.uyumsuz++;
+  }
+  for (const s of Object.values(by_rep)) {
+    const d = s.gelen + s.gelmeyen;
+    s.katilim_orani = d ? Math.round((1000 * s.gelen) / d) / 10 : null;
+  }
+  return { items, by_rep };
 }
 
 const LEAVES = new Set<string>(["r5"]);

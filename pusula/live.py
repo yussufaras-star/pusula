@@ -25,6 +25,7 @@ from pusula.metrics import (
     shift_bounds,
 )
 from pusula.leaves import load_leaves
+from pusula.meetings import meetings_payload
 from pusula.occupancy import (
     DayTimeline,
     aggregate,
@@ -306,7 +307,7 @@ def load_live(
     leaves = load_leaves(span)
     timelines = timelines_for(span, cutoff, rep_ids=rep_ids, leaves=leaves)
     occ = aggregate(timelines, "rep_hour", running_day=day if is_today else None)
-    return build_live(
+    payload = build_live(
         day=day,
         now=now,
         reps=reps,
@@ -318,3 +319,5 @@ def load_live(
         as_of=as_of,
         crm_tracking=crm_tracking_enabled(),
     )
+    payload["meetings"] = meetings_payload(day, now)
+    return payload
