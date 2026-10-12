@@ -2,8 +2,8 @@
 
 Canlı kokpit, karşılaştırma ekranı, ekip panosu ve dürtme sistemi aynı sorguyu
 okur. Temas, çevirme, dönüş ve ulaşma tanımları pusula.temas'tan gelir;
-doluluk varsayımları pusula.panel_data sabitlerinden. Burada yeni tanım
-yoktur, sadece tek sorguda toplanır.
+doluluk dakikaları (dolu / mola / kayıp) pusula.occupancy zaman
+çizelgesinden. Burada yeni tanım yoktur, sadece toplanır.
 
 Aralıklar yarım açıktır: [start, end). Tüm zamanlar Europe/Istanbul.
 """
@@ -17,18 +17,7 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from pusula.config import get_org_id
-from pusula.panel_data import (
-    CRM_DK_PER_GORUSME,
-    CRM_SN_PER_ULASILAMAYAN,
-    GUN_SAAT,
-    MESAI_SAT_SAAT,
-    MESAI_WD_SAAT,
-    OLU_ZAMAN_SN,
-    SAT_SAAT,
-    WP_DK_PER_MESAJ,
-    _meeting_duration_min_sql,
-    connect,
-)
+from pusula.panel_data import _meeting_duration_min_sql, connect
 from pusula.temas import (
     duration_sec,
     is_cevirme_sql,
@@ -46,14 +35,9 @@ RATE_MIN_N = 5
 
 Group = Literal["team", "rep", "hour", "day", "rep_hour", "rep_day"]
 
-# Mesai: hafta içi 09-18, cumartesi 09-15, pazar yok. Mola süresi sabit,
-# saati tanımsız; geçen mesaiye oransal dağıtılır.
+# Mesai: hafta içi 09-18, cumartesi 09-15, pazar yok. Mola pusula.occupancy'de.
 SHIFT_START_HOUR = 9
 _SHIFT_END_HOUR = {0: 18, 1: 18, 2: 18, 3: 18, 4: 18, 5: 15}
-_WORK_RATIO = {
-    "weekday": MESAI_WD_SAAT / GUN_SAAT,
-    "saturday": MESAI_SAT_SAAT / SAT_SAAT,
-}
 
 # Sayılabilir anahtarlar: toplanır. Oranlar toplamdan yeniden hesaplanır.
 COUNT_KEYS = (
@@ -72,6 +56,10 @@ COUNT_KEYS = (
     "sure_toplam",
     "call_sec",
     "meet_dk",
+    # pusula.occupancy zaman çizelgesi
+    "dolu_dk",
+    "mola_dk",
+    "kayip_dk",
 )
 
 
@@ -113,51 +101,18 @@ def in_shift(moment: datetime) -> bool:
     return bounds is not None and bounds[0] <= local < bounds[1]
 
 
-def available_minutes(span: Span, now: datetime) -> float:
-    """Aralıkta geçmiş mesainin mola düşülmüş dakikası (kişi başı).
-
-    Gün bitmişse tam mesai (hafta içi 7s45dk, cumartesi 4s45dk); gün
-    içindeyse geçen mesai × çalışma oranı. Gelecek sayılmaz.
-    """
-    clipped = span.clipped(now)
-    total = 0.0
-    day = clipped.start.astimezone(TZ).date()
-    last = (clipped.end - timedelta(microseconds=1)).astimezone(TZ).date()
-    while day <= last:
-        bounds = shift_bounds(day)
-        if bounds is not None:
-            lo = max(bounds[0], clipped.start)
-            hi = min(bounds[1], clipped.end)
-            if hi > lo:
-                kind = "saturday" if day.weekday() == 5 else "weekday"
-                total += (hi - lo).total_seconds() / 60.0 * _WORK_RATIO[kind]
-        day += timedelta(days=1)
-    return total
-
-
 def ratio(num: float | None, den: float | None) -> float | None:
     if not den:
         return None
     return round(100.0 * float(num or 0) / float(den), 1)
 
 
-def occupancy_minutes(row: dict[str, Any]) -> float:
-    """Doluluk payı (dk). panel_data.occupancy_pay_dk ile aynı varsayımlar."""
-    arama = float(row.get("arama") or 0)
-    temas = float(row.get("giden_temas") or 0)
-    unreached = max(arama - temas, 0.0)
-    return (
-        float(row.get("call_sec") or 0) / 60.0
-        + float(row.get("meet_dk") or 0)
-        + unreached * (CRM_SN_PER_ULASILAMAYAN / 60.0)
-        + temas * CRM_DK_PER_GORUSME
-        + arama * (OLU_ZAMAN_SN / 60.0)
-        + float(row.get("whatsapp") or 0) * WP_DK_PER_MESAJ
-    )
+def finish(row: dict[str, Any], *, n_reps: int = 1) -> dict[str, Any]:
+    """Ham sayımlardan oranları ve doluluğu türetir. Yeni dict döner.
 
-
-def finish(row: dict[str, Any], *, avail_min: float, n_reps: int = 1) -> dict[str, Any]:
-    """Ham sayımlardan oranları ve doluluğu türetir. Yeni dict döner."""
+    Doluluk = dolu / (dolu + kayıp); mola paydada yoktur. mesai_dk geçen
+    brüt mesai (dolu + mola + kayıp).
+    """
     out = dict(row)
     out["ulasma_orani"] = ratio(out.get("lead_pay"), out.get("lead_payda"))
     katilim_payda = int(out.get("katildi") or 0) + int(out.get("katilmadi") or 0)
@@ -166,12 +121,14 @@ def finish(row: dict[str, Any], *, avail_min: float, n_reps: int = 1) -> dict[st
     temas = int(out.get("giden_temas") or 0)
     if out.get("sure_ort") is None and temas and out.get("sure_toplam") is not None:
         out["sure_ort"] = round(float(out["sure_toplam"]) / temas, 1)
-    busy = occupancy_minutes(out)
-    payda = avail_min * max(n_reps, 1)
-    out["dolu_dk"] = round(busy, 1)
-    out["mesai_dk"] = round(payda, 1)
-    raw = ratio(busy, payda)
-    out["doluluk"] = min(raw, 100.0) if raw is not None else None
+    dolu = float(out.get("dolu_dk") or 0)
+    mola = float(out.get("mola_dk") or 0)
+    kayip = float(out.get("kayip_dk") or 0)
+    out["dolu_dk"] = round(dolu, 1)
+    out["mola_dk"] = round(mola, 1)
+    out["kayip_dk"] = round(kayip, 1)
+    out["mesai_dk"] = round(dolu + mola + kayip, 1)
+    out["doluluk"] = ratio(dolu, dolu + kayip)
     out["n_reps"] = n_reps
     return out
 
@@ -346,6 +303,7 @@ def last_activity(day: date, *, now: datetime | None = None) -> dict[str, dict[s
 
     Arama: başlangıç + süre (bitiş). Toplantı: başlangıç + süre, şimdiyi
     geçmez. WhatsApp: son giden mesaj. CRM: crm_actions tablosu (varsa).
+    in_meeting / in_call: şu an süren toplantı veya arama kaydı var mı.
     """
     now = now or datetime.now(TZ)
     span = Span.day(day)
@@ -370,6 +328,15 @@ def last_activity(day: date, *, now: datetime | None = None) -> dict[str, dict[s
             ),
           max(e.occurred_at) FILTER (
             WHERE e.channel = 'whatsapp' AND e.direction = 'outbound'
+          ),
+          bool_or(
+            e.channel = 'meeting'
+            AND coalesce(e.meta->>'randevu_durumu', '') NOT IN ('katilmadi', 'iptal_edildi')
+            AND e.occurred_at + make_interval(mins => ({meet_min})::int) > now()
+          ),
+          bool_or(
+            e.channel = 'call' AND {is_not_planned_sql('e')}
+            AND e.occurred_at + make_interval(secs => coalesce({dur}, 0)) > now()
           )
         FROM events e
         JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
@@ -384,13 +351,15 @@ def last_activity(day: date, *, now: datetime | None = None) -> dict[str, dict[s
         rows = conn.execute(sql, (org_id, span.start, span.end)).fetchall()
         crm = _last_crm_actions(conn, org_id, span)
     out: dict[str, dict[str, Any]] = {}
-    for rep_id, first_at, call_at, meet_at, wp_at in rows:
+    for rep_id, first_at, call_at, meet_at, wp_at, in_meeting, in_call in rows:
         out[str(rep_id)] = {
             "first_at": first_at,
             "last_call_at": call_at,
             "last_meeting_at": meet_at,
             "last_whatsapp_at": wp_at,
             "last_crm_at": None,
+            "in_meeting": bool(in_meeting),
+            "in_call": bool(in_call),
         }
     for rep_id, crm_at in crm.items():
         out.setdefault(

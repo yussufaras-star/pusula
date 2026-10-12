@@ -1,5 +1,5 @@
 // Yalnız `npm run dev:mock`: veritabanı olmadan arayüz geliştirme. Üretime girmez.
-import type { CompareSide, HourRow, Kpis, LivePayload, Me, RepCard, RepStatus } from "../src/types";
+import type { CompareSide, Gap, HourRow, Kpis, LivePayload, Me, RepCard, RepStatus, Segment } from "../src/types";
 
 const REPS: [string, string, number][] = [
   ["r1", "Ayşe Yılmaz", 1.15],
@@ -27,6 +27,8 @@ function kpis(arama: number, avail: number, r: () => number, nReps = 1): Kpis {
   const callSec = temas * sureOrt + (arama - temas) * 20;
   const busy = callSec / 60 + katildi * 30 + (arama - temas) * 0.5 + temas * 1.5 + arama / 3;
   const mesai = avail * nReps;
+  const mola = Math.min(75 * nReps, Math.max(mesai - busy, 0) * 0.5);
+  const kayip = Math.max(mesai - busy - mola, 0);
   return {
     arama,
     giden_temas: temas,
@@ -48,9 +50,11 @@ function kpis(arama: number, avail: number, r: () => number, nReps = 1): Kpis {
     sure_tipik: temas ? sureOrt * 0.85 : null,
     call_sec: callSec,
     meet_dk: katildi * 30,
-    dolu_dk: busy,
+    dolu_dk: Math.min(busy, mesai),
+    mola_dk: mola,
+    kayip_dk: kayip,
     mesai_dk: mesai,
-    doluluk: mesai ? Math.min(100, Math.round((busy / mesai) * 1000) / 10) : null,
+    doluluk: mesai ? Math.round((Math.min(busy, mesai) / (Math.min(busy, mesai) + kayip)) * 1000) / 10 : null,
     n_reps: nReps,
   };
 }
@@ -64,6 +68,36 @@ function sum(rows: Kpis[], avail: number, nReps: number): Kpis {
 }
 
 const iso = (d: Date) => d.toISOString();
+
+/** Örnek şerit: dolu bloklar, öğlen uzun boşluk (mola), aralarda kayıp. */
+function timeline(perf: number, at: (h: number, m: number) => Date, nowHour: number, minute: number, r: () => number) {
+  if (perf === 0) return { timeline: [], gaps: [] };
+  const end = nowHour * 60 + minute;
+  const segs: Segment[] = [];
+  let t = 9 * 60;
+  while (t < end) {
+    const busy = Math.round(20 + r() * 60 * perf);
+    const gap = t > 12 * 60 + 20 && t < 13 * 60 ? 60 : Math.round(r() * 25 * (1.4 - Math.min(perf, 1.2)));
+    const b = Math.min(t + busy, end);
+    segs.push({ start: iso(at(Math.floor(t / 60), t % 60)), end: iso(at(Math.floor(b / 60), b % 60)), kind: "dolu" });
+    const g = Math.min(b + gap, end);
+    if (g > b) {
+      segs.push({
+        start: iso(at(Math.floor(b / 60), b % 60)),
+        end: iso(at(Math.floor(g / 60), g % 60)),
+        kind: gap >= 40 ? "mola" : "kayip",
+      });
+    }
+    t = g;
+  }
+  const gaps: Gap[] = segs
+    .filter((s) => s.kind !== "dolu")
+    .map((s) => ({ ...s, minutes: (new Date(s.end).getTime() - new Date(s.start).getTime()) / 60000 }))
+    .filter((g) => g.minutes >= 5)
+    .sort((a, b) => b.minutes - a.minutes)
+    .slice(0, 5);
+  return { timeline: segs, gaps };
+}
 
 function live(): LivePayload {
   const now = new Date();
@@ -108,8 +142,9 @@ function live(): LivePayload {
       last_whatsapp_at: null,
       last_crm_at: perf === 0 || idx === 1 ? null : iso(new Date(now.getTime() - (idx + 2) * 7 * 60000)),
       idle_min: perf === 0 ? ((nowHour - 9) * 60 + minute) : idle,
-      status,
+      status: idx === 2 ? "toplantida" : status,
       hours: hourRows,
+      ...timeline(perf, at, nowHour, minute, r),
     };
   });
 

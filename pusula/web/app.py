@@ -237,13 +237,16 @@ def compare(
         compare_side(a_from, a_to, compare_subject(a_subject, user, names), today),
         compare_side(b_from, b_to, compare_subject(b_subject, user, names), today),
     )
-    own_cuts = [side_cut(side, now) for side in sides]
+    touches_today = any(side.last >= today for side in sides)
+    # Bugün ölçümü veri tazeliğinde biter; çekilmemiş dakikalar kayıp sayılmaz.
+    as_of = data_as_of() if touches_today else None
+    edge = min(now, as_of) if as_of else now
+    own_cuts = [side_cut(side, edge) for side in sides]
     cuts = (
-        [side_cut(sides[0], now, other=sides[1]), side_cut(sides[1], now, other=sides[0])]
+        [side_cut(sides[0], edge, other=sides[1]), side_cut(sides[1], edge, other=sides[0])]
         if align
         else own_cuts
     )
-    touches_today = any(side.last >= today for side in sides)
     group = series_group(*sides)
 
     def build() -> Any:

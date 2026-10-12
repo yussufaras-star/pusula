@@ -3,6 +3,7 @@ import { useState } from "react";
 import { usePolling } from "../api";
 import { Attention } from "../components/Attention";
 import { HourChart } from "../components/HourChart";
+import { LostTime } from "../components/LostTime";
 import { RepBoard, StatusPill } from "../components/RepBoard";
 import { StatTile } from "../components/StatTile";
 import { SyncButton } from "../components/SyncButton";
@@ -151,10 +152,10 @@ function LiveBody({ data, me }: { data: LivePayload; me: Me }) {
         <StatTile
           label="Doluluk"
           value={pct(k.doluluk)}
-          expected={`${minutes(k.dolu_dk)} dolu`}
+          expected={`${minutes(k.kayip_dk)} kayıp zaman`}
           tone={paceTone(pace(k.doluluk, x.doluluk))}
           badge={x.doluluk === null ? undefined : `ort. ${pct(x.doluluk)}`}
-          title={`Arama + toplantı + CRM + WhatsApp süresi (${minutes(k.dolu_dk)}) / geçen mesai (${minutes(k.mesai_dk)}, 1 sa 15 dk mola oransal düşülmüş)`}
+          title={`Dolu ${minutes(k.dolu_dk)} / (dolu + kayıp ${minutes(k.kayip_dk)}). Arama 1 dk önce ve sonrasıyla, toplantı süresi, WhatsApp mesaj başına 1 dk. Günün en uzun boşluklarından ${minutes(k.mola_dk)} mola düşüldü.`}
         />
       </div>
 
@@ -178,6 +179,16 @@ function LiveBody({ data, me }: { data: LivePayload; me: Me }) {
           </div>
         </section>
       </div>
+
+      <section className="card">
+        <div className="card-head">
+          <h2>Kayıp zaman</h2>
+          <span className="hint">mesai şeridi · en uzun boşluklardan 1 sa 15 dk mola düşülür</span>
+        </div>
+        <div className="card-body">
+          <LostTime reps={data.reps} day={data.day} now={data.is_today ? data.now : null} />
+        </div>
+      </section>
 
       {me.role === "admin" ? (
         <section className="card">

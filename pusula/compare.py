@@ -21,18 +21,19 @@ from pusula.metrics import (
     COUNT_KEYS,
     TZ,
     Span,
-    available_minutes,
     combine,
     finish,
     query_kpis,
     shift_bounds,
 )
+from pusula.occupancy import DayTimeline, aggregate, attach, timelines_for
 
 TEAM = "team"
 AVG = "avg"
 MAX_SPAN_DAYS = 366
 
 QueryFn = Callable[..., list[dict[str, Any]]]
+TimelinesFn = Callable[..., dict[tuple[str, date], DayTimeline]]
 
 
 @dataclass(frozen=True)
@@ -123,7 +124,6 @@ def build_side(
 ) -> dict[str, Any]:
     """Saf: sorgu çıktısından taraf yükü. Özne filtresi sorguda uygulanmıştır."""
     span = side.span
-    measured = Span(span.start, cut)
     is_avg = side.subject == AVG
     scale_n = n_reps if side.subject == TEAM else 1
     total = combine(total_rows)
@@ -131,7 +131,7 @@ def build_side(
         total["sure_tipik"] = total_rows[0].get("sure_tipik")
     if is_avg:
         total = per_rep(total, n_reps)
-    kpis = finish(total, avail_min=available_minutes(measured, cut), n_reps=scale_n)
+    kpis = finish(total, n_reps=scale_n)
 
     group = group or series_group(side)
     by_bucket = {str(row["bucket"]): row for row in series_rows}
@@ -141,11 +141,7 @@ def build_side(
         if is_avg:
             row = per_rep(row, n_reps)
         bucket_span = _bucket_span(key, group, side)
-        done = finish(
-            row,
-            avail_min=available_minutes(bucket_span, cut),
-            n_reps=scale_n,
-        )
+        done = finish(row, n_reps=scale_n)
         series.append(
             {
                 "bucket": int(key) if group == "hour" else key,
@@ -177,13 +173,22 @@ def load_side(
     group: str | None = None,
     aligned: bool = False,
     query: QueryFn = query_kpis,
+    timelines: TimelinesFn = timelines_for,
 ) -> dict[str, Any]:
     """Tarafı veritabanından yükler. rep_ids: aktif satış temsilcileri."""
     measured = Span(side.span.start, cut)
     subject_ids = None if side.subject in (TEAM, AVG) else [side.subject]
     group = group or series_group(side)
-    total_rows = query(measured, group="team", rep_ids=subject_ids, now=cut)
-    series_rows = query(measured, group=group, rep_ids=subject_ids, now=cut)
+    day_lines = timelines(measured, cut, rep_ids=subject_ids or list(rep_ids))
+    running = cut.astimezone(TZ).date() if cut < side.span.end else None
+    total_rows = attach(
+        query(measured, group="team", rep_ids=subject_ids, now=cut),
+        aggregate(day_lines, "team", running_day=running),
+    )
+    series_rows = attach(
+        query(measured, group=group, rep_ids=subject_ids, now=cut),
+        aggregate(day_lines, group, running_day=running),
+    )
     return build_side(
         side,
         cut,

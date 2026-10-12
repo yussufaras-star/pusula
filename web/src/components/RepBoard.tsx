@@ -5,6 +5,8 @@ import type { RepCard, RepStatus } from "../types";
 
 const STATUS_LABEL: Record<RepStatus, string> = {
   aktif: "Aktif",
+  toplantida: "Toplantıda",
+  aramada: "Aramada",
   bosta: "Boşta",
   hareketsiz: "Hareketsiz",
   baslamadi: "Başlamadı",
@@ -17,8 +19,10 @@ const STATUS_ORDER: Record<RepStatus, number> = {
   bosta: 1,
   baslamadi: 2,
   aktif: 3,
-  mesai_disi: 4,
-  gecmis: 5,
+  aramada: 4,
+  toplantida: 5,
+  mesai_disi: 6,
+  gecmis: 7,
 };
 
 export function StatusPill({ status }: { status: RepStatus }) {
@@ -162,10 +166,12 @@ export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now }: Props) {
                 <td className="pace-cell" style={{ minWidth: 110 }}>
                   <div className="row">
                     <b>{pct(r.today.doluluk)}</b>
-                    <span className="muted">{minutes(r.today.dolu_dk)}</span>
                   </div>
                   <div className="meter">
                     <div className="fill" style={{ width: `${Math.min(r.today.doluluk ?? 0, 100)}%` }} />
+                  </div>
+                  <div className="sub" title="Mola dışı kayıp zaman" style={{ marginTop: 4 }}>
+                    {minutes(r.today.kayip_dk)} kayıp
                   </div>
                 </td>
                 <td>
@@ -178,7 +184,7 @@ export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now }: Props) {
       </table>
       <p className="muted" style={{ fontSize: 12, margin: "10px 0 0" }}>
         Hareketsizlik: mesai içinde son arama, toplantı, WhatsApp veya CRM işleminden bu yana
-        geçen süre; veri tazeliğiyle sınırlıdır. Tempo çizgisi: son 90 günde aynı gün tipinde bu
+        geçen süre; süren toplantı hareketsizlik sayılmaz. Veri tazeliğiyle sınırlıdır. Tempo çizgisi: son 90 günde aynı gün tipinde bu
         saate kadar yapılan ortalama.
       </p>
     </div>

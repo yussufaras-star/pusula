@@ -21,12 +21,34 @@ export interface Kpis {
   call_sec: number;
   meet_dk: number;
   dolu_dk: number;
+  mola_dk: number;
+  kayip_dk: number;
   mesai_dk: number;
   doluluk: number | null;
   n_reps: number;
 }
 
-export type RepStatus = "aktif" | "bosta" | "hareketsiz" | "baslamadi" | "mesai_disi" | "gecmis";
+export type RepStatus =
+  | "aktif"
+  | "toplantida"
+  | "aramada"
+  | "bosta"
+  | "hareketsiz"
+  | "baslamadi"
+  | "mesai_disi"
+  | "gecmis";
+
+export type SegmentKind = "dolu" | "mola" | "kayip";
+
+export interface Segment {
+  start: string;
+  end: string;
+  kind: SegmentKind;
+}
+
+export interface Gap extends Segment {
+  minutes: number;
+}
 
 export interface RepCard {
   rep_id: string;
@@ -42,6 +64,8 @@ export interface RepCard {
   idle_min: number | null;
   status: RepStatus;
   hours: HourRow[];
+  timeline: Segment[];
+  gaps: Gap[];
 }
 
 export interface HourRow {

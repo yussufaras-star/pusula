@@ -7,13 +7,10 @@ import pytest
 from pusula.live import baseline_until, build_live, rep_status, scale
 from pusula.metrics import (
     TZ,
-    Span,
-    available_minutes,
     combine,
     finish,
     idle_minutes,
     in_shift,
-    occupancy_minutes,
 )
 
 MONDAY = date(2026, 10, 12)
@@ -25,60 +22,26 @@ def at(day: date, hour: int, minute: int = 0) -> datetime:
     return datetime(day.year, day.month, day.day, hour, minute, tzinfo=TZ)
 
 
-def test_full_weekday_has_seven_hours_forty_five_minutes() -> None:
-    assert available_minutes(Span.day(MONDAY), at(MONDAY, 23)) == pytest.approx(465)
-
-
-def test_full_saturday_has_four_hours_forty_five_minutes() -> None:
-    assert available_minutes(Span.day(SATURDAY), at(SATURDAY, 23)) == pytest.approx(285)
-
-
-def test_sunday_and_before_shift_have_no_minutes() -> None:
-    assert available_minutes(Span.day(SUNDAY), at(SUNDAY, 23)) == 0
-    assert available_minutes(Span.day(MONDAY), at(MONDAY, 8, 30)) == 0
-
-
-def test_mid_day_minutes_are_proportional_to_elapsed_shift() -> None:
-    # 09:00-13:30 = 270 dk mesai; 465/540 çalışma oranı.
-    assert available_minutes(Span.day(MONDAY), at(MONDAY, 13, 30)) == pytest.approx(
-        270 * 465 / 540
-    )
-
-
-def test_multi_day_span_sums_shift_days() -> None:
-    span = Span.days(SATURDAY, MONDAY)
-    assert available_minutes(span, at(MONDAY, 23)) == pytest.approx(285 + 465)
-
-
-def test_occupancy_matches_panel_assumptions() -> None:
-    row = {
-        "arama": 30,
-        "giden_temas": 10,
-        "call_sec": 1800,
-        "meet_dk": 30,
-        "whatsapp": 5,
-    }
-    # 30 + 30 + 20×0.5 + 10×1.5 + 30×(20/60) + 5×1
-    assert occupancy_minutes(row) == pytest.approx(30 + 30 + 10 + 15 + 10 + 5)
-
-
-def test_finish_derives_rates_and_caps_occupancy() -> None:
+def test_finish_derives_rates_and_timeline_occupancy() -> None:
     row = combine(
         [
             {"arama": 10, "giden_temas": 4, "lead_payda": 8, "lead_pay": 2,
-             "katildi": 3, "katilmadi": 1, "sure_toplam": 400.0, "call_sec": 99999},
+             "katildi": 3, "katilmadi": 1, "sure_toplam": 400.0,
+             "dolu_dk": 300, "mola_dk": 75, "kayip_dk": 100},
         ]
     )
-    out = finish(row, avail_min=100)
+    out = finish(row)
 
     assert out["ulasma_orani"] == 25.0
     assert out["katilim_orani"] == 75.0
     assert out["sure_ort"] == 100.0
-    assert out["doluluk"] == 100.0
+    # Mola paydada yok: 300 / (300 + 100).
+    assert out["doluluk"] == 75.0
+    assert out["mesai_dk"] == 475
 
 
-def test_finish_without_denominator_gives_none() -> None:
-    out = finish(combine([]), avail_min=0)
+def test_finish_without_timeline_gives_none() -> None:
+    out = finish(combine([]))
     assert out["doluluk"] is None
     assert out["ulasma_orani"] is None
 
@@ -110,6 +73,13 @@ def test_rep_status_thresholds() -> None:
     assert rep_status(now=at(MONDAY, 20), first_at=first, idle_min=None) == "mesai_disi"
 
 
+def test_ongoing_meeting_or_call_is_not_idle() -> None:
+    now = at(MONDAY, 11)
+    first = at(MONDAY, 9, 5)
+    assert rep_status(now=now, first_at=first, idle_min=45, in_meeting=True) == "toplantida"
+    assert rep_status(now=now, first_at=first, idle_min=45, in_call=True) == "aramada"
+
+
 def test_baseline_until_prorates_current_hour() -> None:
     hours = {9: {"arama": 10}, 10: {"arama": 10}, 11: {"arama": 10}}
     out = baseline_until(hours, at(MONDAY, 10, 30))
@@ -133,6 +103,8 @@ def test_build_live_assembles_team_and_rep_cards() -> None:
     history = {"r1": {9: {"arama": 10.0}, 10: {"arama": 10.0}}}
     activity = {
         "r1": {"first_at": at(MONDAY, 9, 2), "last_active_at": at(MONDAY, 10, 20)},
+        "r2": {"first_at": at(MONDAY, 9, 0), "last_active_at": at(MONDAY, 9, 30),
+               "in_meeting": True},
     }
     out = build_live(
         day=MONDAY,
@@ -149,6 +121,7 @@ def test_build_live_assembles_team_and_rep_cards() -> None:
     cards = {c["rep_id"]: c for c in out["reps"]}
     assert cards["r1"]["status"] == "aktif"
     assert cards["r1"]["idle_min"] == 10
-    assert cards["r2"]["status"] == "baslamadi"
+    assert cards["r2"]["status"] == "toplantida"
+    assert cards["r2"]["idle_min"] == 0
     assert [h["hour"] for h in out["hours"]] == list(range(9, 18))
     assert out["hours"][0]["done"] and not out["hours"][1]["done"]

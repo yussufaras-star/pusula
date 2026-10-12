@@ -111,7 +111,8 @@ const SECTIONS: { title: string; metrics: Metric[] }[] = [
       { key: "ulasma_orani", label: "Ulaşma oranı", kind: "rate", sample: "lead_payda", hint: "Benzersiz lead üzerinden" },
       { key: "sure_ort", label: "Ort. görüşme süresi", kind: "duration" },
       { key: "call_sec", label: "Toplam konuşma", kind: "minutes" },
-      { key: "doluluk", label: "Doluluk", kind: "rate", sample: "mesai_dk", hint: "Dolu süre / geçen mesai" },
+      { key: "doluluk", label: "Doluluk", kind: "rate", sample: "mesai_dk", hint: "Dolu / (dolu + kayıp); mola hariç" },
+      { key: "kayip_dk", label: "Kayıp zaman", kind: "minutes", lowerBetter: true, hint: "Mola dışı boşluk; az olan önde" },
     ],
   },
   {

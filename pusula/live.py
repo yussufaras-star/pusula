@@ -15,7 +15,6 @@ from pusula.metrics import (
     COUNT_KEYS,
     TZ,
     Span,
-    available_minutes,
     combine,
     crm_tracking_enabled,
     finish,
@@ -24,6 +23,14 @@ from pusula.metrics import (
     last_activity,
     query_kpis,
     shift_bounds,
+)
+from pusula.occupancy import (
+    DayTimeline,
+    aggregate,
+    attach,
+    gaps_report,
+    occupancy_rows,
+    timelines_for,
 )
 from pusula.panel_data import connect, load_reps
 
@@ -76,9 +83,16 @@ def rep_status(
     now: datetime,
     first_at: datetime | None,
     idle_min: float | None,
+    in_meeting: bool = False,
+    in_call: bool = False,
 ) -> str:
+    """Süren toplantı veya arama hareketsizlik sayılmaz."""
     if not in_shift(now):
         return "mesai_disi"
+    if in_meeting:
+        return "toplantida"
+    if in_call:
+        return "aramada"
     if first_at is None:
         return "baslamadi"
     if idle_min is None:
@@ -116,12 +130,12 @@ def data_as_of() -> datetime | None:
 
 def history_by_rep_hour(day: date, now: datetime) -> dict[str, dict[int, dict[str, Any]]]:
     """Temsilci → saat → geçmiş günlük ortalama (aynı gün tipi)."""
-    rows = query_kpis(
-        history_span(day),
-        group="rep_hour",
-        isodow=same_type_isodow(day),
-        now=now,
-    )
+    span = history_span(day)
+    isodow = same_type_isodow(day)
+    rows = query_kpis(span, group="rep_hour", isodow=isodow, now=now)
+    rep_ids = [rep.rep_id for rep in load_reps()]
+    occ = occupancy_rows(span, group="rep_hour", rep_ids=rep_ids, now=now, isodow=isodow)
+    rows = attach(rows, occ)
     factor = 1.0 / same_type_day_count(day)
     out: dict[str, dict[int, dict[str, Any]]] = defaultdict(dict)
     for row in rows:
@@ -139,20 +153,11 @@ def _hour_row(
     n_reps: int,
 ) -> dict[str, Any]:
     start = day_span.start.replace(hour=hour)
-    hour_span = Span(start, start + timedelta(hours=1))
     return {
         "hour": hour,
-        "done": hour_span.end <= cutoff,
-        "today": finish(
-            combine(today_parts),
-            avail_min=available_minutes(hour_span, cutoff),
-            n_reps=n_reps,
-        ),
-        "expected": finish(
-            combine(hist_parts),
-            avail_min=available_minutes(hour_span, hour_span.end),
-            n_reps=n_reps,
-        ),
+        "done": start + timedelta(hours=1) <= cutoff,
+        "today": finish(combine(today_parts), n_reps=n_reps),
+        "expected": finish(combine(hist_parts), n_reps=n_reps),
     }
 
 
@@ -166,10 +171,11 @@ def build_live(
     activity: dict[str, dict[str, Any]],
     as_of: datetime | None,
     crm_tracking: bool = False,
+    timelines: dict[str, DayTimeline] | None = None,
 ) -> dict[str, Any]:
-    """Kokpit yükü. today_rows: query_kpis(group='rep_hour') çıktısı."""
+    """Kokpit yükü. today_rows: query_kpis(group='rep_hour') + doluluk dakikaları."""
     span = Span.day(day)
-    avail = available_minutes(span, now)
+    timelines = timelines or {}
     is_today = now.astimezone(TZ).date() == day
     by_rep_hour: dict[str, dict[int, dict[str, Any]]] = defaultdict(dict)
     for row in today_rows:
@@ -183,14 +189,16 @@ def build_live(
     for rep_id, name in reps:
         today_hours = by_rep_hour.get(rep_id, {})
         hist_hours = history.get(rep_id, {})
-        today = finish(combine(today_hours.values()), avail_min=avail)
-        expected = finish(baseline_until(hist_hours, cutoff), avail_min=avail)
+        today = finish(combine(today_hours.values()))
+        expected = finish(baseline_until(hist_hours, cutoff))
         act = activity.get(rep_id, {})
+        busy_now = bool(act.get("in_meeting") or act.get("in_call"))
         idle = (
-            idle_minutes(act.get("last_active_at"), now=now, data_as_of=as_of)
+            (0.0 if busy_now else idle_minutes(act.get("last_active_at"), now=now, data_as_of=as_of))
             if is_today
             else None
         )
+        timeline = timelines.get(rep_id)
         rep_cards.append(
             {
                 "rep_id": rep_id,
@@ -205,10 +213,19 @@ def build_live(
                 "last_crm_at": act.get("last_crm_at"),
                 "idle_min": idle,
                 "status": rep_status(
-                    now=now, first_at=act.get("first_at"), idle_min=idle
+                    now=now,
+                    first_at=act.get("first_at"),
+                    idle_min=idle,
+                    in_meeting=bool(act.get("in_meeting")),
+                    in_call=bool(act.get("in_call")),
                 )
                 if is_today
                 else "gecmis",
+                "timeline": [
+                    {"start": seg.start, "end": seg.end, "kind": seg.kind}
+                    for seg in (timeline.segments if timeline else [])
+                ],
+                "gaps": gaps_report(timeline)[:5] if timeline else [],
                 "hours": [
                     _hour_row(
                         span,
@@ -226,14 +243,12 @@ def build_live(
     n = len(reps)
     team_today = finish(
         combine(row for rep in by_rep_hour.values() for row in rep.values()),
-        avail_min=avail,
         n_reps=n,
     )
     team_expected = finish(
         combine(
             baseline_until(history.get(rep_id, {}), cutoff) for rep_id, _ in reps
         ),
-        avail_min=avail,
         n_reps=n,
     )
     rep_ids = {rep_id for rep_id, _ in reps}
@@ -273,13 +288,22 @@ def load_live(
     now = now or datetime.now(TZ)
     day = day or now.astimezone(TZ).date()
     reps = [(rep.rep_id, rep.full_name) for rep in load_reps()]
+    span = Span.day(day)
+    is_today = now.astimezone(TZ).date() == day
+    as_of = data_as_of()
+    # Şerit veri tazeliğinde biter: henüz çekilmemiş dakikalar kayıp sayılmaz.
+    cutoff = min(now, as_of) if is_today and as_of else (now if is_today else span.end)
+    rep_ids = [rep_id for rep_id, _ in reps]
+    timelines = timelines_for(span, cutoff, rep_ids=rep_ids)
+    occ = aggregate(timelines, "rep_hour", running_day=day if is_today else None)
     return build_live(
         day=day,
         now=now,
         reps=reps,
-        today_rows=query_kpis(Span.day(day), group="rep_hour", now=now),
+        today_rows=attach(query_kpis(span, group="rep_hour", now=now), occ),
+        timelines={rep_id: t for (rep_id, _), t in timelines.items()},
         history=history if history is not None else history_by_rep_hour(day, now),
         activity=last_activity(day, now=now),
-        as_of=data_as_of(),
+        as_of=as_of,
         crm_tracking=crm_tracking_enabled(),
     )
