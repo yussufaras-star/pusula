@@ -37,6 +37,8 @@ PAGE = 100
 CUSTOMER_MIN_SEC = 60
 # Bitişinden bu kadar sonra çekilmiş rapor kesindir; yeniden çekilmez.
 FINAL_AFTER = timedelta(minutes=30)
+# Art arda bu kadar rapor alınamazsa (Zoho kesintisi) çalışma durur.
+MAX_FAIL_STREAK = 10
 _TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 _TOKEN_TTL = 55 * 60
 
@@ -203,7 +205,10 @@ def sync_meetings(
     started = time.monotonic()
     zsoid = _zsoid()
     sessions = _sessions_since(zsoid, now - lookback)
-    report = {"sessions": len(sessions), "fetched": 0, "written": 0, "final_skipped": 0}
+    report: dict[str, Any] = {
+        "sessions": len(sessions), "fetched": 0, "written": 0, "final_skipped": 0, "failed": 0,
+    }
+    streak = 0
     with connect() as conn:
         conn.execute(SCHEMA_SQL)
         emails = {
@@ -222,7 +227,18 @@ def sync_meetings(
             if budget_sec is not None and time.monotonic() - started > budget_sec:
                 report["skipped"] = "sure_doldu"
                 break
-            body = _get(f"{zsoid}/participant/{key}.json", {"index": 1, "count": 100})
+            try:
+                body = _get(f"{zsoid}/participant/{key}.json", {"index": 1, "count": 100})
+            except httpx.HTTPError as exc:
+                # Tek toplantının raporu bozuk olabilir (Zoho 500); atla, sonra yine denenir.
+                report["failed"] += 1
+                streak += 1
+                logger.warning("Zoho Meeting raporu alınamadı (%s): %s", key, exc)
+                if streak >= MAX_FAIL_STREAK:
+                    report["stopped"] = "ardisik_hata"
+                    break
+                continue
+            streak = 0
             report["fetched"] += 1
             row = summarize(session, body.get("participants") or [])
             if row["planned_start"] is None:
