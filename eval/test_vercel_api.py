@@ -122,3 +122,23 @@ def test_manual_ingest_is_admin_only(monkeypatch) -> None:
 
     rep = AuthUser(email="rep@example.com", role="rep", rep_id="rep-1", full_name="Rep")
     assert _client_as(rep, monkeypatch).post("/api/ingest").status_code == 403
+
+
+def test_only_admin_marks_leave(monkeypatch) -> None:
+    from pusula.panel_data import Rep
+    from pusula.web import app as web_app
+
+    calls: list = []
+    monkeypatch.setenv("DATABASE_URL_POOLED", "postgres://test")
+    monkeypatch.setattr(web_app, "load_reps", lambda: [Rep("r1", "Ayşe")])
+    monkeypatch.setattr(web_app, "set_leave", lambda *a, **k: calls.append((a, k)))
+    body = {"rep_id": "r1", "day": "2026-10-12", "on": True}
+
+    rep = AuthUser(email="ayse@x.com", role="rep", rep_id="r1", full_name="Ayşe")
+    assert _client_as(rep, monkeypatch).post("/api/leaves", json=body).status_code == 403
+
+    admin = AuthUser(email="yusuf.aras@rexven.com", role="admin", rep_id=None, full_name=None)
+    client = _client_as(admin, monkeypatch)
+    assert client.post("/api/leaves", json=body).status_code == 200
+    assert calls and calls[0][1]["by"] == "yusuf.aras@rexven.com"
+    assert client.post("/api/leaves", json={**body, "rep_id": "r9"}).status_code == 404

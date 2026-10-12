@@ -24,6 +24,7 @@ from pusula.metrics import (
     query_kpis,
     shift_bounds,
 )
+from pusula.leaves import load_leaves
 from pusula.occupancy import (
     DayTimeline,
     aggregate,
@@ -172,6 +173,7 @@ def build_live(
     as_of: datetime | None,
     crm_tracking: bool = False,
     timelines: dict[str, DayTimeline] | None = None,
+    on_leave: frozenset[str] | set[str] = frozenset(),
 ) -> dict[str, Any]:
     """Kokpit yükü. today_rows: query_kpis(group='rep_hour') + doluluk dakikaları."""
     span = Span.day(day)
@@ -190,12 +192,13 @@ def build_live(
         today_hours = by_rep_hour.get(rep_id, {})
         hist_hours = history.get(rep_id, {})
         today = finish(combine(today_hours.values()))
-        expected = finish(baseline_until(hist_hours, cutoff))
+        leave = rep_id in on_leave
+        expected = finish(combine([]) if leave else baseline_until(hist_hours, cutoff))
         act = activity.get(rep_id, {})
         busy_now = bool(act.get("in_meeting") or act.get("in_call"))
         idle = (
             (0.0 if busy_now else idle_minutes(act.get("last_active_at"), now=now, data_as_of=as_of))
-            if is_today
+            if is_today and not leave
             else None
         )
         timeline = timelines.get(rep_id)
@@ -212,7 +215,10 @@ def build_live(
                 "last_whatsapp_at": act.get("last_whatsapp_at"),
                 "last_crm_at": act.get("last_crm_at"),
                 "idle_min": idle,
-                "status": rep_status(
+                "on_leave": leave,
+                "status": "izinli"
+                if leave
+                else rep_status(
                     now=now,
                     first_at=act.get("first_at"),
                     idle_min=idle,
@@ -232,7 +238,7 @@ def build_live(
                         hour,
                         cutoff,
                         [today_hours[hour]] if hour in today_hours else [],
-                        [hist_hours[hour]] if hour in hist_hours else [],
+                        [hist_hours[hour]] if hour in hist_hours and not leave else [],
                         n_reps=1,
                     )
                     for hour in hours
@@ -240,25 +246,28 @@ def build_live(
             }
         )
 
-    n = len(reps)
+    # İzinli temsilci ekip beklentisine ve kişi sayısına girmez.
+    working = [(rep_id, name) for rep_id, name in reps if rep_id not in on_leave]
+    n = len(working)
     team_today = finish(
         combine(row for rep in by_rep_hour.values() for row in rep.values()),
         n_reps=n,
     )
     team_expected = finish(
         combine(
-            baseline_until(history.get(rep_id, {}), cutoff) for rep_id, _ in reps
+            baseline_until(history.get(rep_id, {}), cutoff) for rep_id, _ in working
         ),
         n_reps=n,
     )
     rep_ids = {rep_id for rep_id, _ in reps}
+    working_ids = {rep_id for rep_id, _ in working}
     team_hours = [
         _hour_row(
             span,
             hour,
             cutoff,
             [rows[hour] for rid, rows in by_rep_hour.items() if rid in rep_ids and hour in rows],
-            [rows[hour] for rid, rows in history.items() if rid in rep_ids and hour in rows],
+            [rows[hour] for rid, rows in history.items() if rid in working_ids and hour in rows],
             n_reps=n,
         )
         for hour in hours
@@ -294,7 +303,8 @@ def load_live(
     # Şerit veri tazeliğinde biter: henüz çekilmemiş dakikalar kayıp sayılmaz.
     cutoff = min(now, as_of) if is_today and as_of else (now if is_today else span.end)
     rep_ids = [rep_id for rep_id, _ in reps]
-    timelines = timelines_for(span, cutoff, rep_ids=rep_ids)
+    leaves = load_leaves(span)
+    timelines = timelines_for(span, cutoff, rep_ids=rep_ids, leaves=leaves)
     occ = aggregate(timelines, "rep_hour", running_day=day if is_today else None)
     return build_live(
         day=day,
@@ -302,6 +312,7 @@ def load_live(
         reps=reps,
         today_rows=attach(query_kpis(span, group="rep_hour", now=now), occ),
         timelines={rep_id: t for (rep_id, _), t in timelines.items()},
+        on_leave={rep_id for rep_id, leave_day in leaves if leave_day == day},
         history=history if history is not None else history_by_rep_hour(day, now),
         activity=last_activity(day, now=now),
         as_of=as_of,

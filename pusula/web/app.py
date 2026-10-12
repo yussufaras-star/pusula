@@ -26,6 +26,7 @@ from pusula.compare import (
 )
 from pusula.config import get_org_id
 from pusula.hourly_nudges import run_hourly_nudges
+from pusula.leaves import set_leave
 from pusula.live import data_as_of, history_by_rep_hour, load_live
 from pusula.live_ingest import run_live_ingest
 from pusula.metrics import TZ
@@ -67,6 +68,12 @@ app = FastAPI(title="Pusula", docs_url=None, redoc_url=None)
 class LoginBody(BaseModel):
     email: str
     password: str
+
+
+class LeaveBody(BaseModel):
+    rep_id: str
+    day: str
+    on: bool
 
 
 def _now() -> datetime:
@@ -265,6 +272,24 @@ def compare(
 
     key = ("compare", *sides, align, today.isoformat())
     return cache.cached(key, LIVE_TTL if touches_today else HISTORY_TTL, build)
+
+
+# --- izin -----------------------------------------------------------------------
+
+
+@app.post("/api/leaves")
+def mark_leave(body: LeaveBody, user: AuthUser = Depends(admin_user)) -> dict[str, Any]:
+    """Temsilci-gününü izinli işaretler / geri alır. İleri tarih de olabilir."""
+    require_database()
+    try:
+        day = date.fromisoformat(body.day)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Tarih YYYY-AA-GG olmalı") from exc
+    if body.rep_id not in {rep.rep_id for rep in load_reps()}:
+        raise HTTPException(status_code=404, detail="Temsilci bulunamadı")
+    set_leave(body.rep_id, day, body.on, by=user.email)
+    cache.clear()
+    return {"rep_id": body.rep_id, "day": day, "on": body.on}
 
 
 # --- raporlar (eski panel analizleri) ----------------------------------------

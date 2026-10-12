@@ -88,3 +88,37 @@ def test_gaps_report_lists_longest_first() -> None:
     gaps = gaps_report(day_timeline(busy, MONDAY, at(23)))
     assert gaps[0]["kind"] == "mola" and gaps[0]["minutes"] == 50
     assert {g["kind"] for g in gaps} == {"mola", "kayip"}
+
+
+def test_unentered_meeting_is_lost_time_not_break() -> None:
+    """Sonucu girilmemiş toplantı ayrı görünür, kayıba sayılır, moladan düşülmez."""
+    from pusula.occupancy import aggregate
+
+    busy = [(at(9), at(12)), (at(13, 30), at(18))]
+    pending = [(at(12), at(12, 30))]
+    t = day_timeline(busy, MONDAY, at(23), pending=pending)
+    assert t.total("girilmemis") == pytest.approx(30)
+    # Kalan 60 dk serbest boşluk tamamen mola olur (75 dk hakkın 60'ı).
+    assert t.total("mola") == pytest.approx(60)
+    assert t.total("kayip") == pytest.approx(0)
+    rows = aggregate({("r1", MONDAY): t}, "rep")
+    assert rows[0]["kayip_dk"] == pytest.approx(30)
+    assert rows[0]["girilmemis_dk"] == pytest.approx(30)
+
+
+def test_meeting_overlapping_busy_time_is_not_double_counted() -> None:
+    busy = [(at(9), at(18))]
+    t = day_timeline(busy, MONDAY, at(23), pending=[(at(10), at(10, 30))])
+    assert t.total("girilmemis") == 0
+    assert t.total("dolu") == pytest.approx(540)
+
+
+def test_leave_days_have_no_timeline() -> None:
+    from pusula.metrics import Span
+    from pusula.occupancy import timelines_for
+
+    worked = {("r1", MONDAY): [(at(9), at(18), "dolu")], ("r2", MONDAY): []}
+    out = timelines_for(
+        Span.day(MONDAY), at(23), rep_ids=["r1", "r2"], intervals=worked, leaves={("r2", MONDAY)}
+    )
+    assert list(out) == [("r1", MONDAY)]

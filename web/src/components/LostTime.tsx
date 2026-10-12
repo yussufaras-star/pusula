@@ -7,6 +7,7 @@ const KIND_LABEL: Record<SegmentKind, string> = {
   dolu: "Dolu",
   mola: "Mola",
   kayip: "Kayıp",
+  girilmemis: "Sonucu girilmemiş toplantı",
 };
 
 /** Mesai: hafta içi 09-18, cumartesi 09-15 (pusula.metrics ile aynı). */
@@ -43,10 +44,12 @@ export function LostTime({ reps, day, now }: Props) {
   const rows = useMemo(
     () =>
       [...reps]
-        .filter((r) => r.timeline.length)
+        .filter((r) => r.timeline.length && !r.on_leave)
         .sort((a, b) => b.today.kayip_dk - a.today.kayip_dk || a.name.localeCompare(b.name, "tr")),
     [reps],
   );
+
+  const onLeave = reps.filter((r) => r.on_leave).map((r) => r.name);
 
   if (!rows.length) return <div className="empty">Bu gün için mesai şeridi yok.</div>;
 
@@ -55,7 +58,7 @@ export function LostTime({ reps, day, now }: Props) {
   return (
     <div className="lost">
       <div className="legend" style={{ marginBottom: 10 }}>
-        {(["dolu", "mola", "kayip"] as SegmentKind[]).map((k) => (
+        {(["dolu", "mola", "kayip", "girilmemis"] as SegmentKind[]).map((k) => (
           <span key={k} className="key">
             <span className={`sw tl-${k}`} /> {KIND_LABEL[k]}
           </span>
@@ -68,7 +71,7 @@ export function LostTime({ reps, day, now }: Props) {
       </div>
       <div className="lost-grid">
         {rows.map((r) => {
-          const lost = r.gaps.filter((g) => g.kind === "kayip").slice(0, 3);
+          const lost = r.gaps.filter((g) => g.kind !== "mola").slice(0, 3);
           return (
             <div key={r.rep_id} className="lost-row">
               <div className="lost-name">
@@ -96,8 +99,9 @@ export function LostTime({ reps, day, now }: Props) {
                 <div className="lost-gaps">
                   {lost.length ? (
                     lost.map((g) => (
-                      <span key={g.start}>
+                      <span key={g.start} className={g.kind === "girilmemis" ? "gap-meet" : undefined}>
                         {clock(g.start)}–{clock(g.end)} <b>{minutes(g.minutes)}</b>
+                        {g.kind === "girilmemis" ? " · sonucu girilmemiş toplantı" : ""}
                       </span>
                     ))
                   ) : (
@@ -108,10 +112,18 @@ export function LostTime({ reps, day, now }: Props) {
               <div className="lost-sum">
                 <b>{minutes(r.today.kayip_dk)}</b>
                 <span className="sub">kayıp · {minutes(r.today.mola_dk)} mola</span>
+                {r.today.girilmemis_dk > 0 ? (
+                  <span className="sub">{minutes(r.today.girilmemis_dk)}'sı sonucu girilmemiş toplantı</span>
+                ) : null}
               </div>
             </div>
           );
         })}
+        {onLeave.length ? (
+          <div className="muted" style={{ fontSize: 12.5 }}>
+            İzinli (ölçüme girmez): {onLeave.join(", ")}
+          </div>
+        ) : null}
         <div className="lost-row axis" aria-hidden>
           <div />
           <div className="lost-ticks">

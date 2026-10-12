@@ -53,6 +53,7 @@ function kpis(arama: number, avail: number, r: () => number, nReps = 1): Kpis {
     dolu_dk: Math.min(busy, mesai),
     mola_dk: mola,
     kayip_dk: kayip,
+    girilmemis_dk: 0,
     mesai_dk: mesai,
     doluluk: mesai ? Math.round((Math.min(busy, mesai) / (Math.min(busy, mesai) + kayip)) * 1000) / 10 : null,
     n_reps: nReps,
@@ -85,7 +86,7 @@ function timeline(perf: number, at: (h: number, m: number) => Date, nowHour: num
       segs.push({
         start: iso(at(Math.floor(b / 60), b % 60)),
         end: iso(at(Math.floor(g / 60), g % 60)),
-        kind: gap >= 40 ? "mola" : "kayip",
+        kind: gap >= 40 ? "mola" : gap >= 18 ? "girilmemis" : "kayip",
       });
     }
     t = g;
@@ -142,7 +143,8 @@ function live(): LivePayload {
       last_whatsapp_at: null,
       last_crm_at: perf === 0 || idx === 1 ? null : iso(new Date(now.getTime() - (idx + 2) * 7 * 60000)),
       idle_min: perf === 0 ? ((nowHour - 9) * 60 + minute) : idle,
-      status: idx === 2 ? "toplantida" : status,
+      status: LEAVES.has(id) ? "izinli" : idx === 2 ? "toplantida" : status,
+      on_leave: LEAVES.has(id),
       hours: hourRows,
       ...timeline(perf, at, nowHour, minute, r),
     };
@@ -222,12 +224,18 @@ function compareSide(q: URLSearchParams, p: "a" | "b"): CompareSide {
   };
 }
 
+const LEAVES = new Set<string>(["r5"]);
+
 const ME: Me = { email: "yusuf.aras@rexven.com", role: "admin", rep_id: null, full_name: "Yusuf Aras" };
 
 export function mockApi(method: string, url: string): unknown {
   const path = url.split("?")[0];
   if (path === "/api/me") return ME;
   if (path === "/api/live") return live();
+  if (path === "/api/leaves" && method === "POST") {
+    LEAVES.has("r5") ? LEAVES.delete("r5") : LEAVES.add("r5");
+    return { ok: true };
+  }
   if (path === "/api/reps") return REPS.map(([rep_id, full_name]) => ({ rep_id, full_name }));
   if (path === "/api/compare") {
     const q = new URLSearchParams(url.split("?")[1] ?? "");

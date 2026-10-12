@@ -12,6 +12,7 @@ const STATUS_LABEL: Record<RepStatus, string> = {
   baslamadi: "Başlamadı",
   mesai_disi: "Mesai dışı",
   gecmis: "Geçmiş gün",
+  izinli: "İzinli",
 };
 
 const STATUS_ORDER: Record<RepStatus, number> = {
@@ -23,6 +24,7 @@ const STATUS_ORDER: Record<RepStatus, number> = {
   toplantida: 5,
   mesai_disi: 6,
   gecmis: 7,
+  izinli: 8,
 };
 
 export function StatusPill({ status }: { status: RepStatus }) {
@@ -81,9 +83,10 @@ interface Props {
   warnIdle: number;
   crmTracking: boolean;
   now: Date;
+  onLeave?: (repId: string, on: boolean) => void;
 }
 
-export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now }: Props) {
+export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now, onLeave }: Props) {
   const rows = useMemo(
     () =>
       [...reps].sort(
@@ -124,6 +127,11 @@ export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now }: Props) {
                 <td>
                   <div className="name">{r.name}</div>
                   <div className="sub">ilk faaliyet {clock(r.first_at)}</div>
+                  {onLeave ? (
+                    <button className="link-btn" onClick={() => onLeave(r.rep_id, !r.on_leave)}>
+                      {r.on_leave ? "izni geri al" : "izinli yap"}
+                    </button>
+                  ) : null}
                 </td>
                 <td>
                   <StatusPill status={r.status} />
@@ -184,7 +192,7 @@ export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now }: Props) {
       </table>
       <p className="muted" style={{ fontSize: 12, margin: "10px 0 0" }}>
         Hareketsizlik: mesai içinde son arama, toplantı, WhatsApp veya CRM işleminden bu yana
-        geçen süre; süren toplantı hareketsizlik sayılmaz. Veri tazeliğiyle sınırlıdır. Tempo çizgisi: son 90 günde aynı gün tipinde bu
+        geçen süre; süren toplantı hareketsizlik sayılmaz. İzinli gün doluluğa ve ekip beklentisine girmez. Veri tazeliğiyle sınırlıdır. Tempo çizgisi: son 90 günde aynı gün tipinde bu
         saate kadar yapılan ortalama.
       </p>
     </div>
