@@ -324,7 +324,10 @@ def _presence_sql(extra: str) -> str:
         SELECT
           ms.rep_id,
           ({joined} AT TIME ZONE 'Europe/Istanbul')::date,
-          {joined}, ms.presenter_leave, ms.customer_join, ms.customer_leave,
+          {joined}, ms.presenter_leave,
+          -- Sütunlar senkron ilk çalışınca eklenir; o ana kadar NULL döner.
+          (to_jsonb(ms)->>'customer_join')::timestamptz,
+          (to_jsonb(ms)->>'customer_leave')::timestamptz,
           ms.customer_sec, now()
         FROM meeting_sessions ms
         JOIN reps r ON r.org_id = ms.org_id AND r.rep_id = ms.rep_id
