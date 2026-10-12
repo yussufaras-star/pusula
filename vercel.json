@@ -1,9 +1,11 @@
 {
-  "buildCommand": "npm --prefix web ci && npm --prefix web run build",
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm --prefix web ci",
+  "buildCommand": "npm --prefix web run build",
+  "outputDirectory": "public",
+  "rewrites": [{ "source": "/api/(.*)", "destination": "/api/index" }],
   "functions": {
-    "vercel_app.py": {
-      "maxDuration": 60,
-      "includeFiles": "public/index.html"
-    }
+    "api/index.py": { "maxDuration": 60 }
   }
 }

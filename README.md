@@ -193,9 +193,10 @@ alıcılar yerine gölge alıcıya gönderilir. Gönderim kaydı
 ## Vercel deploy
 
 1. GitHub deposunu Vercel projesi olarak içe aktarın; kök dizin repo kökü,
-   framework Python/FastAPI olarak algılanmalıdır. `vercel.json` derlemede
-   `web/` arayüzünü `public/` altına üretir; Vercel `public/` dosyalarını
-   CDN'den, `/api/*` isteklerini FastAPI'den sunar.
+   framework ayarı "Other" kalır (`vercel.json` belirler). Derlemede `web/`
+   arayüzü `public/` altına üretilir ve CDN'den sunulur; `/api/*` istekleri
+   `api/index.py` Python fonksiyonuna (FastAPI) yönlenir. `vercel_app.py`
+   yalnız yerel `uvicorn` içindir.
 2. Vercel project settings → Environment Variables kısmına ekleyin:
    - `DATABASE_URL_POOLED`: Supabase transaction pooler bağlantısı (port
      `6543`); gerçek bağlantı dizesini yalnız Vercel secret olarak kaydedin.
