@@ -202,6 +202,69 @@ def guidance(facts: dict[str, Any]) -> str | None:
     )
 
 
+PORTFOLIO_LIST_MAX = 10
+
+
+def _day_month(value: datetime | None) -> str:
+    return value.astimezone(TZ).strftime("%d.%m") if value else "—"
+
+
+def format_portfolio(name: str, leads: list[dict[str, Any]], local: datetime) -> str:
+    """Günde bir kez: 24 saattir dokunulmamış yeni adaylar, en uzun bekleyen üstte."""
+    lines = [
+        f"🧭 Pusula · {local:%H:%M}",
+        f"{first_name(name)}, 24 saattir dokunulmamış {len(leads)} \"Yeni Müşteri Adayı\" "
+        "lead'in var. En uzun bekleyenler:",
+    ]
+    for lead in leads[:PORTFOLIO_LIST_MAX]:
+        touch = (
+            f"son temas {_day_month(lead['last_touch'])}"
+            if lead["last_touch"]
+            else f"hiç temas yok, atanma {_day_month(lead['assigned_at'])}"
+        )
+        lines.append(f"- {lead['name'] or 'İsimsiz lead'} ({touch})")
+    if len(leads) > PORTFOLIO_LIST_MAX:
+        lines.append(f"…ve {len(leads) - PORTFOLIO_LIST_MAX} lead daha (Pusula panelinde tam liste).")
+    lines.append("Görüştükten sonra CRM'de statüyü güncellemeyi unutma.")
+    return "\n".join(lines)
+
+
+def _portfolio_nudges(
+    conn: Any, payload: dict[str, Any], emails: dict[str, str], now: datetime
+) -> tuple[int, int]:
+    """Temsilci başına günde bir portföy mesajı. AI yok, onay gerekmez."""
+    untouched = (payload.get("portfolio") or {}).get("untouched") or []
+    if not untouched:
+        return 0, 0
+    done = _today_times(conn, now.date(), kind="portfoy")
+    conn.commit()
+    sent = failed = 0
+    for card in payload["reps"]:
+        rep_id = card["rep_id"]
+        leads = [lead for lead in untouched if lead["rep_id"] == rep_id]
+        if not leads or rep_id in done or rep_id not in emails:
+            continue
+        if card.get("status") in SKIP_STATUSES:
+            continue
+        body = format_portfolio(card["name"], leads, now)
+        row = conn.execute(
+            """
+            INSERT INTO nudge_queue (org_id, rep_id, rep_name, day, created_at, kind,
+                                     facts, body, status)
+            VALUES (%s, %s, %s, %s, %s, 'portfoy', %s, %s, 'gonderiliyor')
+            RETURNING id
+            """,
+            (get_org_id(), rep_id, card["name"], now.date(), now,
+             Json({"untouched": len(leads)}), body),
+        ).fetchone()
+        conn.commit()
+        ok = _send(conn, row[0], body, name=card["name"], email=emails[rep_id], now=now)
+        conn.commit()
+        sent += ok
+        failed += not ok
+    return sent, failed
+
+
 # --- kuyruk ------------------------------------------------------------------------
 
 
@@ -268,13 +331,13 @@ def _send(conn: Any, row_id: int, text: str, *, name: str, email: str, now: date
     return True
 
 
-def _today_times(conn: Any, day: date) -> dict[str, list[datetime]]:
+def _today_times(conn: Any, day: date, kind: str = "tempo") -> dict[str, list[datetime]]:
     rows = conn.execute(
         """
         SELECT rep_id, created_at FROM nudge_queue
-        WHERE org_id = %s AND day = %s AND status <> 'hata'
+        WHERE org_id = %s AND day = %s AND kind = %s AND status <> 'hata'
         """,
-        (get_org_id(), day),
+        (get_org_id(), day, kind),
     ).fetchall()
     out: dict[str, list[datetime]] = {}
     for rep_id, created_at in rows:
@@ -340,6 +403,9 @@ def run_pace_nudges(now: datetime | None = None, *, payload: dict[str, Any] | No
                        email=emails[card["rep_id"]], now=now)
             conn.commit()
             report["sent" if ok else "failed"] += 1
+        p_sent, p_failed = _portfolio_nudges(conn, payload, emails, now)
+        report["portfolio_sent"] = p_sent
+        report["failed"] += p_failed
         report["approval_required"] = needs_approval
         report["ai"] = llm.enabled()
     return report
@@ -359,7 +425,7 @@ def list_queue(day: date, now: datetime | None = None) -> dict[str, Any]:
         rows = conn.execute(
             """
             SELECT id, rep_id, rep_name, created_at, body, ai_text, final_text, status,
-                   decided_by, decided_at, sent_at, failure, shadow
+                   decided_by, decided_at, sent_at, failure, shadow, kind
             FROM nudge_queue WHERE org_id = %s AND day = %s
             ORDER BY created_at DESC
             """,
@@ -367,7 +433,7 @@ def list_queue(day: date, now: datetime | None = None) -> dict[str, Any]:
         ).fetchall()
         needs_approval = approval_required(conn, now)
     keys = ("id", "rep_id", "rep_name", "created_at", "body", "ai_text", "final_text", "status",
-            "decided_by", "decided_at", "sent_at", "failure", "shadow")
+            "decided_by", "decided_at", "sent_at", "failure", "shadow", "kind")
     items = []
     for row in rows:
         item = dict(zip(keys, row))

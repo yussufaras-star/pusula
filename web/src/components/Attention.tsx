@@ -57,6 +57,22 @@ export function attentionItems(data: LivePayload): Item[] {
       });
     }
   }
+  const portfolio = data.portfolio;
+  if (portfolio) {
+    for (const r of data.reps) {
+      if (r.on_leave) continue;
+      const n = portfolio.untouched.filter((lead) => lead.rep_id === r.rep_id).length;
+      if (!n) continue;
+      const never = portfolio.untouched.filter((lead) => lead.rep_id === r.rep_id && !lead.last_touch).length;
+      items.push({
+        level: "warning",
+        title: `${r.name}: ${int(n)} yeni aday ${portfolio.untouched_hours} saattir dokunulmamış`,
+        text: `${never ? `${int(never)} lead'e hiç temas yok` : "Hepsi daha önce aranmış"}${
+          n - never ? `; ${int(n - never)} lead aranmış ama statüsü "${portfolio.new_status}" kalmış` : ""
+        }. Liste: Portföy kartı.`,
+      });
+    }
+  }
   const missing = data.team.today.sonuc_girilmedi;
   if (missing > 0) {
     items.push({

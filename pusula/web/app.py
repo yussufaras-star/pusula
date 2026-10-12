@@ -118,7 +118,17 @@ def scope_live(payload: dict[str, Any], user: AuthUser) -> dict[str, Any]:
         "items": [m for m in meetings["items"] if m["rep_id"] == user.rep_id],
         "by_rep": {k: v for k, v in meetings["by_rep"].items() if k == user.rep_id},
     }
-    return {**payload, "reps": own, "meetings": own_meetings}
+    portfolio = payload.get("portfolio")
+    own_portfolio = (
+        {
+            **portfolio,
+            "by_status": [r for r in portfolio["by_status"] if r["rep_id"] == user.rep_id],
+            "untouched": [r for r in portfolio["untouched"] if r["rep_id"] == user.rep_id],
+        }
+        if portfolio
+        else None
+    )
+    return {**payload, "reps": own, "meetings": own_meetings, "portfolio": own_portfolio}
 
 
 # --- oturum ---------------------------------------------------------------

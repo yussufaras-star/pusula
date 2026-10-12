@@ -9,6 +9,7 @@ import type {
   Meetings,
   Me,
   NudgeItem,
+  Portfolio,
   RepCard,
   RepStatus,
   Segment,
@@ -225,6 +226,7 @@ function live(): LivePayload {
     reps: cards,
     idle_thresholds: { warn: 15, alert: 30 },
     meetings: mockMeetings(cards.map((c) => c.rep_id), now),
+    portfolio: mockPortfolio(now),
   };
 }
 
@@ -324,6 +326,42 @@ function mockMeetings(repIds: string[], now: Date): Meetings {
 }
 
 const LEAVES = new Set<string>(["r5"]);
+
+const STATUSES: [string, number][] = [
+  ["Yeni Müşteri Adayı", 12],
+  ["1.Arama-Ulaşılamadı", 80],
+  ["Düşünmek İstiyor", 60],
+  ["Nitelikli Değil-İlgisiz", 55],
+  ["Randevu", 40],
+  ["Aging", 35],
+  ["Müsait Olmadığını Belirtti", 30],
+  ["2.Arama-Ulaşılamadı", 25],
+  ["Satış Fırsatı", 9],
+  ["Almadı-Fiyat Şoku/Bütçe Yetersizliği", 18],
+];
+
+function mockPortfolio(now: Date): Portfolio {
+  const by_status = REPS.flatMap(([rep_id, , perf], i) =>
+    STATUSES.map(([status, base]) => ({ rep_id, status, count: Math.max(0, Math.round(base * (0.6 + perf / 2) + i * 2 - 3)) })),
+  );
+  const untouched = [
+    ["r2", "Kerim Temur", 2965, "2026-06-11T06:57:00Z"],
+    ["r2", "Ayşe Menekşe", 410, null],
+    ["r2", "Talha Ünverdi", 96, null],
+    ["r2", "Mehmet Tavalı", 30, "2026-10-11T08:38:00Z"],
+    ["r4", "Hakan Sadıkoğlu", 52, null],
+    ["r4", "Derya Kurt", 27, "2026-10-11T12:10:00Z"],
+    ["r1", "Selin Ak", 25, null],
+  ].map(([rep_id, name, hours, last], i) => ({
+    lead_id: String(i),
+    rep_id: String(rep_id),
+    name: String(name),
+    hours: Number(hours),
+    last_touch: last as string | null,
+    assigned_at: new Date(now.getTime() - Number(hours) * 3600000).toISOString(),
+  }));
+  return { new_status: "Yeni Müşteri Adayı", untouched_hours: 24, by_status, untouched };
+}
 
 const NUDGES: NudgeItem[] = [
   {

@@ -93,6 +93,7 @@ export interface LivePayload {
   reps: RepCard[];
   idle_thresholds: { warn: number; alert: number };
   meetings?: Meetings;
+  portfolio?: Portfolio | null;
 }
 
 export interface Me {
@@ -204,10 +205,28 @@ export interface NudgeItem {
   sent_at: string | null;
   failure: string | null;
   shadow: boolean | null;
+  kind?: "tempo" | "portfoy";
 }
 
 export interface NudgeQueue {
   items: NudgeItem[];
   approval_required: boolean;
   ai: boolean;
+}
+
+// pusula/portfolio.py load_portfolio.
+export interface UntouchedLead {
+  lead_id: string;
+  rep_id: string;
+  name: string | null;
+  assigned_at: string | null;
+  last_touch: string | null;
+  hours: number | null;
+}
+
+export interface Portfolio {
+  new_status: string;
+  untouched_hours: number;
+  by_status: { rep_id: string; status: string; count: number }[];
+  untouched: UntouchedLead[];
 }

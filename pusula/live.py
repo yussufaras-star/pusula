@@ -35,6 +35,7 @@ from pusula.occupancy import (
     timelines_for,
 )
 from pusula.panel_data import connect, load_reps
+from pusula.portfolio import load_portfolio
 from pusula.targets import attach_targets
 
 HISTORY_DAYS = 90
@@ -321,6 +322,8 @@ def load_live(
         crm_tracking=crm_tracking_enabled(),
     )
     payload["meetings"] = meetings_payload(day, now)
+    # Portföy anlık durumdur (gün seçiminden bağımsız); yalnız bugün gösterilir.
+    payload["portfolio"] = load_portfolio(now) if is_today else None
     attach_targets(
         payload, history=history, meetings=payload["meetings"]["items"], day=day, cutoff=cutoff
     )
