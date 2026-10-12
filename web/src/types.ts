@@ -70,6 +70,7 @@ export interface RepCard {
   hours: HourRow[];
   timeline: Segment[];
   gaps: Gap[];
+  target?: Targets;
 }
 
 export interface HourRow {
@@ -87,7 +88,7 @@ export interface LivePayload {
   data_as_of: string | null;
   crm_tracking: boolean;
   history_days: number;
-  team: { today: Kpis; expected: Kpis };
+  team: { today: Kpis; expected: Kpis; target?: Targets };
   hours: HourRow[];
   reps: RepCard[];
   idle_thresholds: { warn: number; alert: number };
@@ -171,4 +172,49 @@ export interface MeetingSummary {
 export interface Meetings {
   items: MeetingItem[];
   by_rep: Record<string, MeetingSummary>;
+}
+
+// pusula/targets.py — günlük hedef ve "bu saate kadar" payı.
+export type TargetMetric = "arama" | "ulasilan" | "randevu" | "doluluk";
+export type TargetSource = "kisi" | "ekip" | "ortalama" | "hedef";
+
+export interface TargetItem {
+  daily: number;
+  by_now: number;
+  source: TargetSource;
+  actual: number | null;
+}
+
+export type Targets = Partial<Record<TargetMetric, TargetItem>>;
+
+export type TargetValues = Record<TargetMetric, number | null>;
+
+export interface TargetsPayload {
+  metrics: Record<TargetMetric, string>;
+  default: { values: TargetValues; average: TargetValues };
+  reps: { rep_id: string; name: string; values: TargetValues; average: TargetValues }[];
+}
+
+// pusula/pace_nudges.py list_queue.
+export type NudgeStatus = "bekliyor" | "gonderiliyor" | "gonderildi" | "reddedildi" | "suresi_doldu" | "hata";
+
+export interface NudgeItem {
+  id: number;
+  rep_id: string;
+  rep_name: string | null;
+  created_at: string;
+  body: string;
+  ai_text: string | null;
+  text: string;
+  status: NudgeStatus;
+  decided_by: string | null;
+  sent_at: string | null;
+  failure: string | null;
+  shadow: boolean | null;
+}
+
+export interface NudgeQueue {
+  items: NudgeItem[];
+  approval_required: boolean;
+  ai: boolean;
 }

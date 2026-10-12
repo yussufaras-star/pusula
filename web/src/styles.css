@@ -1556,3 +1556,127 @@ table.meet-list {
 .tl-toplanti {
   background: var(--heat-4);
 }
+
+/* --- hedefler, dürtmeler, yorum ------------------------------------------ */
+
+.card-head .spacer {
+  flex: 1;
+}
+
+.card-head .btn {
+  align-self: center;
+}
+
+.banner.ok {
+  background: var(--good-wash);
+  color: var(--good-ink);
+}
+
+.target-input {
+  width: 96px;
+  max-width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.target-input::placeholder {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.target-default td {
+  background: var(--surface-2);
+}
+
+.target-rules {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.commentary {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.commentary-foot {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.nudges {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.nudge-pending {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warning);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nudge-pending textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  color: inherit;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  resize: vertical;
+}
+
+.nudge-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.nudge-meta {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.nudge-log summary {
+  cursor: pointer;
+  color: var(--ink-2);
+}
+
+.nudge-log ul {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.nudge-text {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.nudge-status.gonderildi {
+  color: var(--good-ink);
+}
+
+.nudge-status.hata,
+.nudge-status.suresi_doldu {
+  color: var(--critical-ink);
+}

@@ -89,6 +89,8 @@ def test_baseline_until_prorates_current_hour() -> None:
 def test_scale_divides_counts_only() -> None:
     out = scale({"arama": 90, "ulasilan": 30, "sure_ort": 120.0}, 1 / 90)
     assert out["arama"] == 1
+    # ulasilan COUNT_KEYS içinde: bir kez ölçeklenir (eskiden iki kez → ~0).
+    assert round(out["ulasilan"], 2) == 0.33
     assert out["sure_ort"] == 120.0
 
 

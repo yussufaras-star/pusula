@@ -2,14 +2,16 @@ import { useState } from "react";
 
 import { api, usePolling } from "../api";
 import { Attention } from "../components/Attention";
+import { Commentary } from "../components/Commentary";
 import { HourChart } from "../components/HourChart";
 import { LostTime } from "../components/LostTime";
 import { MeetingBoard } from "../components/MeetingBoard";
+import { NudgePanel } from "../components/NudgePanel";
 import { RepBoard, StatusPill } from "../components/RepBoard";
 import { StatTile } from "../components/StatTile";
 import { SyncButton } from "../components/SyncButton";
 import { ago, dayLabel, duration, int, minutes, num, pace, paceTone, pct, type Tone } from "../format";
-import type { Kpis, LivePayload, Me } from "../types";
+import type { Kpis, LivePayload, Me, TargetItem, Targets } from "../types";
 
 const REFRESH_MS = 60_000;
 const STALE_MIN = 20;
@@ -26,19 +28,30 @@ function istanbulHour(iso: string): number {
   );
 }
 
-function countTile(label: string, key: keyof Kpis, t: Kpis, e: Kpis, unit?: string) {
+/** Hedef varsa kart günlük hedefe ve "bu saate kadar" payına göre boyanır. */
+function targetNote(t: TargetItem): string {
+  const basis = t.source === "ortalama" ? "ortalama" : "hedef";
+  return `${basis} ${int(t.daily)} · şimdiye ${num(t.by_now)}`;
+}
+
+function countTile(label: string, key: keyof Kpis & keyof Targets, t: Kpis, e: Kpis, targets?: Targets) {
   const actual = Number(t[key] ?? 0);
-  const expected = Number(e[key] ?? 0);
+  const target = targets?.[key];
+  const expected = target ? target.by_now : Number(e[key] ?? 0);
   const ratio = pace(actual, expected);
   const tone = paceTone(ratio);
   return (
     <StatTile
       label={label}
       value={int(actual)}
-      unit={unit}
-      expected={`beklenen ${num(expected)}`}
+      expected={target ? targetNote(target) : `beklenen ${num(expected)}`}
       tone={tone}
       badge={ratio === null ? undefined : `%${Math.round(ratio * 100)}`}
+      title={
+        target
+          ? `Günlük ${target.source === "ortalama" ? "ortalama (hedef girilmemiş)" : "hedef"} ${int(target.daily)}; temsilcinin saatlik temposuna göre bu saate kadar ${num(target.by_now)} beklenir.`
+          : undefined
+      }
     />
   );
 }
@@ -133,6 +146,8 @@ function LiveBody({ data, me, refresh }: { data: LivePayload; me: Me; refresh: (
   const own = me.role === "rep" ? data.reps[0] : undefined;
   const k = own ? own.today : t;
   const x = own ? own.expected : e;
+  const tg = own ? own.target : data.team.target;
+  const dolTarget = tg?.doluluk;
 
   return (
     <>
@@ -147,10 +162,10 @@ function LiveBody({ data, me, refresh }: { data: LivePayload; me: Me; refresh: (
       ) : null}
 
       <div className="tiles">
-        {countTile("Arama", "arama", k, x)}
-        {countTile("Ulaşılan", "ulasilan", k, x)}
+        {countTile("Arama", "arama", k, x, tg)}
+        {countTile("Ulaşılan", "ulasilan", k, x, tg)}
         {rateTile("Ulaşma oranı", k.ulasma_orani, x.ulasma_orani, k.lead_payda)}
-        {countTile("Toplantı", "randevu", k, x)}
+        {countTile("Toplantı", "randevu", k, x, tg)}
         <StatTile
           label="Ort. görüşme süresi"
           value={duration(k.sure_ort)}
@@ -162,8 +177,14 @@ function LiveBody({ data, me, refresh }: { data: LivePayload; me: Me; refresh: (
           label="Doluluk"
           value={pct(k.doluluk)}
           expected={`${minutes(k.kayip_dk)} kayıp zaman`}
-          tone={paceTone(pace(k.doluluk, x.doluluk))}
-          badge={x.doluluk === null ? undefined : `ort. ${pct(x.doluluk)}`}
+          tone={paceTone(pace(k.doluluk, dolTarget ? dolTarget.daily : x.doluluk))}
+          badge={
+            dolTarget
+              ? `${dolTarget.source === "ortalama" ? "ort." : "hedef"} ${pct(dolTarget.daily)}`
+              : x.doluluk === null
+                ? undefined
+                : `ort. ${pct(x.doluluk)}`
+          }
           title={`Dolu ${minutes(k.dolu_dk)} / (dolu + kayıp ${minutes(k.kayip_dk)}). Arama 1 dk önce ve sonrasıyla, toplantı süresi, WhatsApp konuşma başına 3 dk. Günün en uzun boşluklarından ${minutes(k.mola_dk)} mola düşüldü.`}
         />
       </div>
@@ -188,6 +209,10 @@ function LiveBody({ data, me, refresh }: { data: LivePayload; me: Me; refresh: (
           </div>
         </section>
       </div>
+
+      {me.role === "admin" && data.is_today ? <NudgePanel /> : null}
+
+      {me.role === "admin" ? <Commentary day={data.day} dataAsOf={data.data_as_of} /> : null}
 
       {data.meetings ? (
         <section className="card">

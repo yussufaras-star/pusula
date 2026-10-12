@@ -27,6 +27,9 @@ env:
   ZOHO_ACCOUNTS_DOMAIN: ${{ secrets.ZOHO_ACCOUNTS_DOMAIN }}
   ZOHO_API_DOMAIN: ${{ secrets.ZOHO_API_DOMAIN }}
   ZOHO_MEETING_REFRESH_TOKEN: ${{ secrets.ZOHO_MEETING_REFRESH_TOKEN }}
+  CLIQ_WEBHOOK_URL: ${{ secrets.CLIQ_WEBHOOK_URL }}
+  PUSULA_SHADOW_EMAIL: ${{ secrets.PUSULA_SHADOW_EMAIL }}
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
 jobs:
   sync-hourly:
@@ -44,3 +47,8 @@ jobs:
         run: python scripts/block_ingest.py
       - name: Zoho Meeting katılımı (son 2 gün)
         run: python scripts/meeting_ingest.py --days 2
+      # Taze veriyle hedef temposu; gerisindekilere Cliq (ilk 14 gün AI'lı
+      # mesajlar panelde onay bekler). Hata ingest'i başarısız saymaz.
+      - name: Tempo dürtmesi
+        continue-on-error: true
+        run: python scripts/pace_nudges.py

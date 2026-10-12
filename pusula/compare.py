@@ -74,7 +74,7 @@ def per_rep(row: dict[str, Any], n_reps: int) -> dict[str, Any]:
     """Ekip toplamını temsilci başına indirir. Oranlar değişmez."""
     out = dict(row)
     n = max(n_reps, 1)
-    for key in (*COUNT_KEYS, "ulasilan"):
+    for key in COUNT_KEYS:
         if out.get(key) is not None:
             out[key] = out[key] / n
     return out

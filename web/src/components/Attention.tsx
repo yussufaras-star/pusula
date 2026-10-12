@@ -44,12 +44,16 @@ export function attentionItems(data: LivePayload): Item[] {
         text: "Bugün kayıtlı arama, toplantı veya mesaj yok.",
       });
     }
-    const ratio = pace(r.today.arama, r.expected.arama);
-    if (ratio !== null && r.expected.arama >= PACE_MIN_EXPECTED && ratio < 0.8) {
+    // Hedef varsa (yönetici veya ortalama) ona göre; dürtme motoruyla aynı %80 kuralı.
+    const target = r.target?.arama;
+    const expected = target ? target.by_now : r.expected.arama;
+    const ratio = pace(r.today.arama, expected);
+    if (ratio !== null && expected >= PACE_MIN_EXPECTED && ratio < 0.8) {
+      const basis = target && target.source !== "ortalama" ? `günlük hedef ${int(target.daily)}` : null;
       items.push({
         level: ratio < 0.6 ? "critical" : "warning",
         title: `${r.name} aramada geride`,
-        text: `${int(r.today.arama)} arama; bu saate kadar beklenen ${num(r.expected.arama)} (%${Math.round(ratio * 100)}).`,
+        text: `${int(r.today.arama)} arama; bu saate kadar beklenen ${num(expected)} (%${Math.round(ratio * 100)})${basis ? ` · ${basis}` : ""}.`,
       });
     }
   }
