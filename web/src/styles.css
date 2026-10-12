@@ -1655,3 +1655,43 @@ table.meet-list {
 .nudge-status.suresi_doldu {
   color: var(--critical-ink);
 }
+
+/* --- portföy ------------------------------------------------------------ */
+
+.portfolio td.name {
+  white-space: normal;
+  min-width: 160px;
+}
+
+.pf-new td {
+  background: var(--warning-wash);
+}
+
+.pf-alert {
+  margin-left: 6px;
+  border: 0;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--critical-wash);
+  color: var(--critical-ink);
+}
+
+.pf-alert.on {
+  background: var(--critical);
+  color: #fff;
+}
+
+.pf-list {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pf-list-head {
+  color: var(--ink-2);
+}

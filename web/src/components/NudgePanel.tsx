@@ -46,6 +46,7 @@ export function NudgePanel() {
                 <li key={n.id}>
                   <div className="nudge-meta">
                     <b>{n.rep_name}</b> · {clock(n.sent_at ?? n.created_at)} ·{" "}
+                    {n.kind === "portfoy" ? "portföy listesi · " : ""}
                     <span className={`nudge-status ${n.status}`}>{STATUS_LABEL[n.status]}</span>
                     {n.shadow ? <span className="muted"> · gölge</span> : null}
                     {n.failure ? <span className="muted"> · {n.failure}</span> : null}
