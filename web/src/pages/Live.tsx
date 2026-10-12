@@ -152,7 +152,7 @@ function LiveBody({ data, me }: { data: LivePayload; me: Me }) {
           label="Doluluk"
           value={pct(k.doluluk)}
           expected={`${minutes(k.dolu_dk)} dolu`}
-          tone={k.doluluk === null ? "neutral" : k.doluluk >= 70 ? "good" : k.doluluk >= 50 ? "warning" : "critical"}
+          tone={paceTone(pace(k.doluluk, x.doluluk))}
           badge={x.doluluk === null ? undefined : `ort. ${pct(x.doluluk)}`}
           title={`Arama + toplantı + CRM + WhatsApp süresi (${minutes(k.dolu_dk)}) / geçen mesai (${minutes(k.mesai_dk)}, 1 sa 15 dk mola oransal düşülmüş)`}
         />

@@ -15,6 +15,15 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from pusula.compare import (
+    AVG,
+    MAX_SPAN_DAYS,
+    TEAM,
+    Side,
+    load_side,
+    series_group,
+    side_cut,
+)
 from pusula.config import get_org_id
 from pusula.hourly_nudges import run_hourly_nudges
 from pusula.live import data_as_of, history_by_rep_hour, load_live
@@ -180,6 +189,79 @@ def live(day: str | None = None, user: AuthUser = Depends(current_user)) -> Any:
         lambda: jsonable_encoder(load_live(chosen, now, history=history)),
     )
     return scope_live(payload, user)
+
+
+# --- karşılaştırma ----------------------------------------------------------
+
+SUBJECT_LABELS = {TEAM: "Ekip toplamı", AVG: "Temsilci ortalaması"}
+
+
+def compare_subject(raw: str, user: AuthUser, names: dict[str, str]) -> str:
+    """Temsilci yalnız kendisini, ekip toplamını ve ortalamayı seçebilir."""
+    if raw in SUBJECT_LABELS:
+        return raw
+    if user.role == "rep" and raw != user.rep_id:
+        raise HTTPException(status_code=403, detail="Yalnız kendi verinizi kıyaslayabilirsiniz")
+    if raw not in names:
+        raise HTTPException(status_code=404, detail="Temsilci bulunamadı")
+    return raw
+
+
+def compare_side(first: str, last: str, subject: str, today: date) -> Side:
+    start = parse_day(first, today)
+    end = parse_day(last, today)
+    if end < start:
+        raise HTTPException(status_code=400, detail="Bitiş başlangıçtan önce olamaz")
+    if (end - start).days >= MAX_SPAN_DAYS:
+        raise HTTPException(status_code=400, detail="Dönem en fazla bir yıl olabilir")
+    return Side(start, end, subject)
+
+
+@app.get("/api/compare")
+def compare(
+    a_from: str,
+    a_to: str,
+    b_from: str,
+    b_to: str,
+    a_subject: str = TEAM,
+    b_subject: str = TEAM,
+    align: bool = True,
+    user: AuthUser = Depends(current_user),
+) -> Any:
+    require_database()
+    now = _now()
+    today = now.date()
+    reps = load_reps()
+    names = {rep.rep_id: rep.full_name for rep in reps}
+    sides = (
+        compare_side(a_from, a_to, compare_subject(a_subject, user, names), today),
+        compare_side(b_from, b_to, compare_subject(b_subject, user, names), today),
+    )
+    own_cuts = [side_cut(side, now) for side in sides]
+    cuts = (
+        [side_cut(sides[0], now, other=sides[1]), side_cut(sides[1], now, other=sides[0])]
+        if align
+        else own_cuts
+    )
+    touches_today = any(side.last >= today for side in sides)
+    group = series_group(*sides)
+
+    def build() -> Any:
+        payload = [
+            load_side(
+                side,
+                cut,
+                rep_ids=list(names),
+                label=SUBJECT_LABELS.get(side.subject) or names[side.subject],
+                group=group,
+                aligned=cut < own,
+            )
+            for side, cut, own in zip(sides, cuts, own_cuts)
+        ]
+        return jsonable_encoder({"now": now, "a": payload[0], "b": payload[1]})
+
+    key = ("compare", *sides, align, today.isoformat())
+    return cache.cached(key, LIVE_TTL if touches_today else HISTORY_TTL, build)
 
 
 # --- raporlar (eski panel analizleri) ----------------------------------------
