@@ -20,6 +20,7 @@ from pusula.config import get_org_id
 from pusula.panel_data import _meeting_duration_min_sql, connect
 from pusula.temas import (
     duration_sec,
+    is_answered_inbound_sql,
     is_cevirme_sql,
     is_donus_sql,
     is_gelen_sql,
@@ -303,6 +304,7 @@ def empty_row() -> dict[str, Any]:
 def last_activity(day: date, *, now: datetime | None = None) -> dict[str, dict[str, Any]]:
     """Temsilci bazında günün son faaliyet anları.
 
+    İlk faaliyet: planlı arama ve santralin düşürdüğü cevapsız gelen sayılmaz.
     Arama: başlangıç + süre (bitiş). Toplantı: başlangıç + süre, şimdiyi
     geçmez. WhatsApp: son giden mesaj. CRM: crm_actions tablosu (varsa).
     in_meeting / in_call: şu an süren toplantı veya arama kaydı var mı.
@@ -315,7 +317,11 @@ def last_activity(day: date, *, now: datetime | None = None) -> dict[str, dict[s
         SELECT
           e.rep_id,
           min(e.occurred_at) FILTER (
-            WHERE e.channel IN ('call', 'whatsapp')
+            WHERE (
+                e.channel = 'call' AND {is_not_planned_sql('e')}
+                AND (e.direction = 'outbound' OR ({is_answered_inbound_sql('e')}))
+              )
+               OR (e.channel = 'whatsapp' AND e.direction = 'outbound')
                OR (e.channel = 'meeting' AND e.meta->>'randevu_durumu' = 'katildi')
           ),
           max(e.occurred_at + make_interval(secs => coalesce({dur}, 0)))
