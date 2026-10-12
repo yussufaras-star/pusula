@@ -66,6 +66,7 @@ function kpis(arama: number, avail: number, r: () => number, nReps = 1): Kpis {
     mola_dk: mola,
     kayip_dk: kayip,
     girilmemis_dk: 0,
+    toplanti_dk: Math.round(busy * 0.2),
     mesai_dk: mesai,
     doluluk: mesai ? Math.round((Math.min(busy, mesai) / (Math.min(busy, mesai) + kayip)) * 1000) / 10 : null,
     n_reps: nReps,
@@ -92,7 +93,11 @@ function timeline(perf: number, at: (h: number, m: number) => Date, nowHour: num
     const busy = Math.round(20 + r() * 60 * perf);
     const gap = t > 12 * 60 + 20 && t < 13 * 60 ? 60 : Math.round(r() * 25 * (1.4 - Math.min(perf, 1.2)));
     const b = Math.min(t + busy, end);
-    segs.push({ start: iso(at(Math.floor(t / 60), t % 60)), end: iso(at(Math.floor(b / 60), b % 60)), kind: "dolu" });
+    segs.push({
+      start: iso(at(Math.floor(t / 60), t % 60)),
+      end: iso(at(Math.floor(b / 60), b % 60)),
+      kind: busy > 50 ? "toplanti" : "dolu",
+    });
     const g = Math.min(b + gap, end);
     if (g > b) {
       segs.push({
@@ -104,7 +109,7 @@ function timeline(perf: number, at: (h: number, m: number) => Date, nowHour: num
     t = g;
   }
   const gaps: Gap[] = segs
-    .filter((s) => s.kind !== "dolu")
+    .filter((s) => s.kind !== "dolu" && s.kind !== "toplanti")
     .map((s) => ({ ...s, minutes: (new Date(s.end).getTime() - new Date(s.start).getTime()) / 60000 }))
     .filter((g) => g.minutes >= 5)
     .sort((a, b) => b.minutes - a.minutes)

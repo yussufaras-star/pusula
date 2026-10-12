@@ -5,6 +5,7 @@ import type { RepCard, SegmentKind } from "../types";
 
 const KIND_LABEL: Record<SegmentKind, string> = {
   dolu: "Dolu",
+  toplanti: "Toplantı",
   mola: "Mola",
   kayip: "Kayıp",
   girilmemis: "Sonucu girilmemiş toplantı",
@@ -58,7 +59,7 @@ export function LostTime({ reps, day, now }: Props) {
   return (
     <div className="lost">
       <div className="legend" style={{ marginBottom: 10 }}>
-        {(["dolu", "mola", "kayip", "girilmemis"] as SegmentKind[]).map((k) => (
+        {(["dolu", "toplanti", "mola", "kayip", "girilmemis"] as SegmentKind[]).map((k) => (
           <span key={k} className="key">
             <span className={`sw tl-${k}`} /> {KIND_LABEL[k]}
           </span>
@@ -112,6 +113,9 @@ export function LostTime({ reps, day, now }: Props) {
               <div className="lost-sum">
                 <b>{minutes(r.today.kayip_dk)}</b>
                 <span className="sub">kayıp · {minutes(r.today.mola_dk)} mola</span>
+                {r.today.toplanti_dk > 0 ? (
+                  <span className="sub">{minutes(r.today.toplanti_dk)} toplantı (dolu)</span>
+                ) : null}
                 {r.today.girilmemis_dk > 0 ? (
                   <span className="sub">{minutes(r.today.girilmemis_dk)}'sı sonucu girilmemiş toplantı</span>
                 ) : null}

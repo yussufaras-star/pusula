@@ -1551,3 +1551,8 @@ table.meet-list {
   background: var(--accent-soft);
   color: var(--ink);
 }
+
+.legend .sw.tl-toplanti,
+.tl-toplanti {
+  background: var(--heat-4);
+}

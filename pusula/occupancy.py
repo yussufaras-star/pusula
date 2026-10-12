@@ -99,8 +99,10 @@ def merge(intervals: Iterable[Interval]) -> list[Interval]:
     return [(a, b) for a, b in out]
 
 
-def _subtract(gap: Interval, covers: list[Interval]) -> list[Tagged]:
-    """Boşluğu örtülü ("girilmemis") ve serbest ("bos") parçalara böler."""
+def _subtract(
+    gap: Interval, covers: list[Interval], covered: str = "girilmemis", free: str = "bos"
+) -> list[Tagged]:
+    """Aralığı örtülü (covered) ve serbest (free) parçalara böler."""
     pieces: list[Tagged] = []
     cursor = gap[0]
     for a, b in covers:
@@ -108,11 +110,11 @@ def _subtract(gap: Interval, covers: list[Interval]) -> list[Tagged]:
         if b <= max(a, cursor):
             continue
         if a > cursor:
-            pieces.append((cursor, a, "bos"))
-        pieces.append((max(a, cursor), b, "girilmemis"))
+            pieces.append((cursor, a, free))
+        pieces.append((max(a, cursor), b, covered))
         cursor = b
     if cursor < gap[1]:
-        pieces.append((cursor, gap[1], "bos"))
+        pieces.append((cursor, gap[1], free))
     return pieces
 
 
@@ -122,11 +124,14 @@ def day_timeline(
     cut: datetime,
     *,
     pending: Iterable[Interval] = (),
+    meetings: Iterable[Interval] = (),
     mola_dk: float = MOLA_DK,
 ) -> DayTimeline:
     """Günün şeridi: [09:00, min(mesai sonu, cut)) içinde dolu / mola / kayıp.
 
     pending: sonucu girilmemiş toplantılar; dolu değil, kayıptır, mola olmaz.
+    meetings: dolu aralıkların toplantı olan kısmı; şeritte "toplanti"
+    görünür, toplamda dolu sayılır (intervals içinde de olmalıdır).
     """
     timeline = DayTimeline(day)
     bounds = shift_bounds(day)
@@ -158,7 +163,12 @@ def day_timeline(
         mola_of[a] = take
         remaining -= take
 
-    segments = [Segment(a, b, "dolu") for a, b in busy]
+    in_meeting = merge((max(a, lo), min(b, hi)) for a, b in meetings if b > lo and a < hi)
+    segments = [
+        Segment(a, b, kind)
+        for span in busy
+        for a, b, kind in _subtract(span, in_meeting, covered="toplanti", free="dolu")
+    ]
     for a, b, kind in pieces:
         if kind == "girilmemis":
             segments.append(Segment(a, b, "girilmemis"))
@@ -184,6 +194,7 @@ def _bucket(group: Group, rep_id: str, day: date, hour: int | None) -> tuple[str
 
 _SUM_INTO = {
     "dolu": ("dolu_dk",),
+    "toplanti": ("dolu_dk", "toplanti_dk"),
     "mola": ("mola_dk",),
     "kayip": ("kayip_dk",),
     "girilmemis": ("kayip_dk", "girilmemis_dk"),
@@ -202,10 +213,12 @@ def aggregate(
     Faaliyetsiz temsilci-günü (dolu yok) atlanır; running_day hariç.
     """
     sums: dict[tuple[str | None, str | None], dict[str, float]] = defaultdict(
-        lambda: {"dolu_dk": 0.0, "mola_dk": 0.0, "kayip_dk": 0.0, "girilmemis_dk": 0.0}
+        lambda: {
+            "dolu_dk": 0.0, "toplanti_dk": 0.0, "mola_dk": 0.0, "kayip_dk": 0.0, "girilmemis_dk": 0.0,
+        }
     )
     for (rep_id, day), timeline in timelines.items():
-        if timeline.total("dolu") <= 0 and day != running_day:
+        if timeline.total("dolu") + timeline.total("toplanti") <= 0 and day != running_day:
             continue
         for kind, names in _SUM_INTO.items():
             if group in ("hour", "rep_hour"):
@@ -287,7 +300,7 @@ def fetch_intervals(
             WHEN {pending} THEN {meet_end}
             ELSE e.occurred_at
           END,
-          CASE WHEN {pending} THEN 'girilmemis' ELSE 'dolu' END
+          CASE WHEN {pending} THEN 'girilmemis' WHEN {meet} THEN 'toplanti' ELSE 'dolu' END
         FROM events e
         JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
         WHERE e.org_id = %s
@@ -306,7 +319,7 @@ def fetch_intervals(
             ).fetchall():
                 busy = busy_interval(pj, pl, cj, cl, float(csec or 0), db_now)
                 if busy is not None:
-                    rows.append((rep_id, day, busy[0], busy[1], "dolu"))
+                    rows.append((rep_id, day, busy[0], busy[1], "toplanti"))
     for rep_id, day, start, end, kind in rows:
         out[(str(rep_id), day)].append((start.astimezone(TZ), end.astimezone(TZ), kind))
     return dict(out)
@@ -365,10 +378,11 @@ def timelines_for(
                     continue
                 rows = intervals.get((rep_id, day), [])
                 out[(rep_id, day)] = day_timeline(
-                    [(a, b) for a, b, kind in rows if kind == "dolu"],
+                    [(a, b) for a, b, kind in rows if kind in ("dolu", "toplanti")],
                     day,
                     cut,
                     pending=[(a, b) for a, b, kind in rows if kind == "girilmemis"],
+                    meetings=[(a, b) for a, b, kind in rows if kind == "toplanti"],
                 )
         day += timedelta(days=1)
     return out
@@ -403,7 +417,7 @@ def attach(rows: list[dict[str, Any]], occ: list[dict[str, Any]]) -> list[dict[s
             target = {"rep_id": key[0], "bucket": key[1]}
             index[key] = target
             out.append(target)
-        for name in ("dolu_dk", "mola_dk", "kayip_dk", "girilmemis_dk"):
+        for name in ("dolu_dk", "toplanti_dk", "mola_dk", "kayip_dk", "girilmemis_dk"):
             target[name] = item[name]
     return out
 
@@ -413,6 +427,6 @@ def gaps_report(timeline: DayTimeline, *, min_minutes: float = 5.0) -> list[dict
     items = [
         {"start": s.start, "end": s.end, "kind": s.kind, "minutes": round(s.minutes, 1)}
         for s in timeline.segments
-        if s.kind != "dolu" and s.minutes >= min_minutes
+        if s.kind not in ("dolu", "toplanti") and s.minutes >= min_minutes
     ]
     return sorted(items, key=lambda x: -x["minutes"])
