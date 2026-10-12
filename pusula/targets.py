@@ -1,36 +1,40 @@
-"""Günlük hedefler: yöneticinin girdiği değer, yoksa standart, yoksa geçmiş ortalama.
+"""Günlük hedefler: elle girilmez, kurallardan ve geçmiş ortalamadan gelir.
 
-Hedef temsilciye özel veya ekip varsayılanı ('*') olabilir. Sayım hedefleri
-hafta içi gün içindir ve blok takvimine bağlıdır (pusula.blocks): arama ve
-ulaşılan arama bloklarında (09-11, 14-17), toplantı toplantı bloklarında
-(11-14, 17-18; cumartesi 09-15 tamamı) birikir. Cumartesi arama bloğu
-olmadığından arama/ulaşılan hedefi yoktur; toplantı hedefi blok süresi
-oranında (6/4) büyür.
+Kurallar (pusula.blocks takvimi; hafta içi arama 09-11 + 14-17, toplantı
+11-14 + 17-18; cumartesi tamamı toplantı):
 
-Standart arama hedefi: arama blokları (300 dk) eksi günlük mola (75 dk),
-görüşme başına 5 dk bant → 45. Tablo ilk yazmada oluşur; yoksa okuma boş döner.
+- Arama: arama blokları (300 dk) eksi günlük mola (75 dk), görüşme başına
+  5 dk bant → 45. Yalnız arama bloklarında birikir; cumartesi yoktur.
+- Gelmeyen toplantı: 10 dk bekleme sonrası planlanan bitişe kadarki süre
+  arama süresi sayılır ve hedefe eklenir (5 dk'da bir arama), o pencerede
+  birikir. Cumartesi de geçerlidir.
+- Ulaşma oranı: %70. Ulaşılan sayısı hedefi arama hedefinin %70'idir.
+- Toplantı ve doluluk: aynı gün tipinin geçmiş ortalaması; toplantı
+  toplantı bloklarında birikir.
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Iterable
 
 from pusula.blocks import PLANNED_BLOCKS, blocks_for
-from pusula.config import get_org_id
 from pusula.metrics import TZ, combine, finish
-from pusula.panel_data import MOLA_SAAT, connect
+from pusula.panel_data import MOLA_SAAT
 
 METRICS: dict[str, str] = {
     "arama": "Arama",
     "ulasilan": "Ulaşılan",
+    "ulasma_orani": "Ulaşma oranı",
     "randevu": "Toplantı",
     "doluluk": "Doluluk",
 }
 COUNT_METRICS = ("arama", "ulasilan", "randevu")
+RATE_METRICS = ("ulasma_orani", "doluluk")
 METRIC_KIND = {"arama": "call", "ulasilan": "call", "randevu": "meeting"}
-TEAM_DEFAULT = "*"
 CALL_BAND_MIN = 5.0
+NO_SHOW_WAIT_MIN = 10.0
+REACH_TARGET = 70.0
 
 
 def _weekday_minutes(kind: str) -> float:
@@ -38,60 +42,7 @@ def _weekday_minutes(kind: str) -> float:
 
 
 # (300 - 75) / 5 = 45 arama.
-STANDARD: dict[str, float] = {
-    "arama": round((_weekday_minutes("call") - MOLA_SAAT * 60) / CALL_BAND_MIN),
-}
-
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS daily_targets (
-    org_id      text NOT NULL DEFAULT 'rexven',
-    rep_id      text NOT NULL,
-    metric      text NOT NULL,
-    value       double precision NOT NULL,
-    updated_by  text,
-    updated_at  timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (org_id, rep_id, metric)
-);
-"""
-
-Stored = dict[tuple[str, str], float]
-
-
-def load_targets() -> Stored:
-    with connect() as conn:
-        exists = conn.execute("SELECT to_regclass('daily_targets')").fetchone()
-        if not exists or exists[0] is None:
-            return {}
-        rows = conn.execute(
-            "SELECT rep_id, metric, value FROM daily_targets WHERE org_id = %s",
-            (get_org_id(),),
-        ).fetchall()
-    return {(str(rep_id), str(metric)): float(value) for rep_id, metric, value in rows}
-
-
-def save_targets(rows: Iterable[tuple[str, str, float | None]], *, by: str) -> None:
-    """(rep_id, metric, değer). Değer None ise hedef silinir (ortalamaya döner)."""
-    org_id = get_org_id()
-    with connect() as conn:
-        conn.execute(SCHEMA_SQL)
-        for rep_id, metric, value in rows:
-            if value is None:
-                conn.execute(
-                    "DELETE FROM daily_targets WHERE org_id = %s AND rep_id = %s AND metric = %s",
-                    (org_id, rep_id, metric),
-                )
-            else:
-                conn.execute(
-                    """
-                    INSERT INTO daily_targets (org_id, rep_id, metric, value, updated_by)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (org_id, rep_id, metric)
-                    DO UPDATE SET value = EXCLUDED.value,
-                                  updated_by = EXCLUDED.updated_by,
-                                  updated_at = now()
-                    """,
-                    (org_id, rep_id, metric, value, by),
-                )
+STANDARD_CALLS = round((_weekday_minutes("call") - MOLA_SAAT * 60) / CALL_BAND_MIN)
 
 
 def history_daily(hist_hours: dict[int, dict[str, Any]]) -> dict[str, float | None]:
@@ -119,29 +70,6 @@ def day_factor(day: date, metric: str) -> float:
     return len(block_hours(day, kind)) * 60.0 / _weekday_minutes(kind)
 
 
-def resolve(
-    rep_id: str,
-    metric: str,
-    stored: Stored,
-    hist_daily: dict[str, float | None],
-    day: date,
-) -> tuple[float | None, str | None]:
-    """(günlük hedef, kaynak). Kaynak: kisi | ekip | standart | ortalama."""
-    factor = day_factor(day, metric)
-    if factor == 0:
-        return None, None
-    for key, source in ((rep_id, "kisi"), (TEAM_DEFAULT, "ekip")):
-        value = stored.get((key, metric))
-        if value is not None:
-            return value * factor, source
-    if metric in STANDARD:
-        return STANDARD[metric] * factor, "standart"
-    avg = hist_daily.get(metric)
-    if avg:
-        return float(avg), "ortalama"
-    return None, None
-
-
 def elapsed_share(cutoff: datetime, metric: str, day: date) -> float:
     """Günlük hedefin bu ana kadar birikmesi beklenen payı (0..1).
 
@@ -165,26 +93,79 @@ def elapsed_share(cutoff: datetime, metric: str, day: date) -> float:
     return done / (len(hours) * 60.0)
 
 
+def freed_windows(meetings: Iterable[dict[str, Any]]) -> list[tuple[datetime, datetime]]:
+    """Gelmeyen toplantılarda 10 dk beklemeden planlanan bitişe kadarki süre."""
+    out = []
+    for item in meetings:
+        if item.get("state") != "gelmedi":
+            continue
+        start = item["start"]
+        if isinstance(start, str):
+            start = datetime.fromisoformat(start)
+        begin = start + timedelta(minutes=NO_SHOW_WAIT_MIN)
+        end = start + timedelta(minutes=float(item.get("planned_min") or 0))
+        if end > begin:
+            out.append((begin, end))
+    return out
+
+
+def _minutes(windows: list[tuple[datetime, datetime]], cutoff: datetime | None = None) -> float:
+    total = 0.0
+    for begin, end in windows:
+        stop = end if cutoff is None else min(end, cutoff)
+        total += max(0.0, (stop - begin).total_seconds() / 60.0)
+    return total
+
+
 def rep_targets(
     *,
-    rep_id: str,
     today: dict[str, Any],
     hist_hours: dict[int, dict[str, Any]],
-    stored: Stored,
+    meetings: Iterable[dict[str, Any]],
     day: date,
     cutoff: datetime,
 ) -> dict[str, dict[str, Any]]:
-    hist_daily = history_daily(hist_hours)
     out: dict[str, dict[str, Any]] = {}
-    for metric in METRICS:
-        daily, source = resolve(rep_id, metric, stored, hist_daily, day)
-        if daily is None:
-            continue
-        out[metric] = {
+    windows = freed_windows(meetings)
+    bonus = _minutes(windows) / CALL_BAND_MIN
+    bonus_now = _minutes(windows, cutoff) / CALL_BAND_MIN
+    base = STANDARD_CALLS * day_factor(day, "arama")
+    if base or bonus:
+        calls = {
+            "daily": round(base + bonus, 1),
+            "by_now": round(base * elapsed_share(cutoff, "arama", day) + bonus_now, 1),
+            "source": "standart",
+            "bonus": round(bonus, 1),
+            "actual": today.get("arama"),
+        }
+        out["arama"] = calls
+        out["ulasilan"] = {
+            "daily": round(calls["daily"] * REACH_TARGET / 100, 1),
+            "by_now": round(calls["by_now"] * REACH_TARGET / 100, 1),
+            "source": "standart",
+            "actual": today.get("ulasilan"),
+        }
+        out["ulasma_orani"] = {
+            "daily": REACH_TARGET,
+            "by_now": REACH_TARGET,
+            "source": "standart",
+            "actual": today.get("ulasma_orani"),
+        }
+    hist = history_daily(hist_hours)
+    if hist.get("randevu"):
+        daily = float(hist["randevu"])
+        out["randevu"] = {
             "daily": round(daily, 1),
-            "by_now": round(daily * elapsed_share(cutoff, metric, day), 1),
-            "source": source,
-            "actual": today.get(metric),
+            "by_now": round(daily * elapsed_share(cutoff, "randevu", day), 1),
+            "source": "ortalama",
+            "actual": today.get("randevu"),
+        }
+    if hist.get("doluluk"):
+        out["doluluk"] = {
+            "daily": round(float(hist["doluluk"]), 1),
+            "by_now": round(float(hist["doluluk"]), 1),
+            "source": "ortalama",
+            "actual": today.get("doluluk"),
         }
     return out
 
@@ -193,40 +174,42 @@ def attach_targets(
     payload: dict[str, Any],
     *,
     history: dict[str, dict[int, dict[str, Any]]],
-    stored: Stored,
+    meetings: list[dict[str, Any]],
     day: date,
     cutoff: datetime,
 ) -> dict[str, Any]:
     """build_live yüküne kart ve ekip hedeflerini ekler (yerinde)."""
     team: dict[str, dict[str, Any]] = {}
-    doluluk: list[float] = []
+    rates: dict[str, list[float]] = {}
     for card in payload["reps"]:
         if card.get("on_leave"):
             card["target"] = {}
             continue
         targets = rep_targets(
-            rep_id=card["rep_id"],
             today=card["today"],
             hist_hours=history.get(card["rep_id"], {}),
-            stored=stored,
+            meetings=[m for m in meetings if m.get("rep_id") == card["rep_id"]],
             day=day,
             cutoff=cutoff,
         )
         card["target"] = targets
         for metric, item in targets.items():
-            if metric == "doluluk":
-                doluluk.append(item["daily"])
+            if metric in RATE_METRICS:
+                rates.setdefault(metric, []).append(item["daily"])
                 continue
-            slot = team.setdefault(metric, {"daily": 0.0, "by_now": 0.0, "source": "ortalama"})
+            slot = team.setdefault(
+                metric, {"daily": 0.0, "by_now": 0.0, "source": item["source"]}
+            )
             slot["daily"] = round(slot["daily"] + item["daily"], 1)
             slot["by_now"] = round(slot["by_now"] + item["by_now"], 1)
-            if item["source"] != "ortalama":
-                slot["source"] = "hedef"
-    if doluluk:
-        team["doluluk"] = {
-            "daily": round(sum(doluluk) / len(doluluk), 1),
-            "by_now": round(sum(doluluk) / len(doluluk), 1),
-            "source": "hedef" if any(m == "doluluk" for _, m in stored) else "ortalama",
+            if "bonus" in item:
+                slot["bonus"] = round(slot.get("bonus", 0.0) + item["bonus"], 1)
+    for metric, values in rates.items():
+        mean = round(sum(values) / len(values), 1)
+        team[metric] = {
+            "daily": mean,
+            "by_now": mean,
+            "source": "standart" if metric == "ulasma_orani" else "ortalama",
         }
     team_today = payload["team"]["today"]
     for metric, item in team.items():

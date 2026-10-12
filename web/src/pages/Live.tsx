@@ -34,6 +34,13 @@ function targetNote(t: TargetItem): string {
   return `${basis} ${int(t.daily)} · şimdiye ${num(t.by_now)}`;
 }
 
+const TARGET_RULE: Partial<Record<keyof Targets, string>> = {
+  arama:
+    "Hedef: arama blokları (09-11, 14-17) 300 dk − 75 dk mola, görüşme başına 5 dk → 45. Gelmeyen toplantının 10 dk sonrası arama süresi sayılır ve hedefe eklenir.",
+  ulasilan: "Hedef: arama hedefinin %70'i.",
+  randevu: "Hedef: aynı gün tipinin son 90 günlük ortalaması; toplantı bloklarında (11-14, 17-18) birikir.",
+};
+
 function countTile(label: string, key: keyof Kpis & keyof Targets, t: Kpis, e: Kpis, targets?: Targets) {
   const actual = Number(t[key] ?? 0);
   const target = targets?.[key];
@@ -49,14 +56,16 @@ function countTile(label: string, key: keyof Kpis & keyof Targets, t: Kpis, e: K
       badge={ratio === null ? undefined : `%${Math.round(ratio * 100)}`}
       title={
         target
-          ? `Günlük ${target.source === "ortalama" ? "ortalama (hedef girilmemiş)" : "hedef"} ${int(target.daily)}; temsilcinin saatlik temposuna göre bu saate kadar ${num(target.by_now)} beklenir.`
+          ? `${TARGET_RULE[key] ?? ""} Bu saate kadar ${num(target.by_now)} beklenir.${
+              target.bonus ? ` Gelmeyen toplantılardan +${num(target.bonus)} arama eklendi.` : ""
+            }`
           : undefined
       }
     />
   );
 }
 
-function rateTile(label: string, actual: number | null, expected: number | null, sample: number) {
+function rateTile(label: string, actual: number | null, expected: number | null, sample: number, isTarget = false) {
   const diff = actual !== null && expected !== null ? actual - expected : null;
   const tone: Tone =
     diff === null || sample < 5 ? "neutral" : diff >= 0 ? "good" : diff > -10 ? "warning" : "critical";
@@ -64,7 +73,7 @@ function rateTile(label: string, actual: number | null, expected: number | null,
     <StatTile
       label={label}
       value={sample < 5 && actual !== null ? <span title="Örneklem 5'ten az">{pct(actual)}</span> : pct(actual)}
-      expected={sample < 5 ? `örneklem ${sample} · az` : `ortalama ${pct(expected)}`}
+      expected={sample < 5 ? `örneklem ${sample} · az` : `${isTarget ? "hedef" : "ortalama"} ${pct(expected)}`}
       tone={tone}
       badge={diff === null ? undefined : `${diff >= 0 ? "+" : ""}${num(diff)} puan`}
     />
@@ -164,7 +173,7 @@ function LiveBody({ data, me, refresh }: { data: LivePayload; me: Me; refresh: (
       <div className="tiles">
         {countTile("Arama", "arama", k, x, tg)}
         {countTile("Ulaşılan", "ulasilan", k, x, tg)}
-        {rateTile("Ulaşma oranı", k.ulasma_orani, x.ulasma_orani, k.lead_payda)}
+        {rateTile("Ulaşma oranı", k.ulasma_orani, tg?.ulasma_orani ? tg.ulasma_orani.daily : x.ulasma_orani, k.lead_payda, !!tg?.ulasma_orani)}
         {countTile("Toplantı", "randevu", k, x, tg)}
         <StatTile
           label="Ort. görüşme süresi"

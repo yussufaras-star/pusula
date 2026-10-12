@@ -35,7 +35,7 @@ from pusula.occupancy import (
     timelines_for,
 )
 from pusula.panel_data import connect, load_reps
-from pusula.targets import attach_targets, load_targets
+from pusula.targets import attach_targets
 
 HISTORY_DAYS = 90
 IDLE_WARN_MIN = 15.0
@@ -320,6 +320,8 @@ def load_live(
         as_of=as_of,
         crm_tracking=crm_tracking_enabled(),
     )
-    attach_targets(payload, history=history, stored=load_targets(), day=day, cutoff=cutoff)
     payload["meetings"] = meetings_payload(day, now)
+    attach_targets(
+        payload, history=history, meetings=payload["meetings"]["items"], day=day, cutoff=cutoff
+    )
     return payload
