@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -35,6 +36,7 @@ from pusula.temas import (
     distinct_attempted_leads_sql,
     distinct_reached_leads_sql,
     duration_sec,
+    is_answered_inbound_sql,
     is_attempt_sql,
     is_cevirme_sql,
     is_donus_sql,
@@ -47,6 +49,7 @@ from pusula.temas import (
 )
 
 _TZ = ZoneInfo("Europe/Istanbul")
+ISTANBUL_TZ = "Europe/Istanbul"
 WINDOW_DAYS = 90
 WEEK_COUNT = 12
 CONV_START = datetime(2026, 5, 1, tzinfo=_TZ)
@@ -129,7 +132,14 @@ _DUR_E = duration_sec("e")
 _WON_D = won_stage_sql("d")
 _LEAD_PAYDA_E = distinct_attempted_leads_sql("e")
 _LEAD_PAY_E = distinct_reached_leads_sql("e")
-_DAY_IST = "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date"
+
+
+def istanbul_sql(expr: str) -> str:
+    """timestamptz ifadesini Europe/Istanbul yerel saatine çevirir."""
+    return f"({expr} AT TIME ZONE '{ISTANBUL_TZ}')"
+
+
+_DAY_IST = f"{istanbul_sql('e.occurred_at')}::date"
 
 
 def _reach_pay(ulasilan_giden: int, donus: int) -> int:
@@ -302,7 +312,7 @@ def load_rep_by_email(email: str) -> Rep | None:
 
 
 def _hour_expr(alias: str = "e") -> str:
-    return f"extract(hour FROM {alias}.occurred_at AT TIME ZONE 'Europe/Istanbul')::int"
+    return f"extract(hour FROM {istanbul_sql(f'{alias}.occurred_at')})::int"
 
 
 def hourly_table(
@@ -627,7 +637,7 @@ def _saturday_data_days(
     """90 günde 09-15 arası olayı olan geçmiş cumartesi sayısı."""
     org_id = get_org_id()
     hour = _hour_expr("e")
-    day_col = "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date"
+    day_col = _DAY_IST
     sql = f"""
         SELECT count(DISTINCT {day_col})::int
         FROM events e
@@ -659,8 +669,7 @@ def today_arama_count(rep_id: str | None = None) -> int:
           AND {_sales_rep_sql()}
           AND e.channel = 'call' AND e.direction = 'outbound'
           AND {_CEVIRME_E}
-          AND (e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date
-                = (now() AT TIME ZONE 'Europe/Istanbul')::date
+          AND {_DAY_IST} = {istanbul_sql('now()')}::date
           {extra}
     """
     with connect() as conn:
@@ -684,7 +693,7 @@ def today_blocks(
     hour = _hour_expr("e")
     chosen = day or datetime.now(_TZ).date()
     planned_blocks = blocks_for(chosen)
-    day_col = "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date"
+    day_col = _DAY_IST
     today = f"{day_col} = p.gun"
     weekday = chosen.weekday()
     if weekday == 5:
@@ -859,7 +868,7 @@ def today_blocks(
         CROSS JOIN (SELECT %s::date AS gun) p
         WHERE e.org_id = %s
           AND {_sales_rep_sql()}
-          AND (e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date
+          AND {_DAY_IST}
                 >= p.gun - interval '{WINDOW_DAYS} days'
           AND e.occurred_at <= now()
           {extra}
@@ -1008,6 +1017,53 @@ def today_blocks(
     return {"blocks": blocks, "workdays": days, "hist_n": hist_n}
 
 
+_MEET_HOUR_RE = re.compile(r"([0-9]+)\s*hour", re.IGNORECASE)
+_MEET_MIN_RE = re.compile(r"([0-9]+)\s*min", re.IGNORECASE)
+
+
+def parse_meet_duration_min(raw: str | None) -> int | None:
+    """'30 mins' → 30. Boş veya birimsiz metin çevrilemez (None).
+
+    Planlanan süre. Katılmayan kayıt bu fonksiyona gelmez.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    hour_m = _MEET_HOUR_RE.search(text)
+    min_m = _MEET_MIN_RE.search(text)
+    if hour_m is None and min_m is None:
+        return None
+    hours = int(hour_m.group(1)) if hour_m else 0
+    mins = int(min_m.group(1)) if min_m else 0
+    return hours * 60 + mins
+
+
+def _meet_duration_parsed_sql(alias: str = "e") -> str:
+    """meta.duration → dakika. Çevrilemezse NULL. Doluluk SQL'ine dokunmaz.
+
+    '30 mins' ve '1 hour 30 mins'. Birimsiz rakam çevrim sayılmaz.
+    """
+    raw = f"nullif(btrim(coalesce({alias}.meta->>'{MEET_DURATION_KEY}', '')), '')"
+    hours = (
+        f"coalesce(NULLIF(regexp_replace("
+        f"substring({raw} from '([0-9]+)\\s*hour'), '[^0-9]', '', 'g'), '')"
+        f"::numeric, 0)"
+    )
+    mins = (
+        f"coalesce(NULLIF(regexp_replace("
+        f"substring({raw} from '([0-9]+)\\s*min'), '[^0-9]', '', 'g'), '')"
+        f"::numeric, 0)"
+    )
+    ok = (
+        f"{raw} IS NOT NULL AND ("
+        f"{raw} ~* '[0-9]+[[:space:]]*hour' OR "
+        f"{raw} ~* '[0-9]+[[:space:]]*min')"
+    )
+    return f"CASE WHEN {ok} THEN {hours} * 60 + {mins} ELSE NULL END"
+
+
 def today_hours(
     rep_id: str | None,
     day: date | None = None,
@@ -1025,6 +1081,7 @@ def today_hours(
     hour_start, hour_end = wanted[0], wanted[-1]
     is_call = "e.channel = 'call' AND e.direction = 'outbound'"
     is_meet = "e.channel = 'meeting'"
+    meet_parsed = _meet_duration_parsed_sql("e")
     sql = f"""
         WITH hours AS (
             SELECT h FROM generate_series({hour_start}, {hour_end}) AS h
@@ -1050,6 +1107,9 @@ def today_hours(
                 WHERE {is_meet} AND e.meta->>'randevu_durumu' = 'katilmadi'
               )::int AS katilmadi,
               count(*) FILTER (
+                WHERE {is_meet} AND e.meta->>'randevu_durumu' = 'iptal_edildi'
+              )::int AS iptal,
+              count(*) FILTER (
                 WHERE {is_meet}
                   AND e.meta->>'randevu_durumu' = 'sonuc_girilmedi'
               )::int AS sonuc,
@@ -1060,12 +1120,20 @@ def today_hours(
                 WHERE {is_call} AND {_TEMAS_E}
               ) AS sure_ort,
               percentile_cont(0.5) WITHIN GROUP (ORDER BY {_DUR_E})
-                FILTER (WHERE {is_call} AND {_TEMAS_E}) AS sure_tipik
+                FILTER (WHERE {is_call} AND {_TEMAS_E}) AS sure_tipik,
+              coalesce(sum({meet_parsed}) FILTER (
+                WHERE {is_meet} AND e.meta->>'randevu_durumu' = 'katildi'
+              ), 0)::float AS toplanti_dk,
+              count(*) FILTER (
+                WHERE {is_meet}
+                  AND e.meta->>'randevu_durumu' = 'katildi'
+                  AND ({meet_parsed}) IS NULL
+              )::int AS toplanti_dk_hata
             FROM events e
             JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
             WHERE e.org_id = %s
               AND {_sales_rep_sql()}
-              AND (e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date = %s
+              AND {_DAY_IST} = %s
               AND e.occurred_at <= now()
               {extra}
             GROUP BY 1
@@ -1081,10 +1149,13 @@ def today_hours(
           coalesce(s.randevu, 0)::int,
           coalesce(s.katildi, 0)::int,
           coalesce(s.katilmadi, 0)::int,
+          coalesce(s.iptal, 0)::int,
           coalesce(s.sonuc, 0)::int,
           s.sure_toplam,
           s.sure_ort,
-          s.sure_tipik
+          s.sure_tipik,
+          coalesce(s.toplanti_dk, 0)::float,
+          coalesce(s.toplanti_dk_hata, 0)::int
         FROM hours
         LEFT JOIN slots s ON s.saat = hours.h
         ORDER BY hours.h
@@ -1103,10 +1174,13 @@ def today_hours(
         randevu,
         katildi,
         katilmadi,
+        iptal,
         sonuc,
         sure_toplam,
         sure_ort,
         sure_tipik,
+        toplanti_dk,
+        toplanti_dk_hata,
     ) in rows:
         t_u = int(ulasilan_giden)
         t_d = int(donus)
@@ -1134,11 +1208,20 @@ def today_hours(
                 "randevu": int(randevu),
                 "katildi": int(katildi),
                 "katilmadi": int(katilmadi),
+                "iptal_edildi": int(iptal),
                 "sonuc_girilmedi": int(sonuc),
                 "katilim_orani": _ratio(int(katildi), katilim_payda),
                 "katilim_payda": katilim_payda,
+                "toplanti_dk": float(toplanti_dk or 0),
+                "toplanti_dk_hata": int(toplanti_dk_hata or 0),
                 **sure,
             }
+        )
+    failed = sum(int(row["toplanti_dk_hata"]) for row in out)
+    if failed:
+        logger.warning(
+            "toplantı süresi çevrilemedi: %s kayıt (katildi, meta.duration)",
+            failed,
         )
     return out
 
@@ -1163,7 +1246,7 @@ def hour_history(
         return {}
     hour_start, hour_end = wanted[0], wanted[-1]
     weekday = chosen.weekday()
-    day_col = "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date"
+    day_col = _DAY_IST
     if weekday == 5:
         hist_dow = f"extract(isodow FROM {day_col}) = 6"
         days = max(_hist_isodow(chosen, 6), 1)
@@ -1309,6 +1392,7 @@ def sum_hour_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     randevu = sum((r.get("randevu") or 0) for r in rows)
     katildi = sum((r.get("katildi") or 0) for r in rows)
     katilmadi = sum((r.get("katilmadi") or 0) for r in rows)
+    iptal = sum((r.get("iptal_edildi") or 0) for r in rows)
     sonuc = sum((r.get("sonuc_girilmedi") or 0) for r in rows)
     lead_payda = sum((r.get("lead_payda") or 0) for r in rows)
     lead_pay = sum((r.get("lead_pay") or 0) for r in rows)
@@ -1319,6 +1403,8 @@ def sum_hour_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if r.get("sure_toplam") is not None
     ]
     sure_toplam = sum(sure_vals) if sure_vals else None
+    toplanti_dk = sum(float(r.get("toplanti_dk") or 0) for r in rows)
+    toplanti_dk_hata = sum(int(r.get("toplanti_dk_hata") or 0) for r in rows)
     return {
         "saat": None,
         "arama": arama,
@@ -1331,12 +1417,15 @@ def sum_hour_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "randevu": randevu,
         "katildi": katildi,
         "katilmadi": katilmadi,
+        "iptal_edildi": iptal,
         "sonuc_girilmedi": sonuc,
         "katilim_orani": _ratio(katildi, katilim_payda),
         "katilim_payda": katilim_payda,
         "sure_toplam": sure_toplam,
         "sure_ort": None,
         "sure_tipik": None,
+        "toplanti_dk": toplanti_dk,
+        "toplanti_dk_hata": toplanti_dk_hata,
     }
 
 
@@ -1357,9 +1446,9 @@ def _workdays() -> int:
             f"""
             SELECT count(*)::int
             FROM generate_series(
-                (now() AT TIME ZONE 'Europe/Istanbul')::date
+                {istanbul_sql("now()")}::date
                   - interval '{WINDOW_DAYS} days',
-                (now() AT TIME ZONE 'Europe/Istanbul')::date,
+                {istanbul_sql("now()")}::date,
                 interval '1 day'
             ) AS d
             WHERE extract(isodow FROM d) < 6
@@ -1377,9 +1466,9 @@ def _workday_split() -> tuple[int, int]:
               count(*) FILTER (WHERE extract(isodow FROM d) < 6)::int,
               count(*) FILTER (WHERE extract(isodow FROM d) = 6)::int
             FROM generate_series(
-                (now() AT TIME ZONE 'Europe/Istanbul')::date
+                {istanbul_sql("now()")}::date
                   - interval '{WINDOW_DAYS} days',
-                (now() AT TIME ZONE 'Europe/Istanbul')::date,
+                {istanbul_sql("now()")}::date,
                 interval '1 day'
             ) AS d
             """
@@ -1480,21 +1569,19 @@ def occupancy_breakdown(
     meet_dk = _meeting_duration_min_sql("e")
     connected = _call_connected_sql("e")
     sunday = (
-        "extract(isodow FROM e.occurred_at AT TIME ZONE 'Europe/Istanbul') <> 7"
+        f"extract(isodow FROM {istanbul_sql('e.occurred_at')}) <> 7"
     )
     if day is not None:
         window_sql = (
-            "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')::date = %s"
+            f"{_DAY_IST} = %s"
         )
         window_params: tuple[Any, ...] = (day,)
         wd = day.weekday()
         n_wd, n_sat = (1, 0) if wd < 5 else ((0, 1) if wd == 5 else (0, 0))
     else:
-        window_sql = (
-            f"e.occurred_at >= now() - interval '{WINDOW_DAYS} days' "
-            f"AND e.occurred_at <= now()"
-        )
-        window_params = ()
+        start_ts, end_ts = _bounds()
+        window_sql = "e.occurred_at >= %s AND e.occurred_at <= %s"
+        window_params = (start_ts, end_ts)
         n_wd, n_sat = _workday_split()
     sql = f"""
         SELECT
@@ -1596,6 +1683,7 @@ def daily_workload() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
     """Kişi başı günlük iş yükü + ulaşılamayan ort. / ulaşılan medyan süre."""
     org_id = get_org_id()
     days = max(_workdays(), 1)
+    start_ts, end_ts = _bounds()
     meet_dk = f"""
         COALESCE(
             NULLIF(regexp_replace(e.meta->>'duration', '[^0-9]', '', 'g'), '')
@@ -1640,14 +1728,14 @@ def daily_workload() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
         FROM reps r
         LEFT JOIN events e
           ON e.org_id = r.org_id AND e.rep_id = r.rep_id
-         AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
-         AND e.occurred_at <= now()
+         AND e.occurred_at >= %s
+         AND e.occurred_at <= %s
         WHERE r.org_id = %s AND {_sales_rep_sql()}
         GROUP BY r.full_name
         ORDER BY r.full_name
     """
     with connect() as conn:
-        rows = conn.execute(sql, (org_id,)).fetchall()
+        rows = conn.execute(sql, (start_ts, end_ts, org_id)).fetchall()
         dur = conn.execute(
             f"""
             SELECT
@@ -1661,10 +1749,10 @@ def daily_workload() -> tuple[list[dict[str, Any]], dict[str, float | None]]:
             WHERE e.org_id = %s
               AND {_sales_rep_sql()}
               AND e.channel = 'call' AND e.direction = 'outbound'
-              AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
-              AND e.occurred_at <= now()
+              AND e.occurred_at >= %s
+              AND e.occurred_at <= %s
             """,
-            (org_id,),
+            (org_id, start_ts, end_ts),
         ).fetchone()
     out: list[dict[str, Any]] = []
     for name, arama, ulasilan, randevu, katildi, arama_sn, temas_sn, randevu_dk, katildi_dk in rows:
@@ -1727,6 +1815,7 @@ def workload_board(
     if not rep_id:
         n_reps = max(len(load_reps()), 1)
     occ = occupancy_breakdown(rep_id)
+    start_ts, end_ts = _bounds()
 
     sql = f"""
         SELECT
@@ -1758,9 +1847,9 @@ def workload_board(
         JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
         WHERE e.org_id = %s
           AND {_sales_rep_sql()}
-          AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
-          AND e.occurred_at <= now()
-          AND extract(isodow FROM e.occurred_at AT TIME ZONE 'Europe/Istanbul') <> 7
+          AND e.occurred_at >= %s
+          AND e.occurred_at <= %s
+          AND extract(isodow FROM {istanbul_sql("e.occurred_at")}) <> 7
           {extra}
     """
     lead_sql = f"""
@@ -1769,13 +1858,15 @@ def workload_board(
         JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
         WHERE l.org_id = %s
           AND {_sales_rep_sql()}
-          AND coalesce(l.assigned_at, l.created_at)
-                >= now() - interval '{WINDOW_DAYS} days'
+          AND coalesce(l.assigned_at, l.created_at) >= %s
+          AND coalesce(l.assigned_at, l.created_at) <= %s
           {extra_l}
     """
     with connect() as conn:
-        row = conn.execute(sql, (org_id, *params)).fetchone()
-        lead_row = conn.execute(lead_sql, (org_id, *params_l)).fetchone()
+        row = conn.execute(sql, (org_id, start_ts, end_ts, *params)).fetchone()
+        lead_row = conn.execute(
+            lead_sql, (org_id, start_ts, end_ts, *params_l)
+        ).fetchone()
 
     arama_t = int(row[0] or 0) if row else 0
     ulasilan_t = int(row[1] or 0) if row else 0
@@ -1897,6 +1988,344 @@ def workload_board(
         "ulasilan_dk": 0.0,
         "meet_duration_key": MEET_DURATION_KEY,
     }
+
+
+def _phone_talk_sql(alias: str = "e") -> str:
+    """Açılan telefon. Giden temas veya süreli gelen. Cevapsız yok."""
+    temas = is_temas_sql(alias)
+    inbound = is_answered_inbound_sql(alias)
+    return f"""
+        {alias}.channel = 'call'
+        AND (
+            ({alias}.direction = 'outbound' AND ({temas}))
+            OR ({inbound})
+        )
+    """
+
+
+def _attended_meeting_sql(alias: str = "e") -> str:
+    """Katılınan randevu. Katılmayan ve iptal bu süreye girmez."""
+    return (
+        f"{alias}.channel = 'meeting' "
+        f"AND {alias}.meta->>'randevu_durumu' = 'katildi'"
+    )
+
+
+def activity_total_sec(phone_sec: float, meet_min: float) -> float:
+    """Telefon saniyesi + katılınan toplantı dakikası. Çift sayım yok."""
+    phone = max(float(phone_sec), 0.0)
+    meet = max(float(meet_min), 0.0)
+    return phone + meet * 60.0
+
+
+def week_window(day: date, *, today: date | None = None) -> DateWindow:
+    """Seçilen günün pazartesi–pazar haftası. Bitiş bugünü geçmez."""
+    today = today if today is not None else datetime.now(_TZ).date()
+    monday = day - timedelta(days=day.weekday())
+    sunday = monday + timedelta(days=6)
+    end = sunday if sunday < today else today
+    if end < monday:
+        end = monday
+    return DateWindow(start=monday, end=end)
+
+
+def fmt_span(start: date, end: date) -> str:
+    """'28 Eylül – 2 Ekim 2026'. Aynı günse tek tarih."""
+    from pusula.panel_activity import fmt_span as impl
+
+    return impl(start, end)
+
+
+# Performans profilindeki göreli eşikle aynı bant.
+ACTIVITY_REL = 0.20
+# Altında ortalama, ekiple kıyaslanmaz.
+TALK_AVG_MIN_N = 3
+# Toplam sürenin bu payı toplantıdaysa yorum ona bakar.
+MEET_SHARE_NOTE = 0.60
+
+
+def rank_activity_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Toplam süre azalan. Eşitlikte ad, sonra rep_id. Sıra 1'den."""
+    prepared: list[dict[str, Any]] = []
+    for row in rows:
+        phone = float(row.get("phone_sec") or 0)
+        meet = float(row.get("meet_min") or 0)
+        talk_n = int(row.get("talk_n") or 0)
+        meet_n = int(row.get("meet_n") or 0)
+        item = dict(row)
+        item["phone_sec"] = phone
+        item["meet_min"] = meet
+        item["talk_n"] = talk_n
+        item["meet_n"] = meet_n
+        item["total_sec"] = activity_total_sec(phone, meet)
+        item["avg_sec"] = (phone / talk_n) if talk_n > 0 else None
+        prepared.append(item)
+    prepared.sort(
+        key=lambda r: (
+            -float(r["total_sec"]),
+            str(r.get("temsilci") or "").casefold(),
+            str(r.get("rep_id") or ""),
+        )
+    )
+    out: list[dict[str, Any]] = []
+    for index, row in enumerate(prepared, start=1):
+        ranked = dict(row)
+        ranked["sira"] = index
+        out.append(ranked)
+    return out
+
+
+def _activity_band(value: float | None, baseline: float | None) -> str | None:
+    """Ekip ortalamasına göre alti / yakin / ustu. Eşik ACTIVITY_REL."""
+    if value is None or baseline is None:
+        return None
+    base = float(baseline)
+    if base <= 0:
+        return None
+    rel = (float(value) - base) / base
+    if rel <= -ACTIVITY_REL:
+        return "alti"
+    if rel >= ACTIVITY_REL:
+        return "ustu"
+    return "yakin"
+
+
+def activity_team_baseline(rows: list[dict[str, Any]]) -> dict[str, float | None]:
+    """Ekip: görüşme ortalaması havuz, toplam süre kişi ortalaması."""
+    if not rows:
+        return {"avg_sec": None, "total_sec": None}
+    phone = sum(float(row.get("phone_sec") or 0) for row in rows)
+    talks = sum(int(row.get("talk_n") or 0) for row in rows)
+    totals = [float(row.get("total_sec") or 0) for row in rows]
+    return {
+        "avg_sec": (phone / talks) if talks else None,
+        "total_sec": sum(totals) / len(totals),
+    }
+
+
+def efficiency_comment(
+    row: dict[str, Any],
+    team: dict[str, float | None],
+) -> str:
+    """Kişi yorumu. Gözlem ve ölçülen süre. Talimat yok.
+
+    Müşteri süresi: telefon + katılınan toplantı.
+    Görüşme ortalaması: telefon süresinin görüşme sayısına bölümü.
+    Üçten az görüşmede ortalama ekiple kıyaslanmaz.
+    """
+    phone = float(row.get("phone_sec") or 0)
+    meet_min = float(row.get("meet_min") or 0)
+    total = float(row.get("total_sec") or 0)
+    talk_n = int(row.get("talk_n") or 0)
+    meet_n = int(row.get("meet_n") or 0)
+    avg = row.get("avg_sec")
+    if avg is None and talk_n > 0:
+        avg = phone / talk_n
+    if talk_n == 0 and meet_n == 0:
+        return "Telefon ve toplantı kaydı yok."
+    if talk_n == 0 and meet_min <= 0:
+        return "Telefon görüşmesi yok. Toplantı süresi çevrilemedi."
+    if talk_n == 0:
+        return "Telefon görüşmesi yok. Süre toplantıdan geliyor."
+
+    parts: list[str] = []
+    volume = _activity_band(total, team.get("total_sec"))
+    volume_text = {
+        "alti": "Müşteriyle geçen süre ekibin altında",
+        "ustu": "Müşteriyle geçen süre ekibin üstünde",
+        "yakin": "Müşteriyle geçen süre ekibe yakın",
+    }.get(volume or "")
+    own_total = fmt_clock_span(total, day_total=True)
+    if volume_text and team.get("total_sec") is not None:
+        team_total = fmt_clock_span(team.get("total_sec"), day_total=True)
+        parts.append(f"{volume_text} ({own_total}, ekip {team_total}).")
+    else:
+        parts.append(f"Müşteriyle geçen süre {own_total}.")
+
+    if talk_n < TALK_AVG_MIN_N:
+        parts.append(f"Ortalama görüşme için veri yetersiz ({talk_n} görüşme).")
+    else:
+        avg_band = _activity_band(
+            float(avg) if avg is not None else None,
+            team.get("avg_sec"),
+        )
+        avg_text = {
+            "alti": "Görüşme ortalaması ekibin altında",
+            "ustu": "Görüşme ortalaması ekibin üstünde",
+            "yakin": "Görüşme ortalaması ekibe yakın",
+        }.get(avg_band or "")
+        if (
+            avg_text
+            and avg is not None
+            and team.get("avg_sec") is not None
+        ):
+            own_avg = fmt_clock_span(float(avg))
+            team_avg = fmt_clock_span(team.get("avg_sec"))
+            parts.append(
+                f"{avg_text} ({own_avg}, ekip {team_avg}, {talk_n} görüşme)."
+            )
+        elif avg is not None:
+            parts.append(
+                f"Görüşme ortalaması {fmt_clock_span(float(avg))} "
+                f"({talk_n} görüşme)."
+            )
+
+    meet_sec = meet_min * 60.0
+    if total > 0 and meet_sec / total >= MEET_SHARE_NOTE and talk_n > 0:
+        parts.append("Sürenin çoğu toplantıda.")
+    elif meet_n == 0 and volume in {"ustu", "yakin"} and talk_n >= TALK_AVG_MIN_N:
+        parts.append("Toplantı yok.")
+    return " ".join(parts)
+
+
+def apply_efficiency_notes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sıra satırlarına bireysel verimlilik yorumu yazar."""
+    team = activity_team_baseline(rows)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["yorum"] = efficiency_comment(item, team)
+        out.append(item)
+    return out
+
+
+def activity_duration_rank(day: date) -> dict[str, Any]:
+    """Satış ekibi: telefon konuşması + katılınan toplantı. Gün ve o hafta.
+
+    Telefon: giden temas ve süreli gelen. Cevapsız arama yok.
+    Toplantı: katildi kayıtlarının planlanan süresi (meta.duration).
+    Gerçekleşen toplantı dakikası Bookings'te yok.
+    """
+    from pusula.panel_ciro import SALES_TEAM_IDS
+
+    org_id = get_org_id()
+    week = week_window(day)
+    start_ts, end_ts = _bounds(week)
+    phone = _phone_talk_sql("e")
+    attended = _attended_meeting_sql("e")
+    meet_parsed = _meet_duration_parsed_sql("e")
+    sql = f"""
+        SELECT r.rep_id,
+               r.full_name,
+               coalesce(sum({_DUR_E}) FILTER (
+                 WHERE {phone} AND {_DAY_IST} = %s
+               ), 0)::float AS day_phone,
+               count(*) FILTER (
+                 WHERE {phone} AND {_DAY_IST} = %s
+               )::int AS day_talks,
+               coalesce(sum({meet_parsed}) FILTER (
+                 WHERE {attended} AND {_DAY_IST} = %s
+               ), 0)::float AS day_meet,
+               count(*) FILTER (
+                 WHERE {attended} AND {_DAY_IST} = %s
+               )::int AS day_meets,
+               count(*) FILTER (
+                 WHERE {attended}
+                   AND {_DAY_IST} = %s
+                   AND ({meet_parsed}) IS NULL
+               )::int AS day_err,
+               coalesce(sum({_DUR_E}) FILTER (WHERE {phone}), 0)::float
+                 AS week_phone,
+               count(*) FILTER (WHERE {phone})::int AS week_talks,
+               coalesce(sum({meet_parsed}) FILTER (WHERE {attended}), 0)::float
+                 AS week_meet,
+               count(*) FILTER (WHERE {attended})::int AS week_meets,
+               count(*) FILTER (
+                 WHERE {attended} AND ({meet_parsed}) IS NULL
+               )::int AS week_err
+        FROM unnest(%s::text[]) AS t(rep_id)
+        JOIN reps r ON r.org_id = %s AND r.rep_id = t.rep_id
+        LEFT JOIN events e
+          ON e.org_id = r.org_id
+         AND e.rep_id = r.rep_id
+         AND e.occurred_at >= %s
+         AND e.occurred_at <= %s
+         AND e.occurred_at <= now()
+        GROUP BY r.rep_id, r.full_name
+    """
+    with connect() as conn:
+        fetched = conn.execute(
+            sql,
+            (
+                day,
+                day,
+                day,
+                day,
+                day,
+                list(SALES_TEAM_IDS),
+                org_id,
+                start_ts,
+                end_ts,
+            ),
+        ).fetchall()
+    day_raw: list[dict[str, Any]] = []
+    week_raw: list[dict[str, Any]] = []
+    day_err = 0
+    week_err = 0
+    for (
+        rep_id,
+        name,
+        d_phone,
+        d_talks,
+        d_meet,
+        d_meets,
+        d_err,
+        w_phone,
+        w_talks,
+        w_meet,
+        w_meets,
+        w_err,
+    ) in fetched:
+        base = {"rep_id": str(rep_id), "temsilci": str(name)}
+        day_raw.append(
+            {
+                **base,
+                "phone_sec": float(d_phone or 0),
+                "meet_min": float(d_meet or 0),
+                "talk_n": int(d_talks or 0),
+                "meet_n": int(d_meets or 0),
+            }
+        )
+        week_raw.append(
+            {
+                **base,
+                "phone_sec": float(w_phone or 0),
+                "meet_min": float(w_meet or 0),
+                "talk_n": int(w_talks or 0),
+                "meet_n": int(w_meets or 0),
+            }
+        )
+        day_err += int(d_err or 0)
+        week_err += int(w_err or 0)
+    if day_err:
+        logger.warning(
+            "toplantı süresi çevrilemedi: %s kayıt (gün, katildi)",
+            day_err,
+        )
+    if week_err:
+        logger.warning(
+            "toplantı süresi çevrilemedi: %s kayıt (hafta, katildi)",
+            week_err,
+        )
+    day_rows = apply_efficiency_notes(rank_activity_rows(day_raw))
+    week_rows = apply_efficiency_notes(rank_activity_rows(week_raw))
+    return {
+        "day": day_rows,
+        "week": week_rows,
+        "week_start": week.start,
+        "week_end": week.end,
+        "day_meet_err": day_err,
+        "week_meet_err": week_err,
+        "day_total_sec": sum(float(r["total_sec"]) for r in day_rows),
+        "week_total_sec": sum(float(r["total_sec"]) for r in week_rows),
+    }
+
+
+def activity_rank_between(start: date, end: date) -> list[dict[str, Any]]:
+    """Satış ekibi, kapalı tarih aralığı. Toplam süreye göre sıra."""
+    from pusula.panel_activity import activity_rank_between as impl
+
+    return impl(start, end)
 
 
 def talk_duration_by_rep(
@@ -2330,7 +2759,7 @@ def first_meeting_week() -> dict[str, datetime | None]:
         SELECT r.full_name,
           date_trunc(
             'week',
-            min(e.occurred_at AT TIME ZONE 'Europe/Istanbul')
+            min({istanbul_sql("e.occurred_at")})
           )
         FROM events e
         JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
@@ -2361,15 +2790,15 @@ def weekly_series(
     sql = f"""
         WITH weeks AS (
             SELECT generate_series(
-                date_trunc('week', %s AT TIME ZONE 'Europe/Istanbul'),
-                date_trunc('week', %s AT TIME ZONE 'Europe/Istanbul'),
+                date_trunc('week', {istanbul_sql("%s")}),
+                date_trunc('week', {istanbul_sql("%s")}),
                 interval '1 week'
             ) AS week_start
         ),
         call_w AS (
             SELECT
               date_trunc(
-                'week', e.occurred_at AT TIME ZONE 'Europe/Istanbul'
+                'week', {istanbul_sql("e.occurred_at")}
               ) AS week_start,
               count(*) FILTER (
                 WHERE e.direction = 'outbound' AND {_CEVIRME_E}
@@ -2395,7 +2824,7 @@ def weekly_series(
         meet_w AS (
             SELECT
               date_trunc(
-                'week', e.occurred_at AT TIME ZONE 'Europe/Istanbul'
+                'week', {istanbul_sql("e.occurred_at")}
               ) AS week_start,
               count(*) FILTER (
                 WHERE e.meta->>'randevu_durumu' IN ('katildi', 'katilmadi')
@@ -2418,8 +2847,7 @@ def weekly_series(
             SELECT
               date_trunc(
                 'week',
-                coalesce(l.assigned_at, l.created_at)
-                    AT TIME ZONE 'Europe/Istanbul'
+                {istanbul_sql("coalesce(l.assigned_at, l.created_at)")}
               ) AS week_start,
               count(*)::int AS leads,
               count(*) FILTER (WHERE {_has_contact_sql()})::int AS contacts,
@@ -2737,6 +3165,45 @@ def _ratio(num: int | float | None, den: int | float | None) -> float | None:
     if float(den) == 0:
         return None
     return round(100.0 * float(num) / float(den), 1)
+
+
+def fmt_clock_span(sec: float | int | None, *, day_total: bool = False) -> str:
+    """Saat satırı dk/sn. Gün toplamı ve 60 dk üstü: '2 sa 21 dk', saniye yok.
+
+    Gün toplamında saniye yuvarlanmaz, atılır.
+    """
+    if sec is None:
+        return "—"
+    try:
+        total = int(round(float(sec)))
+    except (TypeError, ValueError):
+        return "—"
+    if total < 0:
+        total = 0
+    if day_total or total > 60 * 60:
+        minutes = total // 60
+        hours, mins = divmod(minutes, 60)
+        if hours <= 0:
+            return f"{mins} dk"
+        if mins == 0:
+            return f"{hours} sa"
+        return f"{hours} sa {mins} dk"
+    return fmt_duration(total)
+
+
+def fmt_meet_minutes(
+    minutes: float | int | None, *, day_total: bool = False
+) -> str:
+    """Planlanan toplantı dakikası. Sıfır '0 dk'."""
+    if minutes is None:
+        return "—"
+    try:
+        value = float(minutes)
+    except (TypeError, ValueError):
+        return "—"
+    if value == 0:
+        return "0 dk"
+    return fmt_clock_span(value * 60.0, day_total=day_total)
 
 
 def fmt_duration(sec: float | int | None) -> str:

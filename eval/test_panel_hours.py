@@ -1,6 +1,6 @@
 """Blok saat kırılımı, payda eşiği, yıl kıyası, cumartesi — DB yok."""
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from pusula.blocks import (
@@ -19,6 +19,7 @@ from pusula.panel_data import (
     RATE_MIN_N,
     SAT_SAAT,
     all_data_window,
+    istanbul_sql,
     per_person_metrics,
     rate_cell,
     sum_hour_rows,
@@ -167,6 +168,10 @@ def test_sum_hour_rows_counts_and_pooled_rates() -> None:
     assert total["ulasma_orani"] == 50.0
     assert total["katilim_orani"] == 50.0
     assert total["sonuc_girilmedi"] == 0
+    assert total["toplanti_dk"] == 0.0
+    assert total["toplanti_dk_hata"] == 0
+    assert total["iptal_edildi"] == 0
+
 
 
 def test_occupancy_hours_constants() -> None:
@@ -215,3 +220,199 @@ def test_occupancy_pay_no_double_count() -> None:
     assert mesai_avail_dk(0, 1, 1) == 4.75 * 60.0
     assert _cap_doluluk(80.0, detail="ok") == 80.0
     assert _cap_doluluk(140.0, detail="test asim") == 100.0
+
+
+def test_istanbul_sql_wraps_timestamptz_expr() -> None:
+    assert istanbul_sql("e.occurred_at") == (
+        "(e.occurred_at AT TIME ZONE 'Europe/Istanbul')"
+    )
+    assert istanbul_sql("coalesce(closed_at, created_at)") == (
+        "(coalesce(closed_at, created_at) AT TIME ZONE 'Europe/Istanbul')"
+    )
+    assert istanbul_sql("now()") == "(now() AT TIME ZONE 'Europe/Istanbul')"
+
+
+def test_week_window_current_and_past() -> None:
+    from pusula.panel_data import week_window
+
+    today = date(2026, 10, 2)
+    current = week_window(today, today=today)
+    assert current.start == today - timedelta(days=today.weekday())
+    assert current.end == today
+    assert current.start.weekday() == 0
+
+    past_day = date(2026, 9, 16)
+    past = week_window(past_day, today=today)
+    assert past.start == past_day - timedelta(days=past_day.weekday())
+    assert past.end == past.start + timedelta(days=6)
+    assert past.end < today
+
+    sunday = past.start + timedelta(days=6)
+    assert sunday.weekday() == 6
+    from_sunday = week_window(sunday, today=today)
+    assert from_sunday.start == past.start
+    assert from_sunday.end == sunday
+
+
+def test_activity_total_adds_phone_and_meeting_once() -> None:
+    from pusula.panel_data import activity_total_sec
+
+    assert activity_total_sec(600, 30) == 600 + 30 * 60
+    assert activity_total_sec(0, 0) == 0
+    assert activity_total_sec(-5, -2) == 0
+
+
+def test_phone_talk_and_attended_meeting_sql() -> None:
+    from pusula.panel_data import _attended_meeting_sql, _phone_talk_sql
+
+    phone = _phone_talk_sql("e")
+    assert "e.direction = 'outbound'" in phone
+    assert "e.direction = 'inbound'" in phone
+    assert "katildi" not in phone
+    meeting = _attended_meeting_sql("e")
+    assert "katildi" in meeting
+    assert "katilmadi" not in meeting
+    assert "iptal" not in meeting
+
+
+def test_rank_activity_orders_by_combined_duration() -> None:
+    from pusula.panel_data import rank_activity_rows
+
+    rows = rank_activity_rows(
+        [
+            {
+                "rep_id": "a",
+                "temsilci": "Ayşe Kar",
+                "phone_sec": 600,
+                "meet_min": 30,
+            },
+            {
+                "rep_id": "b",
+                "temsilci": "Miray Aksel",
+                "phone_sec": 3600,
+                "meet_min": 0,
+            },
+            {
+                "rep_id": "c",
+                "temsilci": "Beytullah Aras",
+                "phone_sec": 0,
+                "meet_min": 0,
+            },
+        ]
+    )
+    assert [row["temsilci"] for row in rows] == [
+        "Miray Aksel",
+        "Ayşe Kar",
+        "Beytullah Aras",
+    ]
+    assert [row["sira"] for row in rows] == [1, 2, 3]
+    assert rows[0]["total_sec"] == 3600
+    assert rows[1]["total_sec"] == 2400
+    assert rows[2]["total_sec"] == 0
+
+
+def test_rank_tie_breaks_by_name() -> None:
+    from pusula.panel_data import rank_activity_rows
+
+    rows = rank_activity_rows(
+        [
+            {"rep_id": "2", "temsilci": "Serkan", "phone_sec": 100, "meet_min": 0},
+            {"rep_id": "1", "temsilci": "Abdullah", "phone_sec": 100, "meet_min": 0},
+        ]
+    )
+    assert [row["temsilci"] for row in rows] == ["Abdullah", "Serkan"]
+    assert rows[0]["sira"] == 1
+    assert rows[1]["sira"] == 2
+
+
+
+def test_efficiency_comment_skips_thin_average_and_empty_day() -> None:
+    from pusula.panel_data import apply_efficiency_notes, efficiency_comment, rank_activity_rows
+
+    team = {"avg_sec": 300.0, "total_sec": 3600.0}
+    thin = efficiency_comment(
+        {
+            "phone_sec": 80.0,
+            "meet_min": 0.0,
+            "total_sec": 80.0,
+            "talk_n": 2,
+            "meet_n": 0,
+            "avg_sec": 40.0,
+        },
+        team,
+    )
+    assert "veri yetersiz" in thin
+    assert "Görüşme ortalaması" not in thin
+    assert "2 görüşme" in thin
+
+    empty = efficiency_comment(
+        {
+            "phone_sec": 0.0,
+            "meet_min": 0.0,
+            "total_sec": 0.0,
+            "talk_n": 0,
+            "meet_n": 0,
+        },
+        team,
+    )
+    assert empty == "Telefon ve toplantı kaydı yok."
+
+    meeting_only = efficiency_comment(
+        {
+            "phone_sec": 0.0,
+            "meet_min": 30.0,
+            "total_sec": 1800.0,
+            "talk_n": 0,
+            "meet_n": 1,
+        },
+        team,
+    )
+    assert meeting_only == "Telefon görüşmesi yok. Süre toplantıdan geliyor."
+
+    # Eşik tam %20. Ortalama 240 sn, ekip 300 sn.
+    on_edge = efficiency_comment(
+        {
+            "phone_sec": 960.0,
+            "meet_min": 0.0,
+            "total_sec": 960.0,
+            "talk_n": 4,
+            "meet_n": 0,
+            "avg_sec": 240.0,
+        },
+        {"avg_sec": 300.0, "total_sec": 960.0},
+    )
+    assert "Görüşme ortalaması ekibin altında" in on_edge
+    assert "Müşteriyle geçen süre ekibe yakın" in on_edge
+
+    inside = efficiency_comment(
+        {
+            "phone_sec": 1000.0,
+            "meet_min": 0.0,
+            "total_sec": 1000.0,
+            "talk_n": 4,
+            "meet_n": 0,
+            "avg_sec": 250.0,
+        },
+        {"avg_sec": 300.0, "total_sec": 1000.0},
+    )
+    assert "Görüşme ortalaması ekibe yakın" in inside
+    assert "Toplantı yok." in inside
+
+    ranked = apply_efficiency_notes(
+        rank_activity_rows(
+            [
+                {
+                    "rep_id": "z",
+                    "temsilci": "Boş",
+                    "phone_sec": 0,
+                    "meet_min": 0,
+                    "talk_n": 0,
+                    "meet_n": 0,
+                }
+            ]
+        )
+    )
+    assert ranked[0]["yorum"] == "Telefon ve toplantı kaydı yok."
+    assert ranked[0]["avg_sec"] is None
+
+

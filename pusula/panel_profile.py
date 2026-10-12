@@ -22,6 +22,7 @@ from pusula.panel_data import (
     DateWindow,
     _bounds,
     connect,
+    istanbul_sql,
     take_rate,
     weekly_series,
 )
@@ -317,11 +318,9 @@ def _monthly_ops() -> dict[str, dict[datetime, dict[str, Any]]]:
     sql = f"""
         WITH months AS (
             SELECT generate_series(
-                date_trunc(
-                    'month',
-                    (now() AT TIME ZONE 'Europe/Istanbul')
-                ) - interval '5 months',
-                date_trunc('month', (now() AT TIME ZONE 'Europe/Istanbul')),
+                date_trunc('month', {istanbul_sql("now()")})
+                    - interval '5 months',
+                date_trunc('month', {istanbul_sql("now()")}),
                 interval '1 month'
             ) AS month_start
         )
@@ -356,7 +355,7 @@ def _monthly_ops() -> dict[str, dict[datetime, dict[str, Any]]]:
         LEFT JOIN events e
           ON e.org_id = r.org_id AND e.rep_id = r.rep_id
          AND date_trunc(
-               'month', e.occurred_at AT TIME ZONE 'Europe/Istanbul'
+               'month', {istanbul_sql("e.occurred_at")}
              ) = months.month_start
          AND e.occurred_at <= now()
         GROUP BY r.rep_id, months.month_start

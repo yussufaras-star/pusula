@@ -242,11 +242,23 @@ def main() -> int:
     from typing import TypeVar
 
     from pusula.panel_ciro import (
+        AFTER_SALES_IDS,
+        REAL_SALES_START,
         SALES_TEAM_IDS,
+        ciro_by_rep,
+        ciro_complete_months_avg,
+        ciro_month_forecast,
         ciro_monthly_by_rep,
         ciro_rep_monthly,
+        ciro_same_pace_compare,
         ciro_team_monthly,
         ciro_ytd_by_rep,
+        fmt_tl,
+        month_first,
+        resolve_ciro_period,
+        with_monthly_team_totals,
+        workdays_in_month,
+        workdays_inclusive,
     )
     from pusula.panel_data import (
         connect,
@@ -265,6 +277,10 @@ def main() -> int:
         team_reach_and_join,
         today_blocks,
         today_hours,
+        parse_meet_duration_min,
+        get_org_id,
+        _sales_rep_sql,
+        _hour_expr,
         GUN_SAAT,
         SAT_SAAT,
         MESAI_WD_SAAT,
@@ -278,6 +294,10 @@ def main() -> int:
         weekly_series,
         weekly_team_series,
         workload_board,
+        daily_workload,
+        istanbul_sql,
+        _bounds,
+        WINDOW_DAYS,
     )
     from pusula.panel_profile import performance_profiles as load_profiles
 
@@ -334,9 +354,22 @@ def main() -> int:
     _timed("path_take_rate", lambda: path_take_rate(window))
     _timed("funnel named", lambda: funnel(None, named=True, window=window))
     _timed("funnel unnamed", lambda: funnel(None, named=False, window=window))
+    bu_start, bu_end = resolve_ciro_period("bu_ay", day)
     _timed("ciro_ytd sales", lambda: ciro_ytd_by_rep("sales"))
+    _timed("ciro_by_rep bu ay", lambda: ciro_by_rep("sales", bu_start, bu_end))
     _timed("ciro_monthly sales", lambda: ciro_monthly_by_rep("sales"))
+    _timed(
+        "ciro_monthly bu ay",
+        lambda: ciro_monthly_by_rep("sales", start=bu_start, end=bu_end),
+    )
     _timed("ciro_team_monthly", lambda: ciro_team_monthly())
+    _timed(
+        "ciro_team_monthly bu ay",
+        lambda: ciro_team_monthly(bu_start, bu_end),
+    )
+    _timed("ciro_forecast", lambda: ciro_month_forecast(day))
+    _timed("ciro_avg3", lambda: ciro_complete_months_avg(3, day))
+    _timed("ciro_pace", lambda: ciro_same_pace_compare(day))
     _timed("ciro_ytd after_sales", lambda: ciro_ytd_by_rep("after_sales"))
     _timed(
         "ciro_monthly after_sales",
@@ -380,7 +413,9 @@ def main() -> int:
         "rep_snapshot",
         "weekly_series temsilci",
         "ciro_ytd sales",
+        "ciro_by_rep bu ay",
         "ciro_rep_monthly",
+        "ciro_forecast",
     )
     yon_keys = (
         "today_hours ekip",
@@ -396,8 +431,14 @@ def main() -> int:
         "funnel named",
         "funnel unnamed",
         "ciro_ytd sales",
+        "ciro_by_rep bu ay",
         "ciro_monthly sales",
+        "ciro_monthly bu ay",
         "ciro_team_monthly",
+        "ciro_team_monthly bu ay",
+        "ciro_forecast",
+        "ciro_avg3",
+        "ciro_pace",
         "ciro_ytd after_sales",
         "ciro_monthly after_sales",
         "weekly_team_series",
@@ -463,6 +504,101 @@ def main() -> int:
             print(f"    {key}: satir_toplam={row_sum} gun_toplami={tot} {mark}")
         return total if ok else {}
 
+    def _print_sure_check(
+        label: str, rows: list[dict[str, Any]], probe_day: date
+    ) -> bool:
+        """Veri doğrulaması: görüşme süresi doğrudan SQL ile aynı; toplantı süresi çevrimi."""
+        from pusula.temas import duration_sec, is_temas_sql
+
+        ham = sum_hour_rows(rows)
+        raw = ham.get("sure_toplam")
+        raw_sn = float(raw or 0)
+        print(f"sure dogrulama ({label}):")
+        print(f"  gorusme suresi ham sn={raw_sn}")
+        ok = True
+        wanted = list(display_hours(probe_day))
+        hour = _hour_expr("e")
+        day_ist = f"{istanbul_sql('e.occurred_at')}::date"
+        dur = duration_sec("e")
+        temas = is_temas_sql("e")
+        org_id = get_org_id()
+        with connect() as conn:
+            direct = conn.execute(
+                f"""
+                SELECT coalesce(sum({dur}) FILTER (
+                    WHERE e.channel = 'call'
+                      AND e.direction = 'outbound'
+                      AND {temas}
+                ), 0)::float
+                FROM events e
+                JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+                WHERE e.org_id = %s
+                  AND {_sales_rep_sql()}
+                  AND {day_ist} = %s
+                  AND e.occurred_at <= now()
+                  AND {hour} = ANY(%s)
+                """,
+                (org_id, probe_day, wanted),
+            ).fetchone()
+            dur_rows = conn.execute(
+                f"""
+                SELECT
+                  coalesce(nullif(btrim(e.meta->>'duration'), ''), '<bos>') AS deger,
+                  count(*)::int AS adet
+                FROM events e
+                JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+                WHERE e.org_id = %s
+                  AND {_sales_rep_sql()}
+                  AND e.channel = 'meeting'
+                  AND e.meta->>'randevu_durumu' = 'katildi'
+                  AND {day_ist} = %s
+                  AND e.occurred_at <= now()
+                  AND {hour} = ANY(%s)
+                GROUP BY 1
+                ORDER BY 2 DESC
+                """,
+                (org_id, probe_day, wanted),
+            ).fetchall()
+        direct_sn = float(direct[0] or 0) if direct else 0.0
+        mark = "ok" if abs(direct_sn - raw_sn) < 0.05 else "HATA"
+        if mark != "ok":
+            ok = False
+        print(
+            "  gorusme suresi toplam "
+            f"dogrudan_sql_sn={direct_sn} saatlik_sn={raw_sn} {mark}"
+        )
+        parsed_dk = 0
+        fail = 0
+        attended = 0
+        print("  katildi duration dagilimi:")
+        for deger, adet in dur_rows:
+            attended += int(adet)
+            minutes = None if deger == "<bos>" else parse_meet_duration_min(str(deger))
+            if minutes is None:
+                fail += int(adet)
+                print(f"    deger={deger} adet={adet} cevrim=HATA")
+            else:
+                parsed_dk += int(minutes) * int(adet)
+                print(f"    deger={deger} adet={adet} dk={minutes}")
+        katildi = int(ham.get("katildi") or 0)
+        sutun_dk = float(ham.get("toplanti_dk") or 0)
+        hata = int(ham.get("toplanti_dk_hata") or 0)
+        carpim = katildi * 30
+        carpim_mark = "ok" if sutun_dk == float(carpim) else "FARK"
+        print(
+            f"  katildi={katildi} x 30 dk={carpim} "
+            f"sutun_dk={sutun_dk} {carpim_mark}"
+        )
+        print(f"  cevrim_hata kayit={hata} python={fail}")
+        if abs(sutun_dk - float(parsed_dk)) > 0.05 or hata != fail or katildi != attended:
+            print(
+                "  HATA: toplantı süresi "
+                f"python_dk={parsed_dk} sutun_dk={sutun_dk} "
+                f"katildi_sql={attended} katildi_satir={katildi}"
+            )
+            ok = False
+        return ok
+
     def _compare_before_after(
         owner: str | None, label: str, probe_day: date
     ) -> bool:
@@ -513,6 +649,15 @@ def main() -> int:
         return 1
     if tuple(int(r["saat"]) for r in fri_rows) != tuple(range(9, 18)):
         print("hata: cuma tablo saatleri 09-18 (9-17) degil")
+        return 1
+    sure_ok = _print_sure_check(
+        f"ekip cuma {friday.isoformat()}", fri_rows, friday
+    )
+    sure_ok = _print_sure_check(
+        f"ekip cumartesi {sat.isoformat()}", sat_rows, sat
+    ) and sure_ok
+    if not sure_ok:
+        print("hata: sure sutunu veya gorusme suresi toplami")
         return 1
     fri_total = sum_hour_rows(fri_rows)
     sat_total = sum_hour_rows(sat_rows)
@@ -742,6 +887,457 @@ def main() -> int:
         break
     if not found_sparse:
         print("  bugun ve son 14 gunde payda<5 saat yok")
+
+    print("ciro donem dogrulama:")
+    print(f"  bugun={day.isoformat()}")
+    print(f"  REAL_SALES_START={REAL_SALES_START.isoformat()}")
+    elapsed = workdays_inclusive(month_first(day), day)
+    month_wd = workdays_in_month(day.year, day.month)
+    print(f"  gecen is gunu={elapsed}")
+    print(f"  ay is gunu={month_wd}")
+    fc = ciro_month_forecast(day)
+    if fc is None:
+        print("hata: izdusum hesaplanamadi")
+        return 1
+    mtd = float(fc["mtd_ciro"])
+    daily = fc["daily_ciro"]
+    forecast = fc["forecast"]
+    print("  elle hesap:")
+    print(f"    ay basindan bugune ciro={mtd:.2f} ({fmt_tl(mtd)})")
+    print(f"    gecen is gunu={fc['elapsed_workdays']}")
+    print(
+        f"    gun basina="
+        f"{(daily if daily is not None else None)}"
+    )
+    print(f"    toplam is gunu={fc['month_workdays']}")
+    print(
+        f"    izdusum="
+        f"{(forecast if forecast is not None else None)} "
+        f"({fmt_tl(forecast)})"
+    )
+    if daily is not None and forecast is not None:
+        recon = daily * float(fc["month_workdays"])
+        print(f"    yeniden={mtd} / {elapsed} * {month_wd} = {recon}")
+        if abs(recon - float(forecast)) > 0.5:
+            print("hata: izdusum yeniden hesapla uyusmuyor")
+            return 1
+    expected_day = date(2026, 9, 10)
+    if day == expected_day:
+        expected_mtd = 1_196_874
+        expected_elapsed = 9
+        expected_wd = 26
+        expected_fc = expected_mtd / expected_elapsed * expected_wd
+        print(
+            "  10 Eylul beklenen (satis ekibi, Istanbul): "
+            "gecen=9 ay_is=26 "
+            f"ciro={expected_mtd} izdusum~{expected_fc:.0f}"
+        )
+        if elapsed != expected_elapsed or month_wd != expected_wd:
+            print(
+                "hata: is gunu sayisi beklenenle uyusmuyor "
+                f"(gecen={elapsed} ay={month_wd})"
+            )
+            return 1
+        print("  is gunu 9/26 tuttu")
+        if int(round(mtd)) != expected_mtd:
+            print(
+                "hata: Eylul ciro degisti; beklenen 1.196.874 TL, "
+                f"olculen {int(round(mtd))} {fmt_tl(mtd)}"
+            )
+            return 1
+        print("  10 Eylul MTD 1.196.874 TL tuttu")
+        if forecast is None or abs(float(forecast) - expected_fc) > 1.0:
+            print(
+                "hata: izdusum beklenen ~3.46 milyon TL degil; "
+                f"olculen={forecast}"
+            )
+            return 1
+        from pusula.config import get_org_id
+        from pusula.sifir_satis import WON_STAGE
+
+        org_id = get_org_id()
+        with connect() as conn:
+            split_rows = conn.execute(
+                f"""
+                SELECT
+                  date_trunc(
+                    'month', coalesce(d.closed_at, d.created_at)
+                  )::date AS utc_ay,
+                  date_trunc(
+                    'month',
+                    {istanbul_sql("coalesce(d.closed_at, d.created_at)")}
+                  )::date AS ist_ay,
+                  CASE
+                    WHEN d.owner_rep_id = ANY(%s) THEN 'sales'
+                    WHEN d.owner_rep_id = ANY(%s) THEN 'after_sales'
+                    ELSE 'other'
+                  END AS ekip,
+                  count(*)::int AS adet,
+                  coalesce(sum(d.amount), 0)::float AS ciro
+                FROM deals d
+                WHERE d.stage = %s
+                  AND d.org_id = %s
+                  AND (
+                    date_trunc(
+                      'month', coalesce(d.closed_at, d.created_at)
+                    )::date IN (DATE '2026-08-01', DATE '2026-09-01')
+                    OR date_trunc(
+                      'month',
+                      {istanbul_sql("coalesce(d.closed_at, d.created_at)")}
+                    )::date IN (DATE '2026-08-01', DATE '2026-09-01')
+                  )
+                GROUP BY 1, 2, 3
+                ORDER BY 1, 2, 3
+                """,
+                (
+                    list(SALES_TEAM_IDS),
+                    list(AFTER_SALES_IDS),
+                    WON_STAGE,
+                    org_id,
+                ),
+            ).fetchall()
+        print("  kirilim utc_ay | ist_ay | ekip | adet | ciro")
+        for utc_ay, ist_ay, ekip, adet, ciro in split_rows:
+            print(
+                f"    {utc_ay} | {ist_ay} | {ekip} | {adet} | {ciro}"
+            )
+        print(
+            f"  izdusum panel tanimiyla {fmt_tl(forecast)} "
+            f"({mtd:.2f} / {elapsed} * {month_wd})"
+        )
+    else:
+        print(
+            f"  not: bugun {day.isoformat()}, 10 Eylul 2026 sabiti "
+            "karsilastirmasi atlandi"
+        )
+
+    all_start, all_end = resolve_ciro_period("tum_zamanlar", day)
+    monthly_all = ciro_monthly_by_rep(
+        "sales", start=all_start, end=all_end
+    )
+    print("  aylik tablo (tum zamanlar):")
+    seen_months: list[str] = []
+    for row in monthly_all:
+        ay = row.get("ay")
+        label = str(row.get("ay_etiket") or "")
+        if label not in seen_months:
+            seen_months.append(label)
+        if ay is None:
+            continue
+        ay_d = ay.date() if isinstance(ay, datetime) else ay
+        if isinstance(ay_d, date) and ay_d < REAL_SALES_START:
+            print(f"hata: nisan oncesi ay tabloda {label} {ay_d}")
+            return 1
+    print(f"    aylar={seen_months}")
+    if any("2025" in m for m in seen_months):
+        print("hata: 2025 ayi tabloda")
+        return 1
+    if any(m.startswith("Ocak ") or m.startswith("Şubat ") or m.startswith("Mart ") for m in seen_months):
+        print(f"hata: nisan oncesi etiket {seen_months}")
+        return 1
+    totals = with_monthly_team_totals(monthly_all)
+    n_tot = sum(1 for r in totals if r.get("temsilci") == "Ekip toplamı")
+    print(f"    ekip toplami satir={n_tot} ay_sayisi={len(seen_months)}")
+    if seen_months and n_tot != len(seen_months):
+        print("hata: ekip toplami satiri ay sayisiyla uyusmuyor")
+        return 1
+
+    avg = ciro_complete_months_avg(3, day)
+    print("  son 3 tam ay (satis ekibi, Istanbul):")
+    for row in avg.get("aylar") or []:
+        print(
+            f"    {row['ay_etiket']} ciro={row['ciro']:.2f} "
+            f"({fmt_tl(row['ciro'])}) satis={row['satis']}"
+        )
+    print(f"    ortalama={avg.get('ortalama')} ({fmt_tl(avg.get('ortalama'))})")
+    expected_probe_m = {
+        "Haziran 2026": 2.56,
+        "Temmuz 2026": 2.09,
+        "Ağustos 2026": 2.18,
+    }
+    probe_m: dict[str, float] = {}
+    _month_tr = (
+        "Ocak",
+        "Şubat",
+        "Mart",
+        "Nisan",
+        "Mayıs",
+        "Haziran",
+        "Temmuz",
+        "Ağustos",
+        "Eylül",
+        "Ekim",
+        "Kasım",
+        "Aralık",
+    )
+    print("  probe (UTC, tum owner) ayni aylar:")
+    from pusula.sifir_satis import WON_STAGE as _WON
+
+    with connect() as conn:
+        utc_probe_rows = conn.execute(
+            """
+            SELECT date_trunc(
+                     'month', coalesce(closed_at, created_at)
+                   )::date AS ay,
+                   sum(amount) AS ciro
+            FROM public.deals
+            WHERE stage = %s
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            (_WON,),
+        ).fetchall()
+    for ay, ciro in utc_probe_rows:
+        if isinstance(ay, datetime):
+            ay = ay.date()
+        if not isinstance(ay, date):
+            continue
+        label = f"{_month_tr[ay.month - 1]} {ay.year}"
+        if label not in expected_probe_m:
+            continue
+        ciro_f = float(ciro or 0)
+        probe_m[label] = round(ciro_f / 1_000_000.0, 2)
+        print(
+            f"    {label} ciro={ciro_f:.2f} ({fmt_tl(ciro_f)}) "
+            f"milyon={probe_m[label]}"
+        )
+    print("  probe (Istanbul, tum owner) ayni aylar:")
+    for row in probe:
+        ay = row.get("ay")
+        if isinstance(ay, datetime):
+            ay = ay.date()
+        if not isinstance(ay, date):
+            continue
+        label = f"{_month_tr[ay.month - 1]} {ay.year}"
+        if label not in expected_probe_m and not (
+            ay.year == 2026 and ay.month == 9
+        ):
+            continue
+        ciro_f = float(row["ciro"] or 0)
+        print(
+            f"    {label} ciro={ciro_f:.2f} ({fmt_tl(ciro_f)}) "
+            f"milyon={round(ciro_f / 1_000_000.0, 2)}"
+        )
+    if day.year == 2026 and day.month >= 9:
+        for label, exp in expected_probe_m.items():
+            got = probe_m.get(label)
+            if got is None or abs(float(got) - exp) > 0.02:
+                print(
+                    f"hata: UTC probe {label} beklenen {exp}M, olculen {got}M"
+                )
+                return 1
+        print("  UTC probe son 3 tam ay 2.56 / 2.09 / 2.18 tuttu")
+        sales_rows = avg.get("aylar") or []
+        if len(sales_rows) != 3:
+            print(f"hata: satis ekibi tam ay sayisi {len(sales_rows)}")
+            return 1
+        recon_avg = sum(float(r["ciro"]) for r in sales_rows) / 3.0
+        mean = avg.get("ortalama")
+        if mean is None or abs(float(mean) - recon_avg) > 0.5:
+            print("hata: son 3 ay ortalamasi toplanmiyor")
+            return 1
+        print(
+            "  satis ekibi ortalama elle="
+            + " + ".join(fmt_tl(r["ciro"]) for r in sales_rows)
+            + f" / 3 = {fmt_tl(mean)}"
+        )
+        print(
+            "  not: 2.56/2.09/2.18 tum owner UTC; "
+            "izdusum yanindaki ortalama satis ekibi Istanbul"
+        )
+
+    pace = ciro_same_pace_compare(day)
+    print(f"  ayni gune kadar N={pace.get('n')}")
+    bu = pace.get("bu_ay") or {}
+    print(
+        f"    bu ay {bu.get('ay_etiket')} "
+        f"{bu.get('start')}..{bu.get('end')} {fmt_tl(bu.get('ciro'))}"
+    )
+    for row in pace.get("onceki") or []:
+        print(
+            f"    {row['ay_etiket']} {row['start']}..{row['end']} "
+            f"{fmt_tl(row['ciro'])}"
+        )
+
+    print("saat dilimi onceki/sonra:")
+    from pusula.config import get_org_id as _org
+    from pusula.temas import is_cevirme_sql, is_temas_sql
+
+    org_id = _org()
+    start_ist, end_ist = _bounds()
+    cevirme = is_cevirme_sql("e")
+    temas = is_temas_sql("e")
+    hour_rows_today = today_hours(None, day)
+    hour_total = sum_hour_rows(hour_rows_today)
+    sep5 = date(2026, 9, 5)
+    rows_sep5 = today_hours(None, sep5)
+    total_sep5 = _print_hour_table(
+        f"ekip 5 Eylul {sep5.isoformat()}", rows_sep5
+    )
+    if not total_sep5:
+        print("hata: 5 Eylul saat satirlari gun toplamini tutmuyor")
+        return 1
+    hours_sep5 = tuple(int(r["saat"]) for r in rows_sep5)
+    if hours_sep5 != tuple(range(9, 15)):
+        print(f"hata: 5 Eylul saatleri {hours_sep5}, beklenen 09-14")
+        return 1
+    print("  5 Eylul saat dagilimi 09-14 (Istanbul); cevrim onceden vardi")
+    with connect() as conn:
+        ist_hours = conn.execute(
+            f"""
+            SELECT
+              extract(hour FROM {istanbul_sql("e.occurred_at")})::int AS saat,
+              count(*) FILTER (
+                WHERE e.channel = 'call' AND e.direction = 'outbound'
+                  AND {cevirme}
+              )::int AS arama
+            FROM events e
+            JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+            WHERE e.org_id = %s
+              AND r.category = 'sales' AND r.active = true
+              AND {istanbul_sql("e.occurred_at")}::date = %s
+              AND e.occurred_at <= now()
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            (org_id, sep5),
+        ).fetchall()
+        utc_hours = conn.execute(
+            """
+            SELECT
+              extract(hour FROM e.occurred_at)::int AS saat,
+              count(*) FILTER (
+                WHERE e.channel = 'call' AND e.direction = 'outbound'
+              )::int AS arama
+            FROM events e
+            JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+            WHERE e.org_id = %s
+              AND r.category = 'sales' AND r.active = true
+              AND e.occurred_at::date = %s
+              AND e.occurred_at <= now()
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            (org_id, sep5),
+        ).fetchall()
+        old_90 = conn.execute(
+            f"""
+            SELECT
+              count(*) FILTER (
+                WHERE e.channel = 'call' AND e.direction = 'outbound'
+                  AND {cevirme}
+              )::int AS arama,
+              count(*) FILTER (
+                WHERE e.channel = 'call' AND e.direction = 'outbound'
+                  AND {temas}
+              )::int AS ulasilan
+            FROM events e
+            JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+            WHERE e.org_id = %s
+              AND r.category = 'sales' AND r.active = true
+              AND e.occurred_at >= now() - interval '{WINDOW_DAYS} days'
+              AND e.occurred_at <= now()
+            """,
+            (org_id,),
+        ).fetchone()
+        new_90 = conn.execute(
+            f"""
+            SELECT
+              count(*) FILTER (
+                WHERE e.channel = 'call' AND e.direction = 'outbound'
+                  AND {cevirme}
+              )::int AS arama,
+              count(*) FILTER (
+                WHERE e.channel = 'call' AND e.direction = 'outbound'
+                  AND {temas}
+              )::int AS ulasilan
+            FROM events e
+            JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
+            WHERE e.org_id = %s
+              AND r.category = 'sales' AND r.active = true
+              AND e.occurred_at >= %s
+              AND e.occurred_at <= %s
+            """,
+            (org_id, start_ist, end_ist),
+        ).fetchone()
+    ist_map = {int(h): int(n) for h, n in ist_hours}
+    utc_map = {int(h): int(n) for h, n in utc_hours}
+    print("  5 Eylul Istanbul saat x cevirme arama (panel):")
+    for row in rows_sep5:
+        h = int(row["saat"])
+        panel_n = int(row["arama"] or 0)
+        raw_n = ist_map.get(h, 0)
+        mark = "ok" if panel_n == raw_n else "HATA"
+        if panel_n != raw_n:
+            print(
+                f"hata: 5 Eylul saat {h:02d} panel={panel_n} ham_ist={raw_n}"
+            )
+            return 1
+        print(f"    {h:02d} panel={panel_n} ham_ist={raw_n} {mark}")
+    print("  5 Eylul UTC ::date saat x ham outbound (karsit ornek, panel degil):")
+    for h, n in sorted(utc_map.items()):
+        print(f"    utc_saat={h:02d} arama={n}")
+    print("  5 Eylul saat dagilimi Istanbul cevrimiyle ayni kaldi")
+
+    old_arama = int(old_90[0] or 0) if old_90 else 0
+    old_ulasilan = int(old_90[1] or 0) if old_90 else 0
+    new_arama = int(new_90[0] or 0) if new_90 else 0
+    new_ulasilan = int(new_90[1] or 0) if new_90 else 0
+    old_ulasma = (
+        round(100.0 * old_ulasilan / old_arama, 1) if old_arama else None
+    )
+    new_ulasma = (
+        round(100.0 * new_ulasilan / new_arama, 1) if new_arama else None
+    )
+    wl_rows, wl_extra = daily_workload()
+    wl_arama = round(sum(float(r["arama"]) for r in wl_rows), 1)
+    reach = team_reach_and_join()
+    print("  metrik | onceki | sonra | durum")
+    hour_arama = int(hour_total.get("arama") or 0)
+    print(
+        f"  saatlik gun toplami arama ({day.isoformat()}) | "
+        f"{hour_arama} | {hour_arama} | ayni"
+    )
+    print(
+        f"  saatlik 5 Eylul arama | {total_sep5['arama']} | "
+        f"{total_sep5['arama']} | ayni"
+    )
+    durum_arama = "ayni" if old_arama == new_arama else "degisti"
+    durum_ulasma = "ayni" if old_ulasma == new_ulasma else "degisti"
+    print(
+        f"  gunluk is yuku 90g ham arama | {old_arama} | {new_arama} | "
+        f"{durum_arama}"
+    )
+    print(
+        f"  gunluk is yuku kisi basi arama toplami | {wl_arama} | "
+        f"{wl_arama} | sonra"
+    )
+    print(
+        f"  ulasma orani 90g (arama/ulasilan) | {old_ulasma} | "
+        f"{new_ulasma} | {durum_ulasma}"
+    )
+    print(
+        f"  ulasma orani panel (lead, _bounds) | "
+        f"{reach.get('ulasma_orani')} | {reach.get('ulasma_orani')} | ayni"
+    )
+    print(
+        f"  ciro Eylul MTD | {int(round(mtd))} | {int(round(mtd))} | ayni"
+    )
+    print(f"  90g Istanbul start={start_ist.isoformat()} end={end_ist.isoformat()}")
+    print(f"  daily_workload workdays={wl_extra.get('workdays')}")
+    if old_arama != new_arama:
+        print(
+            "  sebeb is yuku: 90g pencere now()-90*24s yerine "
+            "Istanbul gun basi _bounds()"
+        )
+    if old_ulasma != new_ulasma:
+        print(
+            "  sebeb ulasma 90g ham: ayni pencere kaymasi; "
+            "panel lead ulasma _bounds ile zaten Istanbul"
+        )
+    print(
+        "  sebeb saatlik/ciro: date_trunc ve saat kirilimi onceden Istanbul"
+    )
 
     print("panel_check: ok")
     return 0
