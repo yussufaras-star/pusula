@@ -122,3 +122,16 @@ def test_leave_days_have_no_timeline() -> None:
         Span.day(MONDAY), at(23), rep_ids=["r1", "r2"], intervals=worked, leaves={("r2", MONDAY)}
     )
     assert list(out) == [("r1", MONDAY)]
+
+
+def test_meeting_part_of_busy_time_is_shown_separately_but_counts_as_busy() -> None:
+    from pusula.occupancy import aggregate
+
+    busy = [(at(9), at(12)), (at(10), at(10, 40)), (at(13, 30), at(18))]
+    t = day_timeline(busy, MONDAY, at(23), meetings=[(at(10), at(10, 40))])
+    assert t.total("toplanti") == pytest.approx(40)
+    assert t.total("dolu") == pytest.approx(410)
+    rows = aggregate({("r1", MONDAY): t}, "rep")
+    assert rows[0]["dolu_dk"] == pytest.approx(450)
+    assert rows[0]["toplanti_dk"] == pytest.approx(40)
+    assert all(g["kind"] != "toplanti" for g in gaps_report(t))

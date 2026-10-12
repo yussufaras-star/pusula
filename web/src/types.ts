@@ -24,6 +24,7 @@ export interface Kpis {
   mola_dk: number;
   kayip_dk: number;
   girilmemis_dk: number;
+  toplanti_dk: number;
   mesai_dk: number;
   doluluk: number | null;
   n_reps: number;
@@ -40,7 +41,7 @@ export type RepStatus =
   | "gecmis"
   | "izinli";
 
-export type SegmentKind = "dolu" | "mola" | "kayip" | "girilmemis";
+export type SegmentKind = "dolu" | "toplanti" | "mola" | "kayip" | "girilmemis";
 
 export interface Segment {
   start: string;
