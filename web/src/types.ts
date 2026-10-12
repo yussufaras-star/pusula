@@ -90,6 +90,7 @@ export interface LivePayload {
   hours: HourRow[];
   reps: RepCard[];
   idle_thresholds: { warn: number; alert: number };
+  meetings?: Meetings;
 }
 
 export interface Me {
@@ -129,4 +130,44 @@ export interface ComparePayload {
 export interface RepRef {
   rep_id: string;
   full_name: string;
+}
+
+// pusula/meetings.py classify / summarize çıktısı.
+export type MeetingState = "geldi" | "gelmedi" | "bekleniyor" | "suruyor" | "bilinmiyor" | "iptal";
+
+export interface MeetingItem {
+  rep_id: string;
+  start: string;
+  planned_min: number;
+  customer: string | null;
+  state: MeetingState;
+  source: "zoho_meeting" | "crm" | "yok";
+  crm_status: string;
+  result_entered: boolean;
+  mismatch: boolean;
+  minutes: number;
+  call_after: string | null;
+  wa_after: string | null;
+  followed_up: boolean;
+}
+
+export interface MeetingSummary {
+  planlanan: number;
+  gelen: number;
+  gelmeyen: number;
+  bilinmiyor: number;
+  bekleyen: number;
+  iptal: number;
+  sonuc_girilen: number;
+  sonuc_girilmemis: number;
+  toplam_dk: number;
+  aranan: number;
+  aranmayan: number;
+  uyumsuz: number;
+  katilim_orani: number | null;
+}
+
+export interface Meetings {
+  items: MeetingItem[];
+  by_rep: Record<string, MeetingSummary>;
 }

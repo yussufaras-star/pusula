@@ -1482,3 +1482,72 @@ table.spec {
 .status .dot.izinli {
   background: var(--axis);
 }
+
+/* --- toplantılar --------------------------------------------------------- */
+
+.meet-board tr.clickable {
+  cursor: pointer;
+}
+
+.meet-board .caret {
+  display: inline-block;
+  width: 12px;
+  color: var(--muted);
+}
+
+.meet-board tr.detail > td {
+  background: var(--surface-2);
+  padding: 8px 12px 12px;
+}
+
+.warn-text {
+  color: var(--critical-ink);
+}
+
+table.meet-list {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.meet-list th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 6px 8px;
+}
+
+.meet-list td {
+  padding: 6px 8px;
+  border-top: 1px solid var(--grid);
+}
+
+.meet-list .num {
+  text-align: right;
+}
+
+.mstate {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--surface);
+  color: var(--ink-2);
+}
+
+.mstate.geldi {
+  background: var(--good-wash);
+  color: var(--good-ink);
+}
+
+.mstate.gelmedi {
+  background: var(--critical-wash);
+  color: var(--critical-ink);
+}
+
+.mstate.suruyor {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
