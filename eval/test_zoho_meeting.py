@@ -2,7 +2,9 @@
 
 from datetime import datetime, timezone
 
-from pusula.ingest.zoho_meeting import summarize
+from datetime import timedelta
+
+from pusula.ingest.zoho_meeting import busy_interval, summarize
 from pusula.occupancy import _presence_sql
 
 SESSION = {
@@ -68,3 +70,45 @@ def test_presence_query_reuses_rep_and_weekday_filters() -> None:
     assert "ms.rep_id = ANY(%s)" in sql
     assert "ms.presenter_join AT TIME ZONE" in sql
     assert "e." not in sql.replace("table", "")
+
+
+T0 = datetime(2026, 10, 12, 11, 0, tzinfo=timezone.utc)
+NOW = T0 + timedelta(hours=5)
+
+
+def m(minutes: float) -> datetime:
+    return T0 + timedelta(minutes=minutes)
+
+
+def test_customer_meeting_counts_together_time_plus_wait() -> None:
+    # Temsilci 0. dk girdi, müşteri 15'te geldi, 40'ta çıktı, temsilci 76'ya kadar kaldı.
+    busy = busy_interval(m(0), m(76), m(15), m(40), 1500, NOW)
+    assert busy == (m(5), m(40))
+
+
+def test_short_wait_is_fully_busy() -> None:
+    busy = busy_interval(m(0), m(30), m(3), m(28), 1500, NOW)
+    assert busy == (m(0), m(28))
+
+
+def test_no_show_counts_only_ten_minutes() -> None:
+    assert busy_interval(m(0), m(45), None, None, 0, NOW) == (m(0), m(10))
+    assert busy_interval(m(0), m(4), None, None, 0, NOW) == (m(0), m(4))
+
+
+def test_customer_after_presenter_left_is_no_show() -> None:
+    assert busy_interval(m(0), m(20), m(30), m(40), 600, NOW) == (m(0), m(10))
+
+
+def test_ongoing_meeting_runs_until_now() -> None:
+    now = m(25)
+    assert busy_interval(m(0), None, m(5), None, 600, now) == (m(0), m(25))
+
+
+def test_customer_interval_is_stored() -> None:
+    parts = [
+        {"role": "presenter", "joinTime": ms(m(0)), "leaveTime": ms(m(40))},
+        {"role": "participant", "joinTime": ms(m(5)), "leaveTime": ms(m(35)), "duration": 1800000},
+    ]
+    row = summarize(SESSION, parts)
+    assert (row["customer_join"], row["customer_leave"]) == (m(5), m(35))
