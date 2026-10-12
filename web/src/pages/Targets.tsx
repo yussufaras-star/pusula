@@ -16,9 +16,8 @@ function toDraft(values: TargetValues): Record<TargetMetric, string> {
   >;
 }
 
-function avgLabel(metric: TargetMetric, v: number | null): string {
-  if (v === null) return "veri yok";
-  return metric === "doluluk" ? `ort. ${pct(v)}` : `ort. ${num(v)}`;
+function fmt(metric: TargetMetric, v: number): string {
+  return metric === "doluluk" ? pct(v) : num(v);
 }
 
 export function TargetsPage() {
@@ -68,6 +67,16 @@ export function TargetsPage() {
     setDraft((d) => ({ ...d, [repId]: { ...d[repId], [metric]: value } }));
   }
 
+  /** Boş hücrede gerçekte uygulanacak değer: ekip varsayılanı → standart → ortalama. */
+  function fallback(metric: TargetMetric, average: TargetValues, isDefault: boolean): string {
+    const team = draft[DEFAULT_ID]?.[metric]?.trim();
+    if (!isDefault && team) return `ekip ${team}`;
+    const std = data?.standard[metric];
+    if (std !== undefined) return `std. ${fmt(metric, std)}`;
+    const avg = average[metric];
+    return avg === null ? "veri yok" : `ort. ${fmt(metric, avg)}`;
+  }
+
   function row(repId: string, name: string, average: TargetValues, isDefault = false) {
     return (
       <tr key={repId} className={isDefault ? "target-default" : undefined}>
@@ -81,7 +90,7 @@ export function TargetsPage() {
               className="target-input"
               inputMode="decimal"
               value={draft[repId]?.[m] ?? ""}
-              placeholder={avgLabel(m, average[m])}
+              placeholder={fallback(m, average, isDefault)}
               onChange={(e) => set(repId, m, e.target.value)}
               aria-label={`${name} ${data?.metrics[m]} hedefi`}
             />
@@ -97,8 +106,8 @@ export function TargetsPage() {
         <div>
           <h1>Günlük hedefler</h1>
           <div className="sub">
-            Hafta içi tam gün için girilir; cumartesi mesai süresi oranında (6/9) uygulanır. Boş hücre: önce ekip
-            varsayılanı, o da boşsa temsilcinin son 90 günlük ortalaması.
+            Hafta içi gün için girilir. Boş hücre: önce ekip varsayılanı, sonra standart, o da yoksa son 90 günlük
+            ortalama. Cumartesi tamamı toplantı: arama hedefi yok, toplantı hedefi 6/4 oranında büyür.
           </div>
         </div>
         <div className="controls">
@@ -115,7 +124,7 @@ export function TargetsPage() {
       <section className="card">
         <div className="card-head">
           <h2>Temsilci hedefleri</h2>
-          <span className="hint">gri yazı: geçmiş ortalama · doluluk yüzde olarak</span>
+          <span className="hint">gri yazı: boş bırakınca geçerli olan · doluluk yüzde olarak</span>
         </div>
         <div className="card-body">
           {!data ? (
@@ -145,10 +154,14 @@ export function TargetsPage() {
       </section>
 
       <section className="card card-body muted target-rules">
+        <b className="ink-2">Standart arama hedefi.</b> Arama blokları (09-11, 14-17) 300 dk, günlük mola 75 dk düşülür;
+        görüşme başına 5 dk bantla 225 / 5 = 45 arama. Arama ve ulaşılan hedefi yalnız arama bloklarında, toplantı hedefi
+        yalnız toplantı bloklarında (11-14, 17-18) birikir; 11-14 arasında arama beklentisi sabahki seviyede sabit kalır.
+        <br />
+        <br />
         <b className="ink-2">Dürtme kuralı.</b> Saatlik veri güncellemesinden sonra, 10:00'dan mesai bitimine 30 dk kalana
         kadar: bir başlıkta "bu saate kadar" beklenenin %80'inin altında kalan temsilciye Cliq'ten mesaj gider (doluluk
-        için hedefin 10 puan altı). Aynı kişiye en sık 2 saatte bir, günde en fazla 3 mesaj. Beklenen değer temsilcinin
-        kendi saatlik temposuna göre bölünür; sabah az arayan birinden 10:00'da günlük hedefin dokuzda biri beklenmez.
+        için hedefin 10 puan altı). Aynı kişiye en sık 2 saatte bir, günde en fazla 3 mesaj.
       </section>
     </>
   );

@@ -46,7 +46,7 @@ def test_blocks_for_weekday_saturday_sunday() -> None:
     assert blocks_for(friday) == PLANNED_BLOCKS
     assert blocks_for(saturday) == (SATURDAY_BLOCK,)
     assert blocks_for(sunday) == ()
-    assert SATURDAY_BLOCK.kind == "mixed"
+    assert SATURDAY_BLOCK.kind == "meeting"
     assert "arama" not in SATURDAY_BLOCK.label
     assert "toplanti" not in SATURDAY_BLOCK.label
 

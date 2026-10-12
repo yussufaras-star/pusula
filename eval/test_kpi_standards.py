@@ -84,10 +84,10 @@ def test_meeting_rates_require_minimum_sample() -> None:
     assert alerts == []
 
 
-def test_saturday_mixed_block_checks_calls_and_meetings() -> None:
+def test_saturday_is_meeting_block_and_mixed_hours_check_both() -> None:
     saturday = datetime(2026, 10, 17).date()
     weekday = datetime(2026, 10, 12).date()
-    assert hour_kinds_for(saturday, 14) == (True, True)
+    assert hour_kinds_for(saturday, 14) == (False, True)  # cumartesi tamamı toplantı
     assert hour_kinds_for(weekday, 11) == (False, True)
     assert hour_kinds_for(weekday, 9) == (True, False)
 

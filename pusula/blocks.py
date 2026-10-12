@@ -1,7 +1,7 @@
 """Gün içi zaman blokları.
 
 Hafta içi: 09-11 arama, 11-14 toplantı, 14-17 arama, 17-18 toplantı.
-Cumartesi: tek karışık blok 09-15. Pazar yok.
+Cumartesi: 09-15 tamamı toplantı. Pazar yok.
 Ingest saat başı (dakika 07) çalışır; blok bitişine bağlı değildir.
 """
 
@@ -37,7 +37,7 @@ PLANNED_BLOCKS: tuple[DayBlock, ...] = (
 )
 
 SATURDAY_BLOCK = DayBlock(
-    "cumartesi_09_15", "09-15", "mixed", 9, 15, 15, 7
+    "cumartesi_09_15", "09-15", "meeting", 9, 15, 15, 7
 )
 
 BLOK_DISI = DayBlock("blok_disi", "blok dışı", "other", 0, 0, 0, 0)
@@ -55,7 +55,7 @@ def to_istanbul(value: datetime) -> datetime:
 
 
 def blocks_for(day: date) -> tuple[DayBlock, ...]:
-    """Seçilen günün planlı blokları. Pazar boş, cumartesi tek karışık."""
+    """Seçilen günün planlı blokları. Pazar boş, cumartesi tek toplantı bloğu."""
     weekday = day.weekday()
     if weekday == 5:
         return (SATURDAY_BLOCK,)

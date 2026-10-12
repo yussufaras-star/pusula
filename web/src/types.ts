@@ -176,7 +176,7 @@ export interface Meetings {
 
 // pusula/targets.py — günlük hedef ve "bu saate kadar" payı.
 export type TargetMetric = "arama" | "ulasilan" | "randevu" | "doluluk";
-export type TargetSource = "kisi" | "ekip" | "ortalama" | "hedef";
+export type TargetSource = "kisi" | "ekip" | "standart" | "ortalama" | "hedef";
 
 export interface TargetItem {
   daily: number;
@@ -191,6 +191,7 @@ export type TargetValues = Record<TargetMetric, number | null>;
 
 export interface TargetsPayload {
   metrics: Record<TargetMetric, string>;
+  standard: Partial<Record<TargetMetric, number>>;
   default: { values: TargetValues; average: TargetValues };
   reps: { rep_id: string; name: string; values: TargetValues; average: TargetValues }[];
 }

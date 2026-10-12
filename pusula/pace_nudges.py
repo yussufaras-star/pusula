@@ -166,7 +166,9 @@ def ai_facts(card: dict[str, Any], gaps: list[dict[str, Any]], local: datetime) 
                 "gerceklesen": g["actual"],
                 "bu_saate_kadar_beklenen": g["by_now"],
                 "gunluk_hedef": g["daily"],
-                "hedef_kaynagi": "gecmis_ortalama" if g["source"] == "ortalama" else "yonetici",
+                "hedef_kaynagi": {"ortalama": "gecmis_ortalama", "standart": "standart"}.get(
+                    g["source"], "yonetici"
+                ),
             }
             for g in gaps
         ],
