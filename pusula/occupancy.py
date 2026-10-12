@@ -5,8 +5,9 @@ damgalarından bir şeride dökülür:
 
 - Arama: başlangıçtan 1 dk önce (BCW) → bitişten 1 dk sonra (ACW).
   Giden her deneme ve cevaplanan gelen arama. Planlanan / ileri tarihli yok.
-- Toplantı: Zoho Meeting'de temsilcinin gerçek katılım aralığı
-  (meeting_sessions). Katılımı görünmeyen randevuda Bookings planı:
+- Toplantı: Zoho Meeting'de müşteriyle birlikte geçen süre + en fazla
+  10 dk bekleme; boş oda dolu değil (meeting_sessions, busy_interval).
+  Katılımı görünmeyen randevuda Bookings planı:
   katılınan veya şu an süren randevu dolu sayılır.
 - WhatsApp: giden mesaj başına gönderimden önceki 1 dk.
 
@@ -31,6 +32,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from pusula.config import get_org_id
+from pusula.ingest.zoho_meeting import busy_interval
 from pusula.leaves import load_leaves
 from pusula.metrics import TZ, Group, Span, shift_bounds
 from pusula.panel_data import MOLA_SAAT, _meeting_duration_min_sql, connect
@@ -299,14 +301,19 @@ def fetch_intervals(
     with connect() as conn:
         rows = conn.execute(sql, params).fetchall()
         if has_sessions:
-            rows += conn.execute(_presence_sql(extra), params).fetchall()
+            for rep_id, day, pj, pl, cj, cl, csec, db_now in conn.execute(
+                _presence_sql(extra), params
+            ).fetchall():
+                busy = busy_interval(pj, pl, cj, cl, float(csec or 0), db_now)
+                if busy is not None:
+                    rows.append((rep_id, day, busy[0], busy[1], "dolu"))
     for rep_id, day, start, end, kind in rows:
         out[(str(rep_id), day)].append((start.astimezone(TZ), end.astimezone(TZ), kind))
     return dict(out)
 
 
 def _presence_sql(extra: str) -> str:
-    """Zoho Meeting'de temsilcinin gerçek katılım aralıkları (dolu).
+    """Zoho Meeting katılım satırları; dolu aralık busy_interval ile çıkar.
 
     extra, events sorgusundaki rep / gün tipi filtresi; aynı parametrelerle
     çalışsın diye e.occurred_at yerine katılım anı kullanılır.
@@ -317,9 +324,8 @@ def _presence_sql(extra: str) -> str:
         SELECT
           ms.rep_id,
           ({joined} AT TIME ZONE 'Europe/Istanbul')::date,
-          {joined},
-          least(coalesce(ms.presenter_leave, now()), now()),
-          'dolu'
+          {joined}, ms.presenter_leave, ms.customer_join, ms.customer_leave,
+          ms.customer_sec, now()
         FROM meeting_sessions ms
         JOIN reps r ON r.org_id = ms.org_id AND r.rep_id = ms.rep_id
         WHERE ms.org_id = %s

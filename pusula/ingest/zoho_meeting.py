@@ -2,7 +2,8 @@
 
 Bookings randevunun planını verir (ör. 30 dk). Zoho Meeting katılımcı
 raporu gerçek giriş-çıkışı verir: sunucu (temsilci) ne zaman girdi, ne
-zaman çıktı, müşteri katıldı mı. Doluluk bu süreyi kullanır.
+zaman çıktı, müşteri ne zaman katıldı. Doluluk busy_interval kuralıyla
+sayar: müşteriyle birlikte geçen süre + en fazla 10 dk bekleme.
 
 Yetki ayrı bir refresh token'dadır (ZOHO_MEETING_REFRESH_TOKEN; kapsam
 ZohoMeeting.meeting.READ + ZohoMeeting.manageOrg.READ). CRM token'ına
@@ -37,6 +38,10 @@ PAGE = 100
 CUSTOMER_MIN_SEC = 60
 # Bitişinden bu kadar sonra çekilmiş rapor kesindir; yeniden çekilmez.
 FINAL_AFTER = timedelta(minutes=30)
+# Müşteri gelmeden önce / hiç gelmezse temsilcinin dolu sayılan bekleme süresi.
+WAIT_MIN = 10
+# Satır biçimi sürümü: 2 = müşteri giriş-çıkışı da var. Eski satırlar yeniden çekilir.
+RULE_V = 2
 # Art arda bu kadar rapor alınamazsa (Zoho kesintisi) çalışma durur.
 MAX_FAIL_STREAK = 10
 _TIMEOUT = httpx.Timeout(30.0, connect=10.0)
@@ -60,6 +65,9 @@ CREATE TABLE IF NOT EXISTS meeting_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_meeting_sessions_rep_time
     ON meeting_sessions (org_id, rep_id, planned_start);
+ALTER TABLE meeting_sessions ADD COLUMN IF NOT EXISTS customer_join timestamptz;
+ALTER TABLE meeting_sessions ADD COLUMN IF NOT EXISTS customer_leave timestamptz;
+ALTER TABLE meeting_sessions ADD COLUMN IF NOT EXISTS rule_v int NOT NULL DEFAULT 1;
 """
 
 _lock = threading.Lock()
@@ -124,6 +132,9 @@ def summarize(session: dict[str, Any], participants: list[dict[str, Any]]) -> di
     leaves: list[datetime] = []
     open_presence = False
     customer_sec = 0.0
+    c_joins: list[datetime] = []
+    c_leaves: list[datetime] = []
+    c_open = False
     for part in participants:
         email = str(part.get("email") or "").strip().lower()
         is_presenter = part.get("role") == "presenter" or (presenter and email == presenter)
@@ -137,6 +148,13 @@ def summarize(session: dict[str, Any], participants: list[dict[str, Any]]) -> di
                     open_presence = True
         else:
             customer_sec += max(float(part.get("duration") or 0) / 1000.0, 0.0)
+            join, leave = _ms(part.get("joinTime")), _ms(part.get("leaveTime"))
+            if join:
+                c_joins.append(join)
+                if leave and leave > join:
+                    c_leaves.append(leave)
+                else:
+                    c_open = True
     return {
         "meeting_key": str(session.get("meetingKey")),
         "presenter_email": presenter or None,
@@ -147,8 +165,37 @@ def summarize(session: dict[str, Any], participants: list[dict[str, Any]]) -> di
         # Süren katılımda çıkış yok: okuyucu şimdiye kadar sayar.
         "presenter_leave": None if open_presence or not leaves else max(leaves),
         "customer_sec": round(customer_sec, 1),
+        "customer_join": min(c_joins) if c_joins else None,
+        "customer_leave": None if c_open or not c_leaves else max(c_leaves),
         "participants": len(participants),
     }
+
+
+def busy_interval(
+    presenter_join: datetime | None,
+    presenter_leave: datetime | None,
+    customer_join: datetime | None,
+    customer_leave: datetime | None,
+    customer_sec: float,
+    now: datetime,
+) -> tuple[datetime, datetime] | None:
+    """Toplantının dolu sayılan kısmı (yönetici kararı, 12 Ekim).
+
+    Müşteri geldiyse: birlikte geçen süre + müşteriden önce en fazla 10 dk
+    bekleme. Gelmediyse (veya örtüşme yoksa): odada en fazla 10 dk bekleme.
+    Boş odada geçen süre dolu sayılmaz.
+    """
+    if presenter_join is None:
+        return None
+    p_end = min(presenter_leave or now, now)
+    wait = timedelta(minutes=WAIT_MIN)
+    if customer_join is not None and customer_sec >= CUSTOMER_MIN_SEC:
+        start = max(presenter_join, customer_join - wait)
+        end = min(p_end, customer_leave or now)
+        if end > max(presenter_join, customer_join):
+            return start, end
+    end = min(p_end, presenter_join + wait)
+    return (presenter_join, end) if end > presenter_join else None
 
 
 def _zsoid() -> str:
@@ -188,10 +235,11 @@ def _final_keys(conn: Any, keys: list[str]) -> set[str]:
         SELECT meeting_key FROM meeting_sessions
         WHERE org_id = %s AND meeting_key = ANY(%s)
           AND presenter_leave IS NOT NULL
+          AND rule_v >= %s
           AND fetched_at > greatest(presenter_leave, planned_start
                 + make_interval(mins => coalesce(planned_min, 0)::int)) + %s
         """,
-        (get_org_id(), keys, FINAL_AFTER),
+        (get_org_id(), keys, RULE_V, FINAL_AFTER),
     ).fetchall()
     return {str(r[0]) for r in rows}
 
@@ -248,8 +296,8 @@ def sync_meetings(
                 INSERT INTO meeting_sessions (
                     org_id, meeting_key, presenter_email, rep_id, topic, planned_start,
                     planned_min, presenter_join, presenter_leave, customer_sec,
-                    participants, fetched_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                    customer_join, customer_leave, participants, rule_v, fetched_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
                 ON CONFLICT (org_id, meeting_key) DO UPDATE SET
                     presenter_email = EXCLUDED.presenter_email,
                     rep_id = EXCLUDED.rep_id,
@@ -259,7 +307,10 @@ def sync_meetings(
                     presenter_join = EXCLUDED.presenter_join,
                     presenter_leave = EXCLUDED.presenter_leave,
                     customer_sec = EXCLUDED.customer_sec,
+                    customer_join = EXCLUDED.customer_join,
+                    customer_leave = EXCLUDED.customer_leave,
                     participants = EXCLUDED.participants,
+                    rule_v = EXCLUDED.rule_v,
                     fetched_at = now()
                 """,
                 (
@@ -273,7 +324,10 @@ def sync_meetings(
                     row["presenter_join"],
                     row["presenter_leave"],
                     row["customer_sec"],
+                    row["customer_join"],
+                    row["customer_leave"],
                     row["participants"],
+                    RULE_V,
                 ),
             )
             conn.commit()
