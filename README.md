@@ -125,6 +125,33 @@ veritabanı gerektirmeyen testleri yine çalıştırır.
   Dakikada bir yenilenir. Temsilci yalnız kendi kartını ve ekip toplamını görür.
 - **Karşılaştır**, **Arena**, **Raporlar**: sonraki aşamalar (`ROADMAP.md`).
 
+### Canlı veri akışı
+
+`scripts/live_ingest.py` (`pusula/live_ingest.py`) mesai içinde (08:30–18:45,
+cumartesi 15:45'e kadar) her çalıştırmada aramaları ve (açıksa) WhatsApp'ı imleçten,
+CRM işlemlerini (`crm_actions`) çeker; randevu, lead ve kişileri çeyrek saatte
+bir 2 saatlik pencereyle tazeler. İki tetikleyici vardır:
+
+- `.github/workflows/live-ingest.yml` — 5 dakikada bir (GitHub birkaç dakika
+  geciktirebilir).
+- İsteğe bağlı harici tetikleyici (ör. cron-job.org, ücretsiz): 5 dakikada bir
+  `GET https://<alan-adı>/api/cron/live-ingest`, başlık
+  `Authorization: Bearer <CRON_SECRET>`.
+
+WhatsApp adımı KVKK gereği varsayılan kapalıdır; ekibe yazılı aydınlatma
+yapıldıktan sonra `PUSULA_WHATSAPP_INGEST=1` (GitHub repo değişkeni ve/veya
+Vercel ortam değişkeni) ile açılır.
+
+Eşzamanlı çalışmalar Postgres advisory lock ile tekilleşir. Başarılı arama
+senkronu `sync_state.live_ingest` damgasını günceller; paneldeki "veri x dk
+önce" bunu gösterir.
+
+**CRM işlemleri:** Notes, Tasks, Leads, Deals, Contacts kayıtlarının
+oluşturma ve son değişiklik anı, işlemi yapan kullanıcıyla (`Created_By`,
+`Modified_By`; kayıt sahibi değil). Yalnız aktif satış temsilcileri sayılır.
+Zoho kayıt başına yalnız son değişikliği verdiği için "son CRM işlemi" doğru,
+işlem adedi alt sınırdır. Tablo ilk çalıştırmada kendiliğinden oluşur.
+
 Hareketsizlik = mesai içinde son arama bitişi, katılınan toplantı bitişi,
 giden WhatsApp veya CRM işleminden bu yana geçen süre; ölçüm ucu son veri
 senkronunu aşmaz. 15 dk "boşta", 30 dk "hareketsiz" (`pusula/live.py`).

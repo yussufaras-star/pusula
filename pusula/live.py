@@ -17,6 +17,7 @@ from pusula.metrics import (
     Span,
     available_minutes,
     combine,
+    crm_tracking_enabled,
     finish,
     idle_minutes,
     in_shift,
@@ -29,7 +30,7 @@ from pusula.panel_data import connect, load_reps
 HISTORY_DAYS = 90
 IDLE_WARN_MIN = 15.0
 IDLE_ALERT_MIN = 30.0
-CALL_SOURCES = ("zoho_crm_calls",)
+CALL_SOURCES = ("zoho_crm_calls", "live_ingest")
 
 
 def history_span(day: date) -> Span:
@@ -164,6 +165,7 @@ def build_live(
     history: dict[str, dict[int, dict[str, Any]]],
     activity: dict[str, dict[str, Any]],
     as_of: datetime | None,
+    crm_tracking: bool = False,
 ) -> dict[str, Any]:
     """Kokpit yükü. today_rows: query_kpis(group='rep_hour') çıktısı."""
     span = Span.day(day)
@@ -252,6 +254,7 @@ def build_live(
         "is_today": is_today,
         "in_shift": in_shift(now) and is_today,
         "data_as_of": as_of,
+        "crm_tracking": crm_tracking,
         "history_days": same_type_day_count(day),
         "team": {"today": team_today, "expected": team_expected},
         "hours": team_hours,
@@ -278,4 +281,5 @@ def load_live(
         history=history if history is not None else history_by_rep_hour(day, now),
         activity=last_activity(day, now=now),
         as_of=data_as_of(),
+        crm_tracking=crm_tracking_enabled(),
     )

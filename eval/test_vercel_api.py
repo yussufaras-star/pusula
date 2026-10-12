@@ -70,11 +70,14 @@ def test_tampered_session_is_rejected(monkeypatch) -> None:
     assert client.get("/api/me").status_code == 401
 
 
-def test_cron_endpoint_rejects_missing_authorization(monkeypatch) -> None:
+def test_cron_endpoints_reject_missing_or_wrong_authorization(monkeypatch) -> None:
     monkeypatch.setenv("CRON_SECRET", "test-cron-secret")
-    response = TestClient(app).get("/api/cron/hourly-nudges")
+    client = TestClient(app)
 
-    assert response.status_code == 401
+    for path in ("/api/cron/hourly-nudges", "/api/cron/live-ingest"):
+        assert client.get(path).status_code == 401
+        wrong = client.get(path, headers={"Authorization": "Bearer nope"})
+        assert wrong.status_code == 401
 
 
 def test_representative_cannot_choose_another_rep_or_open_admin_routes(

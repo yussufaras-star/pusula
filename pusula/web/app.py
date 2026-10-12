@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from pusula.config import get_org_id
 from pusula.hourly_nudges import run_hourly_nudges
 from pusula.live import history_by_rep_hour, load_live
+from pusula.live_ingest import run_live_ingest
 from pusula.metrics import TZ
 from pusula.panel_auth import (
     ADMIN_EMAIL,
@@ -221,6 +222,15 @@ def profiles(days: int = 90, user: AuthUser = Depends(admin_user)) -> Any:
 def hourly_nudges() -> Any:
     require_database()
     return jsonable_encoder(run_hourly_nudges(_now()))
+
+
+@app.get("/api/cron/live-ingest", dependencies=[Depends(require_cron)])
+def live_ingest() -> Any:
+    """Harici tetikleyici (ör. cron-job.org, 5 dk). Vercel 60 sn sınırında kalır."""
+    require_database()
+    report = run_live_ingest(_now())
+    cache.clear()
+    return jsonable_encoder(report)
 
 
 # --- arayüz ------------------------------------------------------------------

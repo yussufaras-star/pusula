@@ -1,0 +1,44 @@
+# Canlı ingest: mesai içinde 5 dakikada bir (GitHub zamanlayıcısı birkaç
+# dakika gecikebilir). UTC 05-16 → Istanbul 08-19; mesai dışı saatleri
+# betik kendisi atlar. Harici tetikleyici /api/cron/live-ingest'i de
+# çağırabilir; eşzamanlı çalışmayı advisory lock tekilleştirir.
+name: live-ingest
+
+on:
+  schedule:
+    - cron: "*/5 5-16 * * 1-6"
+  workflow_dispatch:
+
+concurrency:
+  group: pusula-live-ingest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUNBUFFERED: "1"
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  DATABASE_URL_POOLED: ${{ secrets.DATABASE_URL_POOLED }}
+  ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
+  ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
+  ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
+  ZOHO_ACCOUNTS_DOMAIN: ${{ secrets.ZOHO_ACCOUNTS_DOMAIN }}
+  ZOHO_API_DOMAIN: ${{ secrets.ZOHO_API_DOMAIN }}
+  # KVKK aydınlatması sonrası repo değişkeni PUSULA_WHATSAPP_INGEST=1 yapılır.
+  PUSULA_WHATSAPP_INGEST: ${{ vars.PUSULA_WHATSAPP_INGEST }}
+
+jobs:
+  live-ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Bağımlılıkları kur
+        run: python -m pip install -r requirements.txt
+      - name: Canlı ingest
+        run: python scripts/live_ingest.py

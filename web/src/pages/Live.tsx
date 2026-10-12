@@ -183,7 +183,13 @@ function LiveBody({ data, me }: { data: LivePayload; me: Me }) {
             <span className="hint">en acil durum üstte</span>
           </div>
           <div className="card-body">
-            <RepBoard reps={data.reps} nowHour={nowHour} warnIdle={data.idle_thresholds.warn} />
+            <RepBoard
+              reps={data.reps}
+              nowHour={nowHour}
+              warnIdle={data.idle_thresholds.warn}
+              crmTracking={data.crm_tracking}
+              now={new Date(data.now)}
+            />
           </div>
         </section>
       ) : null}

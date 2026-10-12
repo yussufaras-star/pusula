@@ -57,6 +57,7 @@ export interface LivePayload {
   is_today: boolean;
   in_shift: boolean;
   data_as_of: string | null;
+  crm_tracking: boolean;
   history_days: number;
   team: { today: Kpis; expected: Kpis };
   hours: HourRow[];

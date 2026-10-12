@@ -106,7 +106,7 @@ function live(): LivePayload {
       last_call_at: perf === 0 ? null : last,
       last_meeting_at: null,
       last_whatsapp_at: null,
-      last_crm_at: null,
+      last_crm_at: perf === 0 || idx === 1 ? null : iso(new Date(now.getTime() - (idx + 2) * 7 * 60000)),
       idle_min: perf === 0 ? ((nowHour - 9) * 60 + minute) : idle,
       status,
       hours: hourRows,
@@ -127,6 +127,7 @@ function live(): LivePayload {
     is_today: true,
     in_shift: true,
     data_as_of: iso(new Date(now.getTime() - 4 * 60000)),
+    crm_tracking: true,
     history_days: 64,
     team: {
       today: sum(cards.map((c) => c.today), avail, n),

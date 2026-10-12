@@ -484,3 +484,18 @@ CREATE TABLE IF NOT EXISTS kpi_nudge_sends (
     PRIMARY KEY (org_id, rep_id, nudge_date, nudge_hour, scope)
 );
 
+-- Temsilcinin CRM işlemleri (not, görev, lead/deal/contact oluşturma ve son
+-- değişiklik). Kaynak: pusula/ingest/crm_actions.py; canlı ingest de yoksa
+-- aynı tanımla oluşturur.
+CREATE TABLE IF NOT EXISTS crm_actions (
+    org_id        text NOT NULL DEFAULT 'rexven',
+    module        text NOT NULL,
+    record_id     text NOT NULL,
+    action        text NOT NULL CHECK (action IN ('created', 'modified')),
+    acted_at      timestamptz NOT NULL,
+    actor_rep_id  text NOT NULL,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (org_id, module, record_id, action, acted_at)
+);
+CREATE INDEX IF NOT EXISTS idx_crm_actions_actor_time
+    ON crm_actions (org_id, actor_rep_id, acted_at);

@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 
-import { clock, duration, hourLabel, int, minutes, num, pace, paceTone, pct } from "../format";
+import { ago, clock, duration, hourLabel, int, minutes, num, pace, paceTone, pct } from "../format";
 import type { RepCard, RepStatus } from "../types";
 
 const STATUS_LABEL: Record<RepStatus, string> = {
@@ -75,9 +75,11 @@ interface Props {
   reps: RepCard[];
   nowHour: number | null;
   warnIdle: number;
+  crmTracking: boolean;
+  now: Date;
 }
 
-export function RepBoard({ reps, nowHour, warnIdle }: Props) {
+export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now }: Props) {
   const rows = useMemo(
     () =>
       [...reps].sort(
@@ -129,9 +131,14 @@ export function RepBoard({ reps, nowHour, warnIdle }: Props) {
                 </td>
                 <td>
                   {r.last_crm_at ? (
-                    clock(r.last_crm_at)
+                    <>
+                      <div>{clock(r.last_crm_at)}</div>
+                      <div className="sub">{ago(r.last_crm_at, now)}</div>
+                    </>
+                  ) : crmTracking ? (
+                    <span className="muted">bugün yok</span>
                   ) : (
-                    <span className="muted" title="CRM işlem akışı bağlanınca dolacak">
+                    <span className="muted" title="CRM işlem akışı ilk çalıştığında dolacak">
                       veri bekleniyor
                     </span>
                   )}

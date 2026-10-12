@@ -413,6 +413,16 @@ def last_activity(day: date, *, now: datetime | None = None) -> dict[str, dict[s
     return out
 
 
+def crm_tracking_enabled() -> bool:
+    """CRM işlem akışı kurulmuş ve en az bir kez yazmış mı."""
+    with connect() as conn:
+        exists = conn.execute("SELECT to_regclass('crm_actions')").fetchone()
+        if not exists or exists[0] is None:
+            return False
+        row = conn.execute("SELECT EXISTS (SELECT 1 FROM crm_actions)").fetchone()
+    return bool(row and row[0])
+
+
 def _last_crm_actions(conn: Any, org_id: str, span: Span) -> dict[str, datetime]:
     """crm_actions henüz yoksa boş döner (şema göçü sonrası dolar)."""
     exists = conn.execute("SELECT to_regclass('crm_actions')").fetchone()
