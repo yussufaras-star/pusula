@@ -110,15 +110,14 @@ export function LostTime({ reps, day, now }: Props) {
                   )}
                 </div>
               </div>
-              <div className="lost-sum">
+              <div
+                className="lost-sum"
+                title={`Mola olarak düşülen: ${minutes(r.today.mola_dk)}${
+                  r.today.toplanti_dk > 0 ? ` · toplantıda geçen: ${minutes(r.today.toplanti_dk)}` : ""
+                }${r.today.girilmemis_dk > 0 ? ` · sonucu girilmemiş toplantı: ${minutes(r.today.girilmemis_dk)}` : ""}`}
+              >
                 <b>{minutes(r.today.kayip_dk)}</b>
-                <span className="sub">kayıp · {minutes(r.today.mola_dk)} mola</span>
-                {r.today.toplanti_dk > 0 ? (
-                  <span className="sub">{minutes(r.today.toplanti_dk)} toplantı (dolu)</span>
-                ) : null}
-                {r.today.girilmemis_dk > 0 ? (
-                  <span className="sub">{minutes(r.today.girilmemis_dk)}'sı sonucu girilmemiş toplantı</span>
-                ) : null}
+                <span className="sub">kayıp zaman</span>
               </div>
             </div>
           );
