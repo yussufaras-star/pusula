@@ -71,3 +71,35 @@ export interface Me {
   rep_id: string | null;
   full_name: string | null;
 }
+
+// pusula/compare.py build_side çıktısı.
+export interface ComparePoint {
+  bucket: number | string;
+  partial: boolean;
+  kpis: Kpis;
+}
+
+export interface CompareSide {
+  label: string;
+  subject: string;
+  first: string;
+  last: string;
+  cut: string;
+  aligned: boolean;
+  work_days: number;
+  n_reps: number;
+  kpis: Kpis;
+  series_group: "hour" | "day";
+  series: ComparePoint[];
+}
+
+export interface ComparePayload {
+  now: string;
+  a: CompareSide;
+  b: CompareSide;
+}
+
+export interface RepRef {
+  rep_id: string;
+  full_name: string;
+}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api } from "./api";
 import { Logo } from "./components/Logo";
+import { ComparePage } from "./pages/Compare";
 import { LivePage } from "./pages/Live";
 import { LoginPage } from "./pages/Login";
 import type { Me } from "./types";
@@ -10,7 +11,7 @@ type Route = "canli" | "karsilastir" | "pano" | "raporlar";
 
 const NAV: { route: Route; label: string; soon?: boolean; adminOnly?: boolean }[] = [
   { route: "canli", label: "Canlı" },
-  { route: "karsilastir", label: "Karşılaştır", soon: true },
+  { route: "karsilastir", label: "Karşılaştır" },
   { route: "pano", label: "Ekip Panosu", soon: true },
   { route: "raporlar", label: "Raporlar", soon: true },
 ];
@@ -68,22 +69,26 @@ export function App() {
         </div>
       </header>
       <main className="main">
-        {route === "canli" ? <LivePage me={me} /> : <Soon route={route} />}
+        {route === "canli" ? (
+          <LivePage me={me} />
+        ) : route === "karsilastir" ? (
+          <ComparePage me={me} />
+        ) : (
+          <Soon route={route} />
+        )}
       </main>
     </div>
   );
 }
 
-const SOON_TEXT: Record<Exclude<Route, "canli">, [string, string]> = {
-  karsilastir: [
-    "Karşılaştırma",
-    "İki dönemi veya iki temsilciyi yan yana, araba karşılaştırır gibi: bugün vs geçen salı, bu hafta vs geçen hafta, Ayşe vs Mehmet.",
-  ],
+type SoonRoute = Exclude<Route, "canli" | "karsilastir">;
+
+const SOON_TEXT: Record<SoonRoute, [string, string]> = {
   pano: ["Ekip Panosu", "Ekip hedefine canlı ilerleme, kişisel rekorlar ve ofis TV'si için büyük ekran."],
   raporlar: ["Raporlar", "Huni, dönüşüm, satış döngüsü, ciro ve haftalık seriler."],
 };
 
-function Soon({ route }: { route: Exclude<Route, "canli"> }) {
+function Soon({ route }: { route: SoonRoute }) {
   const [title, text] = SOON_TEXT[route];
   return (
     <div className="card placeholder-page">
