@@ -64,7 +64,10 @@ def test_work_days_count_running_day_by_elapsed_shift() -> None:
 
 def test_average_subject_divides_counts_but_keeps_rates() -> None:
     side = Side(LAST_MONDAY, LAST_MONDAY, AVG)
-    total = [row(arama=100, giden_temas=40, lead_payda=80, lead_pay=20, randevu=10)]
+    total = [
+        row(arama=100, giden_temas=40, lead_payda=80, lead_pay=20, randevu=10,
+            dolu_dk=1200, mola_dk=300, kayip_dk=360)
+    ]
     out = build_side(
         side,
         Span.day(LAST_MONDAY).end,
@@ -76,20 +79,21 @@ def test_average_subject_divides_counts_but_keeps_rates() -> None:
     assert out["kpis"]["arama"] == 25
     assert out["kpis"]["randevu"] == 2.5
     assert out["kpis"]["ulasma_orani"] == 25.0
-    assert out["kpis"]["mesai_dk"] == pytest.approx(465)
+    assert out["kpis"]["kayip_dk"] == 90
+    assert out["kpis"]["doluluk"] == pytest.approx(round(100 * 1200 / 1560, 1))
 
 
-def test_team_subject_scales_shift_minutes_by_headcount() -> None:
+def test_team_subject_sums_minutes_across_reps() -> None:
     side = Side(LAST_MONDAY, LAST_MONDAY, TEAM)
     out = build_side(
         side,
         Span.day(LAST_MONDAY).end,
         n_reps=4,
-        total_rows=[row(arama=100)],
+        total_rows=[row(arama=100, dolu_dk=1200, mola_dk=300, kayip_dk=360)],
         series_rows=[],
         label="Ekip toplamı",
     )
-    assert out["kpis"]["mesai_dk"] == pytest.approx(4 * 465)
+    assert out["kpis"]["mesai_dk"] == pytest.approx(1860)
     assert out["n_reps"] == 4
 
 
@@ -149,7 +153,21 @@ def test_load_side_filters_query_to_subject() -> None:
         return []
 
     side = Side(LAST_MONDAY, LAST_MONDAY, "r2")
-    load_side(side, Span.day(LAST_MONDAY).end, rep_ids=["r1", "r2"], label="x", query=fake_query)
+    lines: list = []
+
+    def fake_timelines(span, cut, *, rep_ids):
+        lines.append(rep_ids)
+        return {}
+
+    load_side(
+        side,
+        Span.day(LAST_MONDAY).end,
+        rep_ids=["r1", "r2"],
+        label="x",
+        query=fake_query,
+        timelines=fake_timelines,
+    )
+    assert lines == [["r2"]]
     assert [c["rep_ids"] for c in calls] == [["r2"], ["r2"]]
     assert [c["group"] for c in calls] == ["team", "hour"]
 

@@ -403,11 +403,21 @@ def main() -> int:
             if int(old.get(key) or 0) != int(new.get(key) or 0):
                 print(f"hata: canli {key} eski={old.get(key)} yeni={new.get(key)}")
                 return 1
-        occ_old = occupancy_breakdown(None, day)["pay_dk"]
-        occ_new = live["team"]["today"]["dolu_dk"]
-        if abs(float(occ_old) - float(occ_new)) > 0.5:
-            print(f"hata: canli doluluk payi eski={occ_old:.1f} yeni={occ_new:.1f}")
-            return 1
+        # Zaman çizelgesi: her temsilcide dolu + mola + kayıp = geçen mesai.
+        elapsed = (min(bounds[1], live["now"]) - bounds[0]).total_seconds() / 60.0
+        for card in live["reps"]:
+            segs = card["timeline"]
+            if not segs:
+                continue
+            total = sum((s["end"] - s["start"]).total_seconds() / 60.0 for s in segs)
+            if abs(total - elapsed) > 0.5:
+                print(f"hata: {card['name']} serit {total:.1f} dk, mesai {elapsed:.1f} dk")
+                return 1
+            kpis = card["today"]
+            print(
+                f"  {card['name']}: doluluk {kpis['doluluk']} dolu {kpis['dolu_dk']} "
+                f"mola {kpis['mola_dk']} kayip {kpis['kayip_dk']}"
+            )
         print("  canli tanim esitligi: tamam")
 
     tem_keys = (

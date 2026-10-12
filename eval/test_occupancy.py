@@ -1,0 +1,90 @@
+"""Zaman çizelgesi doluluğu: dolu, mola ve kayıp dakika (veritabanısız)."""
+
+from datetime import date, datetime, timedelta
+
+import pytest
+
+from pusula.metrics import TZ, finish, combine
+from pusula.occupancy import aggregate, attach, day_timeline, gaps_report, merge
+
+MONDAY = date(2026, 10, 12)
+SATURDAY = date(2026, 10, 10)
+
+
+def at(hour: int, minute: int = 0, day: date = MONDAY) -> datetime:
+    return datetime(day.year, day.month, day.day, hour, minute, tzinfo=TZ)
+
+
+def call(h: int, m: int, talk_sec: int = 0):
+    """BCW 1 dk önce, ACW 1 dk sonra (SQL'deki aralıkla aynı)."""
+    start = at(h, m)
+    return (start - timedelta(minutes=1), start + timedelta(seconds=talk_sec + 60))
+
+
+def test_overlapping_intervals_count_once() -> None:
+    merged = merge([call(10, 0, 120), call(10, 2, 60), (at(10, 30), at(10, 31))])
+    assert merged == [(at(9, 59), at(10, 4)), (at(10, 30), at(10, 31))]
+
+
+def test_full_day_splits_into_busy_break_and_lost() -> None:
+    # 09:00-12:00 dolu, 12:00-13:30 boş (90 dk), 13:30-18:00 dolu.
+    busy = [(at(9), at(12)), (at(13, 30), at(18))]
+    t = day_timeline(busy, MONDAY, at(23))
+    assert t.total("dolu") == pytest.approx(450)
+    assert t.total("mola") == pytest.approx(75)
+    assert t.total("kayip") == pytest.approx(15)
+    # Mola boşluğun başından: 12:00-13:15 mola, 13:15-13:30 kayıp.
+    kinds = [(s.start, s.kind) for s in t.segments]
+    assert (at(12), "mola") in kinds and (at(13, 15), "kayip") in kinds
+
+
+def test_break_is_taken_from_longest_gaps_first() -> None:
+    # Boşluklar: 09:00-09:20 (20 dk, geç başlama), 11:00-11:50 (50), 15:00-15:40 (40).
+    busy = [(at(9, 20), at(11)), (at(11, 50), at(15)), (at(15, 40), at(18))]
+    t = day_timeline(busy, MONDAY, at(23))
+    # 75 dk mola: 50 + 25'i (40'lık boşluktan). Kayıp: 20 + 15.
+    assert t.total("mola") == pytest.approx(75)
+    assert t.total("kayip") == pytest.approx(35)
+    assert t.by_hour("kayip")[9] == pytest.approx(20)
+
+
+def test_running_day_counts_only_elapsed_shift() -> None:
+    t = day_timeline([call(9, 10, 240)], MONDAY, at(10))
+    total = t.total("dolu") + t.total("mola") + t.total("kayip")
+    assert total == pytest.approx(60)
+    assert t.total("dolu") == pytest.approx(6)
+
+
+def test_saturday_shift_ends_at_three() -> None:
+    t = day_timeline([], SATURDAY, at(23, day=SATURDAY))
+    assert t.total("mola") + t.total("kayip") == pytest.approx(360)
+
+
+def test_activity_outside_shift_is_clipped() -> None:
+    t = day_timeline([(at(8), at(9, 30)), (at(17, 50), at(19))], MONDAY, at(23))
+    assert t.total("dolu") == pytest.approx(40)
+
+
+def test_aggregate_skips_absent_days_but_not_today() -> None:
+    absent = day_timeline([], MONDAY, at(23))
+    worked = day_timeline([(at(9), at(18))], MONDAY, at(23))
+    rows = aggregate({("r1", MONDAY): absent, ("r2", MONDAY): worked}, "rep")
+    assert [r["rep_id"] for r in rows] == ["r2"]
+    rows = aggregate({("r1", MONDAY): absent}, "rep", running_day=MONDAY)
+    assert rows[0]["kayip_dk"] + rows[0]["mola_dk"] == pytest.approx(540)
+
+
+def test_attach_feeds_finish() -> None:
+    worked = day_timeline([(at(9), at(12)), (at(13, 30), at(18))], MONDAY, at(23))
+    occ = aggregate({("r1", MONDAY): worked}, "rep_hour")
+    rows = attach([{"rep_id": "r1", "bucket": "9", "arama": 5}], occ)
+    out = finish(combine(rows))
+    assert out["arama"] == 5
+    assert out["doluluk"] == pytest.approx(round(100 * 450 / 465, 1))
+
+
+def test_gaps_report_lists_longest_first() -> None:
+    busy = [(at(9, 20), at(11)), (at(11, 50), at(15)), (at(15, 40), at(18))]
+    gaps = gaps_report(day_timeline(busy, MONDAY, at(23)))
+    assert gaps[0]["kind"] == "mola" and gaps[0]["minutes"] == 50
+    assert {g["kind"] for g in gaps} == {"mola", "kayip"}
