@@ -5,6 +5,7 @@ import { Attention } from "../components/Attention";
 import { HourChart } from "../components/HourChart";
 import { RepBoard, StatusPill } from "../components/RepBoard";
 import { StatTile } from "../components/StatTile";
+import { SyncButton } from "../components/SyncButton";
 import { ago, dayLabel, duration, int, minutes, num, pace, paceTone, pct, type Tone } from "../format";
 import type { Kpis, LivePayload, Me } from "../types";
 
@@ -85,6 +86,8 @@ export function LivePage({ me }: { me: Me }) {
             <button className="btn" onClick={() => setDay(today)}>
               Bugün
             </button>
+          ) : me.role === "admin" ? (
+            <SyncButton onDone={refresh} />
           ) : (
             <button className="btn" onClick={refresh}>
               Yenile

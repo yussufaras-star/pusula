@@ -130,13 +130,15 @@ veritabanı gerektirmeyen testleri yine çalıştırır.
 `scripts/live_ingest.py` (`pusula/live_ingest.py`) mesai içinde (08:30–18:45,
 cumartesi 15:45'e kadar) her çalıştırmada aramaları ve WhatsApp'ı imleçten,
 CRM işlemlerini (`crm_actions`) çeker; randevu, lead ve kişileri çeyrek saatte
-bir 2 saatlik pencereyle tazeler. İki tetikleyici vardır:
+bir 2 saatlik pencereyle tazeler. Tetikleyiciler:
 
-- `.github/workflows/live-ingest.yml` — 5 dakikada bir (GitHub birkaç dakika
-  geciktirebilir).
-- İsteğe bağlı harici tetikleyici (ör. cron-job.org, ücretsiz): 5 dakikada bir
-  `GET https://<alan-adı>/api/cron/live-ingest`, başlık
-  `Authorization: Bearer <CRON_SECRET>`.
+- Paneldeki **Verileri güncelle** butonu (yönetici; `POST /api/ingest`,
+  dakikada en fazla bir kez). Asıl yol budur.
+- `.github/workflows/live-ingest.yml` — elle çalıştırma (yedek).
+- Otomatik tazelik saatlik `block-ingest.yml` ile sürer. Sürekli güncelleme
+  istenirse workflow'a `schedule: "*/5 5-16 * * 1-6"` eklenir veya harici
+  tetikleyici (ör. cron-job.org) `GET /api/cron/live-ingest`'i
+  `Authorization: Bearer <CRON_SECRET>` başlığıyla çağırır.
 
 WhatsApp adımı varsayılan açıktır; `PUSULA_WHATSAPP_INGEST=0` (GitHub repo
 değişkeni ve/veya Vercel ortam değişkeni) kapatır.

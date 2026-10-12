@@ -214,6 +214,11 @@ select {
   background: var(--surface-2);
 }
 
+.btn:disabled {
+  opacity: 0.7;
+  cursor: progress;
+}
+
 .btn.primary {
   background: var(--accent);
   border-color: transparent;

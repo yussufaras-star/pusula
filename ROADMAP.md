@@ -23,8 +23,9 @@ Streamlit bırakıldı; React + FastAPI, Vercel. KPI hesabı tek sorguda
 
 1. **Canlı kokpit** ✅ — gün içi KPI'lar ekip/temsilci/saat, aynı saatin
    90 günlük temposu, doluluk, hareketsizlik, dikkat listesi.
-2. **Canlı veri** (kod ✅, canlıda doğrulanacak) — 5 dk'da bir ingest (harici tetikleyici → korumalı
-   endpoint; saatlik kısa devre kaldırılır), WhatsApp ingest zamanlanır,
+2. **Canlı veri** (kod ✅, canlıda doğrulanacak) — panelde "Verileri
+   güncelle" butonu ile anında ingest (otomatik tazelik saatlik; istenirse
+   5 dk zamanlama veya harici tetikleyici), WhatsApp ingest,
    CRM işlem akışı (`crm_actions`: Notes/Tasks oluşturma, kayıt
    `Modified_By`/`Modified_Time`) → "son CRM işlemi". WhatsApp adımı açık
    (karar 2026-10-12; `PUSULA_WHATSAPP_INGEST=0` kapatır).

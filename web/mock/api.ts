@@ -147,5 +147,15 @@ export function mockApi(method: string, url: string): unknown {
   if (path === "/api/live") return live();
   if (path === "/api/login" && method === "POST") return { email: ME.email, role: ME.role };
   if (path === "/api/logout") return { ok: "true" };
+  if (path === "/api/ingest" && method === "POST") {
+    return {
+      seconds: 14.2,
+      steps: {
+        aramalar: { fetched: 9, inserted: 7, failed: 0 },
+        whatsapp: { fetched: 3, inserted: 2, failed: 0 },
+        crm_islemleri: { Notes: { fetched: 4, written: 3 }, Leads: { fetched: 6, written: 5 } },
+      },
+    };
+  }
   return undefined;
 }

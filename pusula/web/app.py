@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from pusula.config import get_org_id
 from pusula.hourly_nudges import run_hourly_nudges
-from pusula.live import history_by_rep_hour, load_live
+from pusula.live import data_as_of, history_by_rep_hour, load_live
 from pusula.live_ingest import run_live_ingest
 from pusula.metrics import TZ
 from pusula.panel_auth import (
@@ -49,6 +49,7 @@ LIVE_TTL = 60
 HISTORY_TTL = 6 * 60 * 60
 REPORT_TTL = 5 * 60
 MAX_LOOKBACK_DAYS = 400
+MANUAL_INGEST_MIN_GAP = 60
 PUBLIC_DIR = Path(__file__).resolve().parents[2] / "public"
 
 app = FastAPI(title="Pusula", docs_url=None, redoc_url=None)
@@ -222,6 +223,19 @@ def profiles(days: int = 90, user: AuthUser = Depends(admin_user)) -> Any:
 def hourly_nudges() -> Any:
     require_database()
     return jsonable_encoder(run_hourly_nudges(_now()))
+
+
+@app.post("/api/ingest")
+def ingest_now(user: AuthUser = Depends(admin_user)) -> Any:
+    """Paneldeki 'Verileri güncelle' butonu. Dakikada en fazla bir kez."""
+    require_database()
+    now = _now()
+    last = data_as_of()
+    if last is not None and (now - last).total_seconds() < MANUAL_INGEST_MIN_GAP:
+        return {"skipped": "yeni_guncellendi", "data_as_of": last}
+    report = run_live_ingest(now, force=True)
+    cache.clear()
+    return jsonable_encoder(report)
 
 
 @app.get("/api/cron/live-ingest", dependencies=[Depends(require_cron)])

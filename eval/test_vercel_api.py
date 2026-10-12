@@ -114,3 +114,11 @@ def test_cache_expires_and_scopes_by_key() -> None:
     assert cache.get(("reports", "rep", "a@x")) is None
     cache.put(("short",), 1, -1)
     assert cache.get(("short",)) is None
+
+
+def test_manual_ingest_is_admin_only(monkeypatch) -> None:
+    monkeypatch.setenv("PUSULA_SESSION_SECRET", SECRET)
+    assert TestClient(app).post("/api/ingest").status_code == 401
+
+    rep = AuthUser(email="rep@example.com", role="rep", rep_id="rep-1", full_name="Rep")
+    assert _client_as(rep, monkeypatch).post("/api/ingest").status_code == 403

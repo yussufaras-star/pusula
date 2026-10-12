@@ -1,12 +1,10 @@
-# Canlı ingest: mesai içinde 5 dakikada bir (GitHub zamanlayıcısı birkaç
-# dakika gecikebilir). UTC 05-16 → Istanbul 08-19; mesai dışı saatleri
-# betik kendisi atlar. Harici tetikleyici /api/cron/live-ingest'i de
-# çağırabilir; eşzamanlı çalışmayı advisory lock tekilleştirir.
+# Canlı ingest — elle. Asıl tetik paneldeki "Verileri güncelle" butonu
+# (POST /api/ingest); burası yedek. Otomatik tazelik block-ingest.yml
+# (saatlik). İstenirse schedule eklenebilir ("*/5 5-16 * * 1-6") veya
+# harici tetikleyici /api/cron/live-ingest'i çağırabilir.
 name: live-ingest
 
 on:
-  schedule:
-    - cron: "*/5 5-16 * * 1-6"
   workflow_dispatch:
 
 concurrency:
