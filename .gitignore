@@ -20,3 +20,4 @@ node_modules/
 public/
 tmp_*
 tmp_*.py
+*.tsbuildinfo
