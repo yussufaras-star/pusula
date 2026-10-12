@@ -716,8 +716,8 @@ def main() -> int:
     print(f"  GUN_SAAT={GUN_SAAT} SAT_SAAT={SAT_SAAT}")
     print(
         "doluluk mesai payda: "
-        f"hafta ici {MESAI_WD_SAAT:.0f} saat, "
-        f"cumartesi {MESAI_SAT_SAAT:.0f} saat, pazar yok"
+        f"hafta ici {MESAI_WD_SAAT:g} saat, "
+        f"cumartesi {MESAI_SAT_SAAT:g} saat, pazar yok (mola 1 sa 15 dk)"
     )
     print(f"  MESAI_WD_SAAT={MESAI_WD_SAAT} MESAI_SAT_SAAT={MESAI_SAT_SAAT}")
     print(
@@ -728,8 +728,8 @@ def main() -> int:
     if GUN_SAAT != 9.0 or SAT_SAAT != 6.0:
         print("hata: saatlik tablo saatleri 9/6 degil")
         return 1
-    if MESAI_WD_SAAT != 8.0 or MESAI_SAT_SAAT != 5.0:
-        print("hata: mesai payda 8/5 degil")
+    if MESAI_WD_SAAT != 7.75 or MESAI_SAT_SAAT != 4.75:
+        print("hata: mesai payda 7.75/4.75 degil")
         return 1
     if float(board.get("ulasilan_dk") or 0) != 0.0:
         print("hata: ulasilan gorusme suresi doluluk payina eklendi")
@@ -850,7 +850,7 @@ def main() -> int:
     print(
         f"  yeni pay={occ['pay_dk']:.2f} dk payda={occ['payda_dk']:.2f} dk "
         f"oran={occ['doluluk']} (olculen sure, payda mesai "
-        f"{MESAI_WD_SAAT:.0f}s)"
+        f"{MESAI_WD_SAAT:g}s)"
     )
 
     print("payda < 5 saatler:")
