@@ -290,7 +290,9 @@ def load_live(
     reps = [(rep.rep_id, rep.full_name) for rep in load_reps()]
     span = Span.day(day)
     is_today = now.astimezone(TZ).date() == day
-    cutoff = now if is_today else span.end
+    as_of = data_as_of()
+    # Şerit veri tazeliğinde biter: henüz çekilmemiş dakikalar kayıp sayılmaz.
+    cutoff = min(now, as_of) if is_today and as_of else (now if is_today else span.end)
     rep_ids = [rep_id for rep_id, _ in reps]
     timelines = timelines_for(span, cutoff, rep_ids=rep_ids)
     occ = aggregate(timelines, "rep_hour", running_day=day if is_today else None)
@@ -302,6 +304,6 @@ def load_live(
         timelines={rep_id: t for (rep_id, _), t in timelines.items()},
         history=history if history is not None else history_by_rep_hour(day, now),
         activity=last_activity(day, now=now),
-        as_of=data_as_of(),
+        as_of=as_of,
         crm_tracking=crm_tracking_enabled(),
     )

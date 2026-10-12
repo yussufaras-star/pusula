@@ -404,7 +404,10 @@ def main() -> int:
                 print(f"hata: canli {key} eski={old.get(key)} yeni={new.get(key)}")
                 return 1
         # Zaman çizelgesi: her temsilcide dolu + mola + kayıp = geçen mesai.
-        elapsed = (min(bounds[1], live["now"]) - bounds[0]).total_seconds() / 60.0
+        edge = min(bounds[1], live["now"])
+        if live["is_today"] and live["data_as_of"]:
+            edge = min(edge, live["data_as_of"])
+        elapsed = (edge - bounds[0]).total_seconds() / 60.0
         for card in live["reps"]:
             segs = card["timeline"]
             if not segs:
