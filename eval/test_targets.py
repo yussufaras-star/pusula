@@ -11,6 +11,7 @@ from pusula.pace_nudges import (
     in_window,
 )
 from pusula.targets import (
+    STANDARD,
     attach_targets,
     day_factor,
     elapsed_share,
@@ -26,52 +27,60 @@ def at(day: date, hour: int, minute: int = 0) -> datetime:
     return datetime(day.year, day.month, day.day, hour, minute, tzinfo=TZ)
 
 
-# Sabah az, öğleden sonra çok arayan biri: 9-12 arası 10, 12-18 arası 60.
-HIST = {h: {"arama": 10 / 3} for h in (9, 10, 11)} | {h: {"arama": 10.0} for h in range(12, 18)}
+def test_standard_call_target_is_blocks_minus_break_over_five_minutes() -> None:
+    # (09-11 + 14-17 = 300 dk) - 75 dk mola = 225 dk; 5 dk bant → 45.
+    assert STANDARD["arama"] == 45
+    assert resolve("r1", "arama", {}, {"arama": 30.0}, MONDAY) == (45, "standart")
 
 
-def test_saturday_count_target_shrinks_by_shift_length() -> None:
-    assert day_factor(MONDAY) == 1.0
-    assert round(day_factor(SATURDAY), 3) == round(6 / 9, 3)
-    stored = {("r1", "arama"): 90.0, ("r1", "doluluk"): 70.0}
-    assert resolve("r1", "arama", stored, {}, SATURDAY) == (60.0, "kisi")
-    # Oran hedefi gün tipine göre değişmez.
+def test_saturday_is_all_meetings() -> None:
+    assert day_factor(MONDAY, "arama") == 1.0
+    assert day_factor(SATURDAY, "arama") == 0.0
+    assert day_factor(SATURDAY, "randevu") == 1.5  # 6 sa / 4 sa
+    stored = {("r1", "arama"): 90.0, ("r1", "randevu"): 4.0, ("r1", "doluluk"): 70.0}
+    assert resolve("r1", "arama", stored, {}, SATURDAY) == (None, None)
+    assert resolve("r1", "ulasilan", stored, {"ulasilan": 9.0}, SATURDAY) == (None, None)
+    assert resolve("r1", "randevu", stored, {}, SATURDAY) == (6.0, "kisi")
     assert resolve("r1", "doluluk", stored, {}, SATURDAY) == (70.0, "kisi")
 
 
-def test_resolve_falls_back_to_team_default_then_average() -> None:
-    stored = {("*", "arama"): 80.0}
-    assert resolve("r1", "arama", stored, {"arama": 50.0}, MONDAY) == (80.0, "ekip")
+def test_resolve_order_rep_team_standard_average() -> None:
+    stored = {("*", "arama"): 80.0, ("r1", "arama"): 60.0}
+    assert resolve("r1", "arama", stored, {}, MONDAY) == (60.0, "kisi")
+    assert resolve("r2", "arama", stored, {}, MONDAY) == (80.0, "ekip")
     assert resolve("r1", "ulasilan", stored, {"ulasilan": 12.0}, MONDAY) == (12.0, "ortalama")
     assert resolve("r1", "randevu", stored, {"randevu": None}, MONDAY) == (None, None)
 
 
-def test_elapsed_share_follows_rep_hourly_curve() -> None:
-    # 12:00'de günlük aramaların 10/70'i beklenir, mesainin 3/9'u değil.
-    share = elapsed_share(HIST, at(MONDAY, 12, 0), "arama", MONDAY)
-    assert round(share, 3) == round(10 / 70, 3)
-    # Yarım saat: 12. saatin yarısı eklenir.
-    share = elapsed_share(HIST, at(MONDAY, 12, 30), "arama", MONDAY)
-    assert round(share, 3) == round(15 / 70, 3)
+def test_calls_accrue_only_in_call_blocks() -> None:
+    assert elapsed_share(at(MONDAY, 10, 0), "arama", MONDAY) == 60 / 300
+    # 11-14 toplantı bloğu: arama payı 09-11'de sabit kalır.
+    assert elapsed_share(at(MONDAY, 11, 0), "arama", MONDAY) == 120 / 300
+    assert elapsed_share(at(MONDAY, 13, 45), "arama", MONDAY) == 120 / 300
+    assert elapsed_share(at(MONDAY, 15, 30), "arama", MONDAY) == 210 / 300
+    assert elapsed_share(at(MONDAY, 17, 30), "arama", MONDAY) == 1.0
 
 
-def test_elapsed_share_linear_without_history_and_full_for_past_day() -> None:
-    assert elapsed_share({}, at(MONDAY, 13, 30), "arama", MONDAY) == 0.5
-    assert elapsed_share(HIST, at(MONDAY + timedelta(days=1), 0), "arama", MONDAY) == 1.0
-    assert elapsed_share(HIST, at(MONDAY, 10), "doluluk", MONDAY) == 1.0
+def test_meetings_accrue_only_in_meeting_blocks() -> None:
+    assert elapsed_share(at(MONDAY, 10, 30), "randevu", MONDAY) == 0.0
+    assert elapsed_share(at(MONDAY, 12, 30), "randevu", MONDAY) == 90 / 240
+    assert elapsed_share(at(MONDAY, 16, 0), "randevu", MONDAY) == 180 / 240
+    assert elapsed_share(at(SATURDAY, 12, 0), "randevu", SATURDAY) == 0.5
+    assert elapsed_share(at(MONDAY + timedelta(days=1), 0), "arama", MONDAY) == 1.0
+    assert elapsed_share(at(MONDAY, 10), "doluluk", MONDAY) == 1.0
 
 
-def test_rep_targets_paces_manager_target() -> None:
+def test_rep_targets_paces_by_blocks() -> None:
     out = rep_targets(
         rep_id="r1",
         today={"arama": 3},
-        hist_hours=HIST,
-        stored={("r1", "arama"): 140.0},
+        hist_hours={},
+        stored={("r1", "arama"): 90.0},
         day=MONDAY,
         cutoff=at(MONDAY, 12, 0),
     )
-    assert out["arama"] == {"daily": 140.0, "by_now": 20.0, "source": "kisi", "actual": 3}
-    # Geçmiş saatlerde ulaşılan yok → hedef de yok (uydurulmaz).
+    assert out["arama"] == {"daily": 90.0, "by_now": 36.0, "source": "kisi", "actual": 3}
+    # Geçmiş yok, standart yok → ulaşılan hedefi uydurulmaz.
     assert "ulasilan" not in out
 
 
@@ -88,7 +97,8 @@ def test_attach_targets_sums_team_and_skips_leave() -> None:
     attach_targets(payload, history={}, stored=stored, day=MONDAY, cutoff=at(MONDAY, 13, 30))
     assert payload["reps"][2]["target"] == {}
     team = payload["team"]["target"]
-    assert team["arama"] == {"daily": 180.0, "by_now": 90.0, "source": "hedef", "actual": 14}
+    # 13:30: arama payı 09-11 (120/300).
+    assert team["arama"] == {"daily": 180.0, "by_now": 72.0, "source": "hedef", "actual": 14}
     assert team["doluluk"]["daily"] == 70.0
 
 

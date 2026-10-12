@@ -43,7 +43,7 @@ from pusula.panel_auth import (
 )
 from pusula.panel_data import DateWindow, load_rep_by_email, load_reps
 from pusula.panel_profile import PROFILE_WARNING, performance_profiles
-from pusula.targets import METRICS, TEAM_DEFAULT, history_daily, load_targets, save_targets
+from pusula.targets import METRICS, STANDARD, TEAM_DEFAULT, history_daily, load_targets, save_targets
 from pusula.web import cache
 from pusula.web.auth import (
     COOKIE_NAME,
@@ -371,6 +371,7 @@ def targets(user: AuthUser = Depends(admin_user)) -> Any:
     return jsonable_encoder(
         {
             "metrics": METRICS,
+            "standard": STANDARD,
             "default": {"values": values(TEAM_DEFAULT), "average": team_avg},
             "reps": [
                 {

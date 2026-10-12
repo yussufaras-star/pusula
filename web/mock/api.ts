@@ -365,7 +365,8 @@ function mockTargets(): TargetsPayload {
   const empty = { arama: null, ulasilan: null, randevu: null, doluluk: null };
   return {
     metrics: { arama: "Arama", ulasilan: "Ulaşılan", randevu: "Toplantı", doluluk: "Doluluk" },
-    default: { values: { ...empty, arama: 90, randevu: 4, doluluk: 70 }, average: { arama: 74.2, ulasilan: 21.5, randevu: 3.1, doluluk: 63.4 } },
+    standard: { arama: 45 },
+    default: { values: { ...empty, randevu: 4, doluluk: 70 }, average: { arama: 74.2, ulasilan: 21.5, randevu: 3.1, doluluk: 63.4 } },
     reps: REPS.map(([rep_id, full_name, perf]) => ({
       rep_id,
       name: full_name,
