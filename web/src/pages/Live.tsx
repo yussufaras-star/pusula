@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { usePolling } from "../api";
+import { api, usePolling } from "../api";
 import { Attention } from "../components/Attention";
 import { HourChart } from "../components/HourChart";
 import { LostTime } from "../components/LostTime";
@@ -111,13 +111,21 @@ export function LivePage({ me }: { me: Me }) {
           ))}
         </div>
       ) : (
-        <LiveBody data={data} me={me} />
+        <LiveBody data={data} me={me} refresh={refresh} />
       )}
     </>
   );
 }
 
-function LiveBody({ data, me }: { data: LivePayload; me: Me }) {
+function LiveBody({ data, me, refresh }: { data: LivePayload; me: Me; refresh: () => void }) {
+  async function markLeave(repId: string, on: boolean) {
+    await api("/api/leaves", {
+      method: "POST",
+      body: JSON.stringify({ rep_id: repId, day: data.day, on }),
+    }).catch(() => undefined);
+    refresh();
+  }
+
   const t = data.team.today;
   const e = data.team.expected;
   const nowHour = data.is_today ? istanbulHour(data.now) : null;
@@ -203,6 +211,7 @@ function LiveBody({ data, me }: { data: LivePayload; me: Me }) {
               warnIdle={data.idle_thresholds.warn}
               crmTracking={data.crm_tracking}
               now={new Date(data.now)}
+              onLeave={markLeave}
             />
           </div>
         </section>

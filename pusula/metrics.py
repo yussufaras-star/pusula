@@ -60,6 +60,7 @@ COUNT_KEYS = (
     "dolu_dk",
     "mola_dk",
     "kayip_dk",
+    "girilmemis_dk",
 )
 
 
@@ -127,6 +128,7 @@ def finish(row: dict[str, Any], *, n_reps: int = 1) -> dict[str, Any]:
     out["dolu_dk"] = round(dolu, 1)
     out["mola_dk"] = round(mola, 1)
     out["kayip_dk"] = round(kayip, 1)
+    out["girilmemis_dk"] = round(float(out.get("girilmemis_dk") or 0), 1)
     out["mesai_dk"] = round(dolu + mola + kayip, 1)
     out["doluluk"] = ratio(dolu, dolu + kayip)
     out["n_reps"] = n_reps

@@ -125,3 +125,24 @@ def test_build_live_assembles_team_and_rep_cards() -> None:
     assert cards["r2"]["idle_min"] == 0
     assert [h["hour"] for h in out["hours"]] == list(range(9, 18))
     assert out["hours"][0]["done"] and not out["hours"][1]["done"]
+
+
+def test_rep_on_leave_is_excluded_from_team_expectation() -> None:
+    now = at(MONDAY, 10, 30)
+    history = {"r1": {9: {"arama": 10.0}}, "r2": {9: {"arama": 10.0}}}
+    out = build_live(
+        day=MONDAY,
+        now=now,
+        reps=[("r1", "Ayşe"), ("r2", "Mehmet")],
+        today_rows=[],
+        history=history,
+        activity={},
+        as_of=now,
+        on_leave={"r2"},
+    )
+    cards = {c["rep_id"]: c for c in out["reps"]}
+    assert cards["r2"]["status"] == "izinli"
+    assert cards["r2"]["idle_min"] is None
+    assert cards["r2"]["expected"]["arama"] == 0
+    assert out["team"]["expected"]["arama"] == pytest.approx(10)
+    assert out["team"]["expected"]["n_reps"] == 1
