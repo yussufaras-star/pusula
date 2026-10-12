@@ -1,5 +1,5 @@
 // Yalnız `npm run dev:mock`: veritabanı olmadan arayüz geliştirme. Üretime girmez.
-import type { HourRow, Kpis, LivePayload, Me, RepCard, RepStatus } from "../src/types";
+import type { CompareSide, HourRow, Kpis, LivePayload, Me, RepCard, RepStatus } from "../src/types";
 
 const REPS: [string, string, number][] = [
   ["r1", "Ayşe Yılmaz", 1.15],
@@ -139,12 +139,65 @@ function live(): LivePayload {
   };
 }
 
+const NAMES: Record<string, string> = {
+  team: "Ekip toplamı",
+  avg: "Temsilci ortalaması",
+  ...Object.fromEntries(REPS.map(([id, name]) => [id, name])),
+};
+
+function compareSide(q: URLSearchParams, p: "a" | "b"): CompareSide {
+  const first = q.get(`${p}_from`) ?? "";
+  const last = q.get(`${p}_to`) ?? first;
+  const subject = q.get(`${p}_subject`) ?? "team";
+  const perf = REPS.find(([id]) => id === subject)?.[2] ?? 1;
+  const n = subject === "team" ? REPS.length : 1;
+  const seed = [...first + subject].reduce((a, c) => a + c.charCodeAt(0), 0);
+  const r = rng(seed);
+  const oneDay = q.get("a_from") === q.get("a_to") && q.get("b_from") === q.get("b_to");
+  const buckets: (number | string)[] = [];
+  if (oneDay) for (let h = 9; h < 18; h++) buckets.push(h);
+  else {
+    const d = new Date(`${first}T12:00:00Z`);
+    const end = new Date(`${last}T12:00:00Z`);
+    while (d <= end) {
+      if (d.getUTCDay() !== 0) buckets.push(d.toISOString().slice(0, 10));
+      d.setUTCDate(d.getUTCDate() + 1);
+    }
+  }
+  const unit = (oneDay ? 10 : 85) * n * Math.max(perf, 0.3);
+  const series = buckets.map((b) => ({
+    bucket: b,
+    partial: false,
+    kpis: kpis(Math.round(unit * (0.7 + r() * 0.6)), (oneDay ? 52 : 465) * n, r, n),
+  }));
+  const arama = series.reduce((a, s) => a + s.kpis.arama, 0);
+  const days = oneDay ? 1 : buckets.length;
+  return {
+    label: NAMES[subject] ?? subject,
+    subject,
+    first,
+    last,
+    cut: `${last}T18:00:00+03:00`,
+    aligned: p === "b" && q.get("align") !== "false",
+    work_days: days,
+    n_reps: n,
+    kpis: kpis(arama, 465 * days, r, n),
+    series_group: oneDay ? "hour" : "day",
+    series,
+  };
+}
+
 const ME: Me = { email: "yusuf.aras@rexven.com", role: "admin", rep_id: null, full_name: "Yusuf Aras" };
 
 export function mockApi(method: string, url: string): unknown {
   const path = url.split("?")[0];
   if (path === "/api/me") return ME;
   if (path === "/api/live") return live();
+  if (path === "/api/reps") return REPS.map(([rep_id, full_name]) => ({ rep_id, full_name }));
+  if (path === "/api/compare") {
+    const q = new URLSearchParams(url.split("?")[1] ?? "");
+    return { now: new Date().toISOString(), a: compareSide(q, "a"), b: compareSide(q, "b") };
+  }
   if (path === "/api/login" && method === "POST") return { email: ME.email, role: ME.role };
   if (path === "/api/logout") return { ok: "true" };
   if (path === "/api/ingest" && method === "POST") {
