@@ -8,7 +8,7 @@ type Metric = "arama" | "ulasilan" | "randevu";
 const METRICS: { key: Metric; label: string }[] = [
   { key: "arama", label: "Arama" },
   { key: "ulasilan", label: "Ulaşılan" },
-  { key: "randevu", label: "Randevu" },
+  { key: "randevu", label: "Toplantı" },
 ];
 
 const W = 720;
@@ -160,7 +160,7 @@ function HourTooltip({ row, left, top }: { row: HourRow; left: string; top: stri
         Ulaşma oranı <span><b>{pct(t.ulasma_orani)}</b> / {pct(e.ulasma_orani)}</span>
       </div>
       <div className="t-row">
-        Randevu <span><b>{int(t.randevu)}</b> / {num(e.randevu)}</span>
+        Toplantı <span><b>{int(t.randevu)}</b> / {num(e.randevu)}</span>
       </div>
       <div className="t-row">
         Doluluk <span><b>{pct(t.doluluk)}</b> / {pct(e.doluluk)}</span>

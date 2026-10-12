@@ -8,7 +8,7 @@ type Metric = "arama" | "ulasilan" | "randevu" | "ulasma_orani" | "doluluk";
 const METRICS: { key: Metric; label: string; rate?: boolean }[] = [
   { key: "arama", label: "Arama" },
   { key: "ulasilan", label: "Ulaşılan" },
-  { key: "randevu", label: "Randevu" },
+  { key: "randevu", label: "Toplantı" },
   { key: "ulasma_orani", label: "Ulaşma", rate: true },
   { key: "doluluk", label: "Doluluk", rate: true },
 ];

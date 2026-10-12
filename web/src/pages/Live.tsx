@@ -150,7 +150,7 @@ function LiveBody({ data, me, refresh }: { data: LivePayload; me: Me; refresh: (
         {countTile("Arama", "arama", k, x)}
         {countTile("Ulaşılan", "ulasilan", k, x)}
         {rateTile("Ulaşma oranı", k.ulasma_orani, x.ulasma_orani, k.lead_payda)}
-        {countTile("Randevu", "randevu", k, x)}
+        {countTile("Toplantı", "randevu", k, x)}
         <StatTile
           label="Ort. görüşme süresi"
           value={duration(k.sure_ort)}
@@ -164,7 +164,7 @@ function LiveBody({ data, me, refresh }: { data: LivePayload; me: Me; refresh: (
           expected={`${minutes(k.kayip_dk)} kayıp zaman`}
           tone={paceTone(pace(k.doluluk, x.doluluk))}
           badge={x.doluluk === null ? undefined : `ort. ${pct(x.doluluk)}`}
-          title={`Dolu ${minutes(k.dolu_dk)} / (dolu + kayıp ${minutes(k.kayip_dk)}). Arama 1 dk önce ve sonrasıyla, toplantı süresi, WhatsApp mesaj başına 1 dk. Günün en uzun boşluklarından ${minutes(k.mola_dk)} mola düşüldü.`}
+          title={`Dolu ${minutes(k.dolu_dk)} / (dolu + kayıp ${minutes(k.kayip_dk)}). Arama 1 dk önce ve sonrasıyla, toplantı süresi, WhatsApp konuşma başına 3 dk. Günün en uzun boşluklarından ${minutes(k.mola_dk)} mola düşüldü.`}
         />
       </div>
 
@@ -225,6 +225,7 @@ function LiveBody({ data, me, refresh }: { data: LivePayload; me: Me; refresh: (
               crmTracking={data.crm_tracking}
               now={new Date(data.now)}
               onLeave={markLeave}
+              meetings={data.meetings?.by_rep}
             />
           </div>
         </section>

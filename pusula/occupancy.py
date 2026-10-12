@@ -9,7 +9,8 @@ damgalarından bir şeride dökülür:
   10 dk bekleme; boş oda dolu değil (meeting_sessions, busy_interval).
   Katılımı görünmeyen randevuda Bookings planı:
   katılınan veya şu an süren randevu dolu sayılır.
-- WhatsApp: giden mesaj başına gönderimden önceki 1 dk.
+- WhatsApp: giden konuşma başına gönderimden önceki 3 dk (yönetici kararı,
+  12 Ekim; Zoho mesajı tek tek değil konuşma olarak tutar).
 
 Çakışan aralıklar birleşir (aynı dakika iki kez sayılmaz). Mesai içindeki
 boşlukların en uzunlarından toplam 75 dk mola sayılır, kalan boşluk kayıp
@@ -45,7 +46,7 @@ from pusula.temas import (
 
 BCW_SEC = 60
 ACW_SEC = 60
-WP_SEC_PER_MESAJ = 60
+WP_SEC_PER_MESAJ = 180
 # Bookings randevusu ile Zoho Meeting oturumu bu kadar dakika içinde eşleşir.
 MATCH_MIN = 20
 MOLA_DK = MOLA_SAAT * 60
