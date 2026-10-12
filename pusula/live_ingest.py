@@ -27,6 +27,8 @@ from pusula.ingest import get
 from pusula.ingest.crm_actions import sync_crm_actions
 from pusula.ingest.crm_contacts import sync_contacts
 from pusula.ingest.lead_identity import sync_leads
+from pusula.ingest.zoho_meeting import enabled as meetings_enabled
+from pusula.ingest.zoho_meeting import sync_meetings
 from pusula.metrics import TZ
 from pusula.panel_data import connect
 
@@ -43,6 +45,7 @@ WINDOW_LOOKBACK = timedelta(hours=2)
 DEFAULT_BUDGET_SEC = 40.0
 # İmleç yoksa veya çok eskiyse (ör. uzun kesinti) sınırsız geri sarma olmasın.
 MAX_CURSOR_AGE = timedelta(days=2)
+MEETING_LOOKBACK = timedelta(hours=6)
 
 
 def is_active(now: datetime) -> bool:
@@ -114,6 +117,11 @@ def _steps(now: datetime, run_slow: bool) -> list[tuple[str, Callable[[], Any]]]
             ("leadler", lambda: sync_leads(since=now - WINDOW_LOOKBACK)),
             ("kisiler", lambda: sync_contacts(since=now - WINDOW_LOOKBACK)),
         ]
+        if meetings_enabled():
+            # Gerçek toplantı katılımı; Vercel sınırı için son saatler ve süre tavanı.
+            steps.append(
+                ("toplantilar", lambda: sync_meetings(now, lookback=MEETING_LOOKBACK, budget_sec=15))
+            )
     return steps
 
 

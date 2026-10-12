@@ -1,0 +1,41 @@
+# Zoho Meeting gerçek katılım süreleri. Saatlik akış block-ingest.yml'de;
+# burası elle geriye dönük doldurma (ör. 90 gün).
+name: meeting-ingest
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Geriye bakış (gün)"
+        default: "30"
+
+concurrency:
+  group: pusula-meeting
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUNBUFFERED: "1"
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  DATABASE_URL_POOLED: ${{ secrets.DATABASE_URL_POOLED }}
+  ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
+  ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
+  ZOHO_ACCOUNTS_DOMAIN: ${{ secrets.ZOHO_ACCOUNTS_DOMAIN }}
+  ZOHO_MEETING_REFRESH_TOKEN: ${{ secrets.ZOHO_MEETING_REFRESH_TOKEN }}
+
+jobs:
+  meeting-ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Bağımlılıkları kur
+        run: python -m pip install -r requirements.txt
+      - name: Zoho Meeting katılımı
+        run: python scripts/meeting_ingest.py --days "${{ inputs.days }}"

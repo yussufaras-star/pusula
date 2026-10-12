@@ -26,6 +26,7 @@ env:
   ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
   ZOHO_ACCOUNTS_DOMAIN: ${{ secrets.ZOHO_ACCOUNTS_DOMAIN }}
   ZOHO_API_DOMAIN: ${{ secrets.ZOHO_API_DOMAIN }}
+  ZOHO_MEETING_REFRESH_TOKEN: ${{ secrets.ZOHO_MEETING_REFRESH_TOKEN }}
 
 jobs:
   sync-hourly:
@@ -41,3 +42,5 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Saatlik dört kaynak
         run: python scripts/block_ingest.py
+      - name: Zoho Meeting katılımı (son 2 gün)
+        run: python scripts/meeting_ingest.py --days 2

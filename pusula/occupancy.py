@@ -5,8 +5,9 @@ damgalarından bir şeride dökülür:
 
 - Arama: başlangıçtan 1 dk önce (BCW) → bitişten 1 dk sonra (ACW).
   Giden her deneme ve cevaplanan gelen arama. Planlanan / ileri tarihli yok.
-- Toplantı: katılınan (veya şu an süren) randevunun süresi (Bookings
-  süresi; Zoho Meeting gerçek süresi geldiğinde o).
+- Toplantı: Zoho Meeting'de temsilcinin gerçek katılım aralığı
+  (meeting_sessions). Katılımı görünmeyen randevuda Bookings planı:
+  katılınan veya şu an süren randevu dolu sayılır.
 - WhatsApp: giden mesaj başına gönderimden önceki 1 dk.
 
 Çakışan aralıklar birleşir (aynı dakika iki kez sayılmaz). Mesai içindeki
@@ -43,6 +44,8 @@ from pusula.temas import (
 BCW_SEC = 60
 ACW_SEC = 60
 WP_SEC_PER_MESAJ = 60
+# Bookings randevusu ile Zoho Meeting oturumu bu kadar dakika içinde eşleşir.
+MATCH_MIN = 20
 MOLA_DK = MOLA_SAAT * 60
 
 Interval = tuple[datetime, datetime]
@@ -241,6 +244,20 @@ def fetch_intervals(
         "e.channel = 'meeting' AND e.meta->>'randevu_durumu' = 'sonuc_girilmedi' "
         f"AND {meet_end} <= now()"
     )
+    with connect() as conn:
+        exists = conn.execute("SELECT to_regclass('meeting_sessions')").fetchone()
+    has_sessions = bool(exists and exists[0])
+    if has_sessions:
+        # Zoho Meeting'de temsilcinin katılımı görünen randevu planla değil
+        # gerçek katılımla sayılır (aşağıdaki ikinci sorgu).
+        attended = f"""EXISTS (
+            SELECT 1 FROM meeting_sessions ms
+            WHERE ms.org_id = e.org_id AND ms.rep_id = e.rep_id
+              AND ms.presenter_join IS NOT NULL
+              AND ms.planned_start BETWEEN e.occurred_at - interval '{MATCH_MIN} minutes'
+                                       AND e.occurred_at + interval '{MATCH_MIN} minutes')"""
+        meet = f"({meet}) AND NOT {attended}"
+        pending = f"({pending}) AND NOT {attended}"
     extra = ""
     params: list[Any] = [get_org_id(), span.start, span.end]
     if rep_ids:
@@ -280,9 +297,37 @@ def fetch_intervals(
     """
     out: dict[tuple[str, date], list[Tagged]] = defaultdict(list)
     with connect() as conn:
-        for rep_id, day, start, end, kind in conn.execute(sql, params).fetchall():
-            out[(str(rep_id), day)].append((start.astimezone(TZ), end.astimezone(TZ), kind))
+        rows = conn.execute(sql, params).fetchall()
+        if has_sessions:
+            rows += conn.execute(_presence_sql(extra), params).fetchall()
+    for rep_id, day, start, end, kind in rows:
+        out[(str(rep_id), day)].append((start.astimezone(TZ), end.astimezone(TZ), kind))
     return dict(out)
+
+
+def _presence_sql(extra: str) -> str:
+    """Zoho Meeting'de temsilcinin gerçek katılım aralıkları (dolu).
+
+    extra, events sorgusundaki rep / gün tipi filtresi; aynı parametrelerle
+    çalışsın diye e.occurred_at yerine katılım anı kullanılır.
+    """
+    joined = "ms.presenter_join"
+    filters = extra.replace("e.occurred_at", joined).replace("e.rep_id", "ms.rep_id")
+    return f"""
+        SELECT
+          ms.rep_id,
+          ({joined} AT TIME ZONE 'Europe/Istanbul')::date,
+          {joined},
+          least(coalesce(ms.presenter_leave, now()), now()),
+          'dolu'
+        FROM meeting_sessions ms
+        JOIN reps r ON r.org_id = ms.org_id AND r.rep_id = ms.rep_id
+        WHERE ms.org_id = %s
+          AND r.category = 'sales' AND r.active
+          AND {joined} >= %s AND {joined} < %s
+          AND {joined} <= now()
+          {filters}
+    """
 
 
 def timelines_for(

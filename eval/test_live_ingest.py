@@ -93,8 +93,13 @@ def test_whatsapp_step_is_on_unless_disabled(monkeypatch) -> None:
     from pusula.live_ingest import _steps
 
     monkeypatch.delenv("PUSULA_WHATSAPP_INGEST", raising=False)
+    monkeypatch.delenv("ZOHO_MEETING_REFRESH_TOKEN", raising=False)
     names = [name for name, _ in _steps(at(12, 11), run_slow=True)]
     assert names == ["aramalar", "whatsapp", "crm_islemleri", "randevular", "leadler", "kisiler"]
+
+    monkeypatch.setenv("ZOHO_MEETING_REFRESH_TOKEN", "x")
+    names = [name for name, _ in _steps(at(12, 11), run_slow=True)]
+    assert names[-1] == "toplantilar"
 
     monkeypatch.setenv("PUSULA_WHATSAPP_INGEST", "0")
     names = [name for name, _ in _steps(at(12, 11), run_slow=False)]
