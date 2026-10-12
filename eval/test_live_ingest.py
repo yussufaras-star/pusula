@@ -88,13 +88,13 @@ def test_actions_before_window_are_ignored() -> None:
     assert actions_from_record("Tasks", record, since=SINCE, sales_reps=REPS) == []
 
 
-def test_whatsapp_step_is_off_until_kvkk_flag(monkeypatch) -> None:
+def test_whatsapp_step_is_on_unless_disabled(monkeypatch) -> None:
     from pusula.live_ingest import _steps
 
     monkeypatch.delenv("PUSULA_WHATSAPP_INGEST", raising=False)
-    names = [name for name, _ in _steps(at(12, 11), run_slow=False)]
-    assert names == ["aramalar", "crm_islemleri"]
-
-    monkeypatch.setenv("PUSULA_WHATSAPP_INGEST", "1")
     names = [name for name, _ in _steps(at(12, 11), run_slow=True)]
     assert names == ["aramalar", "whatsapp", "crm_islemleri", "randevular", "leadler", "kisiler"]
+
+    monkeypatch.setenv("PUSULA_WHATSAPP_INGEST", "0")
+    names = [name for name, _ in _steps(at(12, 11), run_slow=False)]
+    assert names == ["aramalar", "crm_islemleri"]

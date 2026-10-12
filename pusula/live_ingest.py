@@ -95,8 +95,8 @@ def _try_lock(conn: Any) -> bool:
 
 
 def whatsapp_enabled() -> bool:
-    """KVKK (ROADMAP): ekibe yazılı aydınlatma yapılana kadar kapalı."""
-    return os.environ.get("PUSULA_WHATSAPP_INGEST", "").strip() == "1"
+    """Varsayılan açık; PUSULA_WHATSAPP_INGEST=0 kapatır."""
+    return os.environ.get("PUSULA_WHATSAPP_INGEST", "").strip() != "0"
 
 
 def _steps(now: datetime, run_slow: bool) -> list[tuple[str, Callable[[], Any]]]:

@@ -25,7 +25,7 @@ env:
   ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
   ZOHO_ACCOUNTS_DOMAIN: ${{ secrets.ZOHO_ACCOUNTS_DOMAIN }}
   ZOHO_API_DOMAIN: ${{ secrets.ZOHO_API_DOMAIN }}
-  # KVKK aydınlatması sonrası repo değişkeni PUSULA_WHATSAPP_INGEST=1 yapılır.
+  # Kapatmak için repo değişkeni PUSULA_WHATSAPP_INGEST=0.
   PUSULA_WHATSAPP_INGEST: ${{ vars.PUSULA_WHATSAPP_INGEST }}
 
 jobs:

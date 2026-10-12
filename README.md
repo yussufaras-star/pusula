@@ -128,7 +128,7 @@ veritabanı gerektirmeyen testleri yine çalıştırır.
 ### Canlı veri akışı
 
 `scripts/live_ingest.py` (`pusula/live_ingest.py`) mesai içinde (08:30–18:45,
-cumartesi 15:45'e kadar) her çalıştırmada aramaları ve (açıksa) WhatsApp'ı imleçten,
+cumartesi 15:45'e kadar) her çalıştırmada aramaları ve WhatsApp'ı imleçten,
 CRM işlemlerini (`crm_actions`) çeker; randevu, lead ve kişileri çeyrek saatte
 bir 2 saatlik pencereyle tazeler. İki tetikleyici vardır:
 
@@ -138,9 +138,8 @@ bir 2 saatlik pencereyle tazeler. İki tetikleyici vardır:
   `GET https://<alan-adı>/api/cron/live-ingest`, başlık
   `Authorization: Bearer <CRON_SECRET>`.
 
-WhatsApp adımı KVKK gereği varsayılan kapalıdır; ekibe yazılı aydınlatma
-yapıldıktan sonra `PUSULA_WHATSAPP_INGEST=1` (GitHub repo değişkeni ve/veya
-Vercel ortam değişkeni) ile açılır.
+WhatsApp adımı varsayılan açıktır; `PUSULA_WHATSAPP_INGEST=0` (GitHub repo
+değişkeni ve/veya Vercel ortam değişkeni) kapatır.
 
 Eşzamanlı çalışmalar Postgres advisory lock ile tekilleşir. Başarılı arama
 senkronu `sync_state.live_ingest` damgasını günceller; paneldeki "veri x dk
