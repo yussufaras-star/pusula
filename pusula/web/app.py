@@ -43,7 +43,6 @@ from pusula.panel_auth import (
 )
 from pusula.panel_data import DateWindow, load_rep_by_email, load_reps
 from pusula.panel_profile import PROFILE_WARNING, performance_profiles
-from pusula.targets import METRICS, STANDARD, TEAM_DEFAULT, history_daily, load_targets, save_targets
 from pusula.web import cache
 from pusula.web.auth import (
     COOKIE_NAME,
@@ -78,16 +77,6 @@ class LeaveBody(BaseModel):
     rep_id: str
     day: str
     on: bool
-
-
-class TargetRow(BaseModel):
-    rep_id: str
-    metric: str
-    value: float | None
-
-
-class TargetsBody(BaseModel):
-    rows: list[TargetRow]
 
 
 class DecisionBody(BaseModel):
@@ -332,74 +321,6 @@ def mark_leave(body: LeaveBody, user: AuthUser = Depends(admin_user)) -> dict[st
     set_leave(body.rep_id, day, body.on, by=user.email)
     cache.clear()
     return {"rep_id": body.rep_id, "day": day, "on": body.on}
-
-
-# --- hedefler ----------------------------------------------------------------
-
-
-def reference_weekday(today: date) -> date:
-    """Hedefler hafta içi tam gün içindir; ortalama da hafta içinden."""
-    return today - timedelta(days=max(0, today.weekday() - 4))
-
-
-@app.get("/api/targets")
-def targets(user: AuthUser = Depends(admin_user)) -> Any:
-    require_database()
-    now = _now()
-    ref = reference_weekday(now.date())
-    history = cache.cached(
-        ("history", ref.isoformat()), HISTORY_TTL, lambda: history_by_rep_hour(ref, now)
-    )
-    stored = load_targets()
-    reps = load_reps()
-
-    def values(rep_id: str) -> dict[str, float | None]:
-        return {metric: stored.get((rep_id, metric)) for metric in METRICS}
-
-    def rounded(avg: dict[str, float | None]) -> dict[str, float | None]:
-        return {k: (round(v, 1) if v is not None else None) for k, v in avg.items()}
-
-    averages = {rep.rep_id: rounded(history_daily(history.get(rep.rep_id, {}))) for rep in reps}
-    team_avg = {
-        metric: (
-            round(sum(vals) / len(vals), 1)
-            if (vals := [a[metric] for a in averages.values() if a[metric]])
-            else None
-        )
-        for metric in METRICS
-    }
-    return jsonable_encoder(
-        {
-            "metrics": METRICS,
-            "standard": STANDARD,
-            "default": {"values": values(TEAM_DEFAULT), "average": team_avg},
-            "reps": [
-                {
-                    "rep_id": rep.rep_id,
-                    "name": rep.full_name,
-                    "values": values(rep.rep_id),
-                    "average": averages[rep.rep_id],
-                }
-                for rep in reps
-            ],
-        }
-    )
-
-
-@app.put("/api/targets")
-def put_targets(body: TargetsBody, user: AuthUser = Depends(admin_user)) -> dict[str, Any]:
-    require_database()
-    known = {rep.rep_id for rep in load_reps()} | {TEAM_DEFAULT}
-    for row in body.rows:
-        if row.rep_id not in known:
-            raise HTTPException(status_code=404, detail="Temsilci bulunamadı")
-        if row.metric not in METRICS:
-            raise HTTPException(status_code=400, detail=f"Bilinmeyen hedef: {row.metric}")
-        if row.value is not None and not (0 <= row.value <= (100 if row.metric == "doluluk" else 1000)):
-            raise HTTPException(status_code=400, detail=f"{METRICS[row.metric]} hedefi aralık dışında")
-    save_targets(((r.rep_id, r.metric, r.value) for r in body.rows), by=user.email)
-    cache.clear()
-    return {"saved": len(body.rows)}
 
 
 # --- dürtmeler ------------------------------------------------------------------

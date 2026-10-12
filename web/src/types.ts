@@ -174,27 +174,19 @@ export interface Meetings {
   by_rep: Record<string, MeetingSummary>;
 }
 
-// pusula/targets.py — günlük hedef ve "bu saate kadar" payı.
-export type TargetMetric = "arama" | "ulasilan" | "randevu" | "doluluk";
-export type TargetSource = "kisi" | "ekip" | "standart" | "ortalama" | "hedef";
+// pusula/targets.py — kural hedefleri ve "bu saate kadar" payı.
+export type TargetMetric = "arama" | "ulasilan" | "ulasma_orani" | "randevu" | "doluluk";
+export type TargetSource = "standart" | "ortalama";
 
 export interface TargetItem {
   daily: number;
   by_now: number;
   source: TargetSource;
   actual: number | null;
+  bonus?: number;
 }
 
 export type Targets = Partial<Record<TargetMetric, TargetItem>>;
-
-export type TargetValues = Record<TargetMetric, number | null>;
-
-export interface TargetsPayload {
-  metrics: Record<TargetMetric, string>;
-  standard: Partial<Record<TargetMetric, number>>;
-  default: { values: TargetValues; average: TargetValues };
-  reps: { rep_id: string; name: string; values: TargetValues; average: TargetValues }[];
-}
 
 // pusula/pace_nudges.py list_queue.
 export type NudgeStatus = "bekliyor" | "gonderiliyor" | "gonderildi" | "reddedildi" | "suresi_doldu" | "hata";

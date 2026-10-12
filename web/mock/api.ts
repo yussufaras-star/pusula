@@ -11,7 +11,6 @@ import type {
   NudgeItem,
   RepCard,
   RepStatus,
-  TargetsPayload,
   Segment,
 } from "../src/types";
 
@@ -175,12 +174,14 @@ function live(): LivePayload {
       continue;
     }
     const share = c.expected.arama / 90;
-    const own = c.rep_id === "r1";
+    const bonus = c.rep_id === "r2" ? 4 : 0;
+    const byNow = Math.round((45 * share + bonus) * 10) / 10;
     c.target = {
-      arama: { daily: 90, by_now: Math.round(c.expected.arama * 10) / 10, source: own ? "kisi" : "ekip", actual: c.today.arama },
-      ulasilan: { daily: 24, by_now: Math.round(24 * share * 10) / 10, source: "ortalama", actual: c.today.ulasilan },
-      randevu: { daily: 4, by_now: Math.round(4 * share * 10) / 10, source: "ekip", actual: c.today.randevu },
-      doluluk: { daily: 70, by_now: 70, source: "ekip", actual: c.today.doluluk },
+      arama: { daily: 45 + bonus, by_now: byNow, source: "standart", actual: c.today.arama, bonus },
+      ulasilan: { daily: (45 + bonus) * 0.7, by_now: Math.round(byNow * 7) / 10, source: "standart", actual: c.today.ulasilan },
+      ulasma_orani: { daily: 70, by_now: 70, source: "standart", actual: c.today.ulasma_orani },
+      randevu: { daily: 4, by_now: Math.round(4 * share * 10) / 10, source: "ortalama", actual: c.today.randevu },
+      doluluk: { daily: 60, by_now: 60, source: "ortalama", actual: c.today.doluluk },
     };
   }
   const teamTarget = (["arama", "ulasilan", "randevu"] as const).reduce(
@@ -189,14 +190,15 @@ function live(): LivePayload {
       acc[m] = {
         daily: items.reduce((a, t) => a + t.daily, 0),
         by_now: Math.round(items.reduce((a, t) => a + t.by_now, 0) * 10) / 10,
-        source: "hedef",
+        source: "standart",
         actual: null,
       };
       return acc;
     },
     {} as NonNullable<RepCard["target"]>,
   );
-  teamTarget.doluluk = { daily: 70, by_now: 70, source: "hedef", actual: null };
+  teamTarget.ulasma_orani = { daily: 70, by_now: 70, source: "standart", actual: null };
+  teamTarget.doluluk = { daily: 60, by_now: 60, source: "ortalama", actual: null };
 
   const avail = ((nowHour - 9) * 60 + minute) * (465 / 540);
   const n = cards.length;
@@ -361,20 +363,6 @@ ${REPS[3][1].split(" ")[0]}, bugün şu başlıklarda temponun gerisindesin:
 ];
 for (const n of NUDGES) n.text = n.ai_text ? `${n.body}\n💡 ${n.ai_text}` : n.body;
 
-function mockTargets(): TargetsPayload {
-  const empty = { arama: null, ulasilan: null, randevu: null, doluluk: null };
-  return {
-    metrics: { arama: "Arama", ulasilan: "Ulaşılan", randevu: "Toplantı", doluluk: "Doluluk" },
-    standard: { arama: 45 },
-    default: { values: { ...empty, randevu: 4, doluluk: 70 }, average: { arama: 74.2, ulasilan: 21.5, randevu: 3.1, doluluk: 63.4 } },
-    reps: REPS.map(([rep_id, full_name, perf]) => ({
-      rep_id,
-      name: full_name,
-      values: rep_id === "r1" ? { ...empty, arama: 110 } : empty,
-      average: perf === 0 ? empty : { arama: Math.round(80 * perf * 10) / 10, ulasilan: Math.round(22 * perf * 10) / 10, randevu: 3, doluluk: 60 + perf * 5 },
-    })),
-  };
-}
 
 const ME: Me = { email: "yusuf.aras@rexven.com", role: "admin", rep_id: null, full_name: "Yusuf Aras" };
 
@@ -386,7 +374,6 @@ export function mockApi(method: string, url: string): unknown {
     LEAVES.has("r5") ? LEAVES.delete("r5") : LEAVES.add("r5");
     return { ok: true };
   }
-  if (path === "/api/targets") return method === "PUT" ? { saved: 1 } : mockTargets();
   if (path === "/api/nudges") return { items: NUDGES, approval_required: true, ai: true };
   if (path.startsWith("/api/nudges/") && method === "POST") {
     const item = NUDGES.find((n) => String(n.id) === path.split("/").pop());

@@ -11,11 +11,11 @@ from pusula.pace_nudges import (
     in_window,
 )
 from pusula.targets import (
-    STANDARD,
+    STANDARD_CALLS,
     attach_targets,
     day_factor,
     elapsed_share,
-    resolve,
+    freed_windows,
     rep_targets,
 )
 
@@ -27,29 +27,20 @@ def at(day: date, hour: int, minute: int = 0) -> datetime:
     return datetime(day.year, day.month, day.day, hour, minute, tzinfo=TZ)
 
 
+def meeting(start: datetime, state: str, planned: float = 30, rep_id: str = "r1") -> dict:
+    return {"rep_id": rep_id, "start": start, "planned_min": planned, "state": state}
+
+
 def test_standard_call_target_is_blocks_minus_break_over_five_minutes() -> None:
     # (09-11 + 14-17 = 300 dk) - 75 dk mola = 225 dk; 5 dk bant → 45.
-    assert STANDARD["arama"] == 45
-    assert resolve("r1", "arama", {}, {"arama": 30.0}, MONDAY) == (45, "standart")
+    assert STANDARD_CALLS == 45
 
 
 def test_saturday_is_all_meetings() -> None:
     assert day_factor(MONDAY, "arama") == 1.0
     assert day_factor(SATURDAY, "arama") == 0.0
-    assert day_factor(SATURDAY, "randevu") == 1.5  # 6 sa / 4 sa
-    stored = {("r1", "arama"): 90.0, ("r1", "randevu"): 4.0, ("r1", "doluluk"): 70.0}
-    assert resolve("r1", "arama", stored, {}, SATURDAY) == (None, None)
-    assert resolve("r1", "ulasilan", stored, {"ulasilan": 9.0}, SATURDAY) == (None, None)
-    assert resolve("r1", "randevu", stored, {}, SATURDAY) == (6.0, "kisi")
-    assert resolve("r1", "doluluk", stored, {}, SATURDAY) == (70.0, "kisi")
-
-
-def test_resolve_order_rep_team_standard_average() -> None:
-    stored = {("*", "arama"): 80.0, ("r1", "arama"): 60.0}
-    assert resolve("r1", "arama", stored, {}, MONDAY) == (60.0, "kisi")
-    assert resolve("r2", "arama", stored, {}, MONDAY) == (80.0, "ekip")
-    assert resolve("r1", "ulasilan", stored, {"ulasilan": 12.0}, MONDAY) == (12.0, "ortalama")
-    assert resolve("r1", "randevu", stored, {"randevu": None}, MONDAY) == (None, None)
+    out = rep_targets(today={}, hist_hours={}, meetings=[], day=SATURDAY, cutoff=at(SATURDAY, 12))
+    assert "arama" not in out and "ulasma_orani" not in out
 
 
 def test_calls_accrue_only_in_call_blocks() -> None:
@@ -70,18 +61,28 @@ def test_meetings_accrue_only_in_meeting_blocks() -> None:
     assert elapsed_share(at(MONDAY, 10), "doluluk", MONDAY) == 1.0
 
 
-def test_rep_targets_paces_by_blocks() -> None:
-    out = rep_targets(
-        rep_id="r1",
-        today={"arama": 3},
-        hist_hours={},
-        stored={("r1", "arama"): 90.0},
-        day=MONDAY,
-        cutoff=at(MONDAY, 12, 0),
-    )
-    assert out["arama"] == {"daily": 90.0, "by_now": 36.0, "source": "kisi", "actual": 3}
-    # Geçmiş yok, standart yok → ulaşılan hedefi uydurulmaz.
-    assert "ulasilan" not in out
+def test_no_show_frees_slot_after_ten_minute_wait() -> None:
+    items = [
+        meeting(at(MONDAY, 12), "gelmedi", 30),   # 12:10-12:30 → 20 dk
+        meeting(at(MONDAY, 13), "geldi", 30),
+        meeting(at(MONDAY, 17), "bilinmiyor", 30),
+        meeting(at(MONDAY, 17, 30), "gelmedi", 8),  # beklemeden kısa → yok
+    ]
+    assert freed_windows(items) == [(at(MONDAY, 12, 10), at(MONDAY, 12, 30))]
+    out = rep_targets(today={"arama": 10}, hist_hours={}, meetings=items, day=MONDAY, cutoff=at(MONDAY, 12, 20))
+    # 45 + 20/5 = 49; şimdiye: 09-11 payı 18 + 12:10-12:20 → 2.
+    assert out["arama"]["daily"] == 49.0
+    assert out["arama"]["bonus"] == 4.0
+    assert out["arama"]["by_now"] == 20.0
+    assert out["ulasilan"]["daily"] == 34.3
+    assert out["ulasma_orani"]["daily"] == 70.0
+
+
+def test_no_show_on_saturday_creates_call_target() -> None:
+    items = [meeting(at(SATURDAY, 10), "gelmedi", 40)]
+    out = rep_targets(today={}, hist_hours={}, meetings=items, day=SATURDAY, cutoff=at(SATURDAY, 14))
+    assert out["arama"]["daily"] == 6.0  # 30 dk / 5
+    assert out["arama"]["by_now"] == 6.0
 
 
 def test_attach_targets_sums_team_and_skips_leave() -> None:
@@ -91,15 +92,16 @@ def test_attach_targets_sums_team_and_skips_leave() -> None:
             {"rep_id": "b", "today": {"arama": 4}, "on_leave": False},
             {"rep_id": "c", "today": {"arama": 0}, "on_leave": True},
         ],
-        "team": {"today": {"arama": 14}},
+        "team": {"today": {"arama": 14, "ulasma_orani": 52.0}},
     }
-    stored = {("*", "arama"): 90.0, ("*", "doluluk"): 70.0}
-    attach_targets(payload, history={}, stored=stored, day=MONDAY, cutoff=at(MONDAY, 13, 30))
+    items = [meeting(at(MONDAY, 12), "gelmedi", 30, rep_id="b")]
+    attach_targets(payload, history={}, meetings=items, day=MONDAY, cutoff=at(MONDAY, 13, 30))
     assert payload["reps"][2]["target"] == {}
     team = payload["team"]["target"]
-    # 13:30: arama payı 09-11 (120/300).
-    assert team["arama"] == {"daily": 180.0, "by_now": 72.0, "source": "hedef", "actual": 14}
-    assert team["doluluk"]["daily"] == 70.0
+    # 13:30: arama payı 09-11 (18 kişi başı) + b'nin 4 ek araması.
+    assert team["arama"] == {"daily": 94.0, "by_now": 40.0, "source": "standart", "bonus": 4.0, "actual": 14}
+    assert team["ulasma_orani"]["daily"] == 70.0
+    assert team["ulasma_orani"]["actual"] == 52.0
 
 
 def card(**target) -> dict:
@@ -113,18 +115,34 @@ def card(**target) -> dict:
 
 
 def test_gaps_apply_80_percent_rule_and_minimum_expectation() -> None:
-    behind = card(arama={"daily": 90, "by_now": 20, "source": "kisi"})
+    behind = card(arama={"daily": 90, "by_now": 20, "source": "standart"})
     assert [g["metric"] for g in gaps_for(behind)] == ["arama"]
-    on_pace = card(arama={"daily": 90, "by_now": 12, "source": "kisi"})
+    # Ulaşılan mesaja girmez (arama ve ulaşma oranı satırlarının sonucu).
+    both = card(arama={"daily": 90, "by_now": 20, "source": "standart"},
+                ulasilan={"daily": 60, "by_now": 14, "source": "standart"})
+    assert [g["metric"] for g in gaps_for(both)] == ["arama"]
+    on_pace = card(arama={"daily": 90, "by_now": 12, "source": "standart"})
     assert gaps_for(on_pace) == []
     # Bu saate kadar 5'ten az arama beklenirken uyarı yok.
-    early = card(arama={"daily": 90, "by_now": 4, "source": "kisi"})
+    early = card(arama={"daily": 90, "by_now": 4, "source": "standart"})
     early["today"]["arama"] = 0
     assert gaps_for(early) == []
 
 
+def test_reach_gap_needs_sample_and_ten_points() -> None:
+    low = card(ulasma_orani={"daily": 70.0, "by_now": 70.0, "source": "standart"})
+    low["today"].update({"ulasma_orani": 55.0, "lead_payda": 20})
+    assert [g["metric"] for g in gaps_for(low)] == ["ulasma_orani"]
+    low["today"]["lead_payda"] = 6
+    assert gaps_for(low) == []
+    low["today"].update({"ulasma_orani": 62.0, "lead_payda": 20})
+    assert gaps_for(low) == []
+    body = format_body("Ayşe Kar", [{"metric": "ulasma_orani", "actual": 55.0, "daily": 70.0, "by_now": 70.0, "source": "standart"}], at(MONDAY, 12))
+    assert "- Ulaşma oranı: %55 (günlük hedef %70)" in body
+
+
 def test_occupancy_gap_needs_ten_points_and_ninety_minutes() -> None:
-    low = card(doluluk={"daily": 70.0, "by_now": 70.0, "source": "kisi"})
+    low = card(doluluk={"daily": 70.0, "by_now": 70.0, "source": "standart"})
     assert [g["metric"] for g in gaps_for(low)] == ["doluluk"]
     low["today"]["doluluk"] = 61.0
     assert gaps_for(low) == []

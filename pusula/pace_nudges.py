@@ -22,14 +22,15 @@ from pusula.block_share import apply_shadow, load_sales_reps, post_cliq
 from pusula.config import get_org_id
 from pusula.metrics import TZ, shift_bounds
 from pusula.panel_data import connect
-from pusula.targets import METRICS
+from pusula.targets import METRICS, RATE_METRICS
 
 logger = logging.getLogger(__name__)
 
 PACE_RATIO = 0.8
 MIN_BY_NOW = {"arama": 5.0, "ulasilan": 3.0, "randevu": 2.0}
-DOLULUK_GAP = 10.0
+RATE_GAP = 10.0
 DOLULUK_MIN_MESAI = 90.0
+REACH_MIN_SAMPLE = 10
 FIRST_HOUR = 10
 LAST_MINUTES = 30
 COOLDOWN_MIN = 120
@@ -38,6 +39,8 @@ STALE_MIN = 20
 PENDING_TTL_MIN = 45
 APPROVAL_DAYS = 14
 SKIP_STATUSES = {"izinli", "mesai_disi", "baslamadi", "gecmis"}
+# Ulaşılan = arama × ulaşma oranı; ikisi zaten mesajda, üçüncü satır tekrar olur.
+NOT_NUDGED = {"ulasilan"}
 _LOCK_KEY = 4_204_210
 
 SCHEMA_SQL = """
@@ -86,11 +89,18 @@ def gaps_for(card: dict[str, Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     today = card.get("today") or {}
     for metric, target in (card.get("target") or {}).items():
+        if metric in NOT_NUDGED:
+            continue
         actual = today.get(metric)
-        if metric == "doluluk":
-            if actual is None or float(today.get("mesai_dk") or 0) < DOLULUK_MIN_MESAI:
+        if metric in RATE_METRICS:
+            # Oran: hedefin 10 puan altı; yeterli örneklem/mesai yoksa yorum yok.
+            if actual is None:
                 continue
-            if actual < target["daily"] - DOLULUK_GAP:
+            if metric == "doluluk" and float(today.get("mesai_dk") or 0) < DOLULUK_MIN_MESAI:
+                continue
+            if metric == "ulasma_orani" and int(today.get("lead_payda") or 0) < REACH_MIN_SAMPLE:
+                continue
+            if actual < target["daily"] - RATE_GAP:
                 out.append({"metric": metric, "actual": actual, **target})
             continue
         by_now = float(target.get("by_now") or 0)
@@ -124,7 +134,7 @@ def _fmt(value: float | None) -> str:
 def _gap_line(gap: dict[str, Any]) -> str:
     label = METRICS[gap["metric"]]
     basis = "günlük ortalaman" if gap["source"] == "ortalama" else "günlük hedef"
-    if gap["metric"] == "doluluk":
+    if gap["metric"] in RATE_METRICS:
         return f"- {label}: %{_fmt(gap['actual'])} ({basis} %{_fmt(gap['daily'])})"
     return (
         f"- {label}: {_fmt(gap['actual'])}; bu saate kadar {_fmt(gap['by_now'])} "
@@ -166,9 +176,8 @@ def ai_facts(card: dict[str, Any], gaps: list[dict[str, Any]], local: datetime) 
                 "gerceklesen": g["actual"],
                 "bu_saate_kadar_beklenen": g["by_now"],
                 "gunluk_hedef": g["daily"],
-                "hedef_kaynagi": {"ortalama": "gecmis_ortalama", "standart": "standart"}.get(
-                    g["source"], "yonetici"
-                ),
+                "hedef_kaynagi": "gecmis_ortalama" if g["source"] == "ortalama" else "standart",
+                "gelmeyen_toplantidan_ek_arama": g.get("bonus") or None,
             }
             for g in gaps
         ],

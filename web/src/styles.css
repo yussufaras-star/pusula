@@ -1557,7 +1557,7 @@ table.meet-list {
   background: var(--heat-4);
 }
 
-/* --- hedefler, dürtmeler, yorum ------------------------------------------ */
+/* --- dürtmeler, yorum ------------------------------------------ */
 
 .card-head .spacer {
   flex: 1;
@@ -1570,31 +1570,6 @@ table.meet-list {
 .banner.ok {
   background: var(--good-wash);
   color: var(--good-ink);
-}
-
-.target-input {
-  width: 96px;
-  max-width: 100%;
-  padding: 6px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.target-input::placeholder {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.target-default td {
-  background: var(--surface-2);
-}
-
-.target-rules {
-  font-size: 13px;
-  line-height: 1.55;
 }
 
 .commentary {

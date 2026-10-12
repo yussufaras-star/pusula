@@ -26,14 +26,14 @@ Kurallar:
 - Yalnız verideki sayılara dayan; tahmin veya uydurma yok.
 - "hedef_kaynagi": "ortalama" ise hedef yoktur, kıyas geçmiş ortalamayadır; \
 bunu "hedef" diye sunma, "ortalama" de. "standart" ise blok takviminden gelen \
-standart hedeftir (arama blokları eksi mola, görüşme başına 5 dk).
+standart hedeftir: arama blokları eksi mola, görüşme başına 5 dk (45); gelmeyen toplantıda 10 dk sonrası arama süresi sayılıp hedefe eklenir; ulaşma oranı hedefi %70, ulaşılan hedefi arama hedefinin %70'i.
 - Arama hedefi yalnız arama bloklarında (09-11, 14-17), toplantı hedefi \
 toplantı bloklarında (11-14, 17-18; cumartesi tamamı) birikir; toplantı \
 bloğunda arama azlığını hata sayma.
 - İzinli temsilcileri performans yorumuna katma.
 - Örneklem küçükse (ör. 3 aramadan oran) oranı yorumlama."""
 
-SOURCE_LABEL = {"ortalama": "ortalama", "standart": "standart", "kisi": "yonetici", "ekip": "yonetici"}
+SOURCE_LABEL = {"ortalama": "ortalama", "standart": "standart"}
 
 
 def _target_view(target: dict[str, Any]) -> dict[str, Any]:
@@ -42,7 +42,8 @@ def _target_view(target: dict[str, Any]) -> dict[str, Any]:
             "gerceklesen": item.get("actual"),
             "bu_saate_kadar_beklenen": item.get("by_now"),
             "gunluk": item.get("daily"),
-            "hedef_kaynagi": SOURCE_LABEL.get(item.get("source") or "", "yonetici"),
+            "hedef_kaynagi": SOURCE_LABEL.get(item.get("source") or "", "ortalama"),
+            "gelmeyen_toplantidan_ek_arama": item.get("bonus") or None,
         }
         for metric, item in (target or {}).items()
     }
