@@ -11,6 +11,11 @@ damgalarından bir şeride dökülür:
   katılınan veya şu an süren randevu dolu sayılır.
 - WhatsApp: giden konuşma başına gönderimden önceki 3 dk (yönetici kararı,
   12 Ekim; Zoho mesajı tek tek değil konuşma olarak tutar).
+- Gelmeyen toplantı: Zoho Meeting odası açılmadan CRM'de "katılmadı"
+  girildiyse planlanan başlangıçtan 10 dk bekleme dolu (yönetici kuralı).
+- CRM işlemi (not, görev, lead/deal/contact oluşturma veya değiştirme):
+  işlemden önceki 2 dk dolu. Zoho kayıt başına yalnız son değişikliği
+  verdiğinden alt sınırdır.
 
 Çakışan aralıklar birleşir (aynı dakika iki kez sayılmaz). Mesai içindeki
 boşlukların en uzunlarından toplam 75 dk mola sayılır, kalan boşluk kayıp
@@ -47,6 +52,8 @@ from pusula.temas import (
 BCW_SEC = 60
 ACW_SEC = 60
 WP_SEC_PER_MESAJ = 180
+CRM_SEC = 120
+NO_SHOW_WAIT_MIN = 10
 # Bookings randevusu ile Zoho Meeting oturumu bu kadar dakika içinde eşleşir.
 MATCH_MIN = 20
 MOLA_DK = MOLA_SAAT * 60
@@ -260,6 +267,7 @@ def fetch_intervals(
         "e.channel = 'meeting' AND e.meta->>'randevu_durumu' = 'sonuc_girilmedi' "
         f"AND {meet_end} <= now()"
     )
+    noshow = "e.channel = 'meeting' AND e.meta->>'randevu_durumu' = 'katilmadi'"
     with connect() as conn:
         exists = conn.execute("SELECT to_regclass('meeting_sessions')").fetchone()
     has_sessions = bool(exists and exists[0])
@@ -274,6 +282,7 @@ def fetch_intervals(
                                        AND e.occurred_at + interval '{MATCH_MIN} minutes')"""
         meet = f"({meet}) AND NOT {attended}"
         pending = f"({pending}) AND NOT {attended}"
+        noshow = f"({noshow}) AND NOT {attended}"
     extra = ""
     params: list[Any] = [get_org_id(), span.start, span.end]
     if rep_ids:
@@ -299,16 +308,19 @@ def fetch_intervals(
               + make_interval(secs => coalesce({dur}, 0) + {ACW_SEC})
             WHEN {meet} THEN least({meet_end}, now())
             WHEN {pending} THEN {meet_end}
+            WHEN {noshow} THEN least(
+              e.occurred_at + make_interval(mins => {NO_SHOW_WAIT_MIN}), {meet_end}, now())
             ELSE e.occurred_at
           END,
-          CASE WHEN {pending} THEN 'girilmemis' WHEN {meet} THEN 'toplanti' ELSE 'dolu' END
+          CASE WHEN {pending} THEN 'girilmemis'
+               WHEN ({meet}) OR ({noshow}) THEN 'toplanti' ELSE 'dolu' END
         FROM events e
         JOIN reps r ON r.org_id = e.org_id AND r.rep_id = e.rep_id
         WHERE e.org_id = %s
           AND r.category = 'sales' AND r.active
           AND e.occurred_at >= %s AND e.occurred_at < %s
           AND e.occurred_at <= now()
-          AND (({call}) OR ({meet}) OR ({wp}) OR ({pending}))
+          AND (({call}) OR ({meet}) OR ({wp}) OR ({pending}) OR ({noshow}))
           {extra}
     """
     out: dict[tuple[str, date], list[Tagged]] = defaultdict(list)
@@ -321,9 +333,44 @@ def fetch_intervals(
                 busy = busy_interval(pj, pl, cj, cl, float(csec or 0), db_now)
                 if busy is not None:
                     rows.append((rep_id, day, busy[0], busy[1], "toplanti"))
+        rows.extend(_crm_rows(conn, span, rep_ids=rep_ids, isodow=isodow))
     for rep_id, day, start, end, kind in rows:
         out[(str(rep_id), day)].append((start.astimezone(TZ), end.astimezone(TZ), kind))
     return dict(out)
+
+
+def _crm_rows(
+    conn: Any,
+    span: Span,
+    *,
+    rep_ids: Sequence[str] | None,
+    isodow: Sequence[int] | None,
+) -> list[tuple[str, date, datetime, datetime, str]]:
+    """CRM işlemleri: işlemden önceki 2 dk dolu. Tablo yoksa boş."""
+    exists = conn.execute("SELECT to_regclass('crm_actions')").fetchone()
+    if not exists or exists[0] is None:
+        return []
+    sql = f"""
+        SELECT DISTINCT a.actor_rep_id,
+               (a.acted_at AT TIME ZONE 'Europe/Istanbul')::date,
+               a.acted_at - make_interval(secs => {CRM_SEC}),
+               a.acted_at,
+               'dolu'
+        FROM crm_actions a
+        WHERE a.org_id = %s AND a.acted_at >= %s AND a.acted_at < %s
+          AND a.acted_at <= now()
+    """
+    params: list[Any] = [get_org_id(), span.start, span.end]
+    if rep_ids:
+        sql += " AND a.actor_rep_id = ANY(%s)"
+        params.append(list(rep_ids))
+    if isodow:
+        sql += (
+            " AND extract(isodow FROM a.acted_at AT TIME ZONE 'Europe/Istanbul')::int"
+            " = ANY(%s)"
+        )
+        params.append([int(d) for d in isodow])
+    return [tuple(row) for row in conn.execute(sql, params).fetchall()]
 
 
 def _presence_sql(extra: str) -> str:

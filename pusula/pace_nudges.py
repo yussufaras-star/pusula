@@ -4,7 +4,9 @@ Sapmayı kod bulur (gaps_for); Claude yalnız bir-iki cümlelik rehberlik
 yazar. Yapay zekâ metni içeren mesajlar ilk 14 gün yöneticinin onayından
 geçer (panelde "Onay bekleyen dürtmeler"); onaylanmazsa 45 dk sonra düşer.
 AI yoksa veya çağrı başarısızsa deterministik mesaj onaysız gider.
-Gölge mod (PUSULA_SHADOW_EMAIL) tüm gönderimleri o adrese çevirir.
+Gölge mod (PUSULA_SHADOW_EMAIL) tüm gönderimleri o adrese çevirir; tempo
+dürtmesi için PUSULA_PACE_NUDGES_LIVE=1 gölgeyi atlar ve temsilciye gönderir
+(gölge adresi haftalık rapor gibi diğer akışlarda kalır).
 """
 
 from __future__ import annotations
@@ -234,8 +236,15 @@ def approval_required(conn: Any, now: datetime) -> bool:
     return first is None or now < first + timedelta(days=APPROVAL_DAYS)
 
 
+def live_mode() -> bool:
+    return os.environ.get("PUSULA_PACE_NUDGES_LIVE", "").strip() == "1"
+
+
 def _send(conn: Any, row_id: int, text: str, *, name: str, email: str, now: datetime) -> bool:
-    shadowed, destination, is_shadow = apply_shadow(text, name)
+    if live_mode():
+        shadowed, destination, is_shadow = text, "", False
+    else:
+        shadowed, destination, is_shadow = apply_shadow(text, name)
     try:
         if not (destination if is_shadow else email):
             raise RuntimeError("Cliq alıcısı (e-posta) yok")
