@@ -34,7 +34,8 @@ Streamlit bırakıldı; React + FastAPI, Vercel. KPI hesabı tek sorguda
 4. **Hedefler + dürtme + AI yorum** — yönetici panelden günlük hedef girer
    (boşsa geçmiş ortalama); tempo gerisinde kalınca Cliq'e anında uyarı;
    sapmayı kod bulur, LLM rehberlik cümlesine döker (onay kuralı yukarıda).
-5. **Arena** — liderlik ve TV modu. Küçük ekipte sıralama ters etki
+5. **Ekip Panosu** — ekip hedefi, kişisel rekor ve TV modu. (Arena adı
+   kullanılmaz: Arena ayrı üründür, bkz. "Arena köprüsü".) Küçük ekipte sıralama ters etki
    yapabilir (aşağıdaki not); varsayılan ekip hedefi ve kişisel rekor
    odaklı, sıralama yöneticinin açabileceği bir seçenek.
 
@@ -73,7 +74,7 @@ Streamlit bırakıldı; React + FastAPI, Vercel. KPI hesabı tek sorguda
 - **Forecasting** — en az bir çeyrek kapanmış sonuç verisi birikmeden yapılmaz.
 - **CRM'e otomatik yazma** — yapılacaksa taslak + onay modeliyle. Faz 2.
 - **Oyunlaştırma / liderlik tablosu** — 4 kişilik ekipte ters etki yapar.
-  2026-10-12: Arena istendi; bu risk tasarımda gözetilir (bkz. aşama 5).
+  2026-10-12: Ekip Panosu istendi; bu risk tasarımda gözetilir (bkz. aşama 5).
 - **Kullanıcı konuşma tarzı taklidi** — iki register yeter: temsilci, direktör.
 
 ## Hata kodları

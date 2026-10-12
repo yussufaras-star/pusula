@@ -1,6 +1,6 @@
 """Tek tip KPI vektörü: herhangi bir zaman aralığı, temsilci ve kırılım.
 
-Canlı kokpit, karşılaştırma ekranı, arena ve dürtme sistemi aynı sorguyu
+Canlı kokpit, karşılaştırma ekranı, ekip panosu ve dürtme sistemi aynı sorguyu
 okur. Temas, çevirme, dönüş ve ulaşma tanımları pusula.temas'tan gelir;
 doluluk varsayımları pusula.panel_data sabitlerinden. Burada yeni tanım
 yoktur, sadece tek sorguda toplanır.

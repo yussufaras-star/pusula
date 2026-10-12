@@ -6,12 +6,12 @@ import { LivePage } from "./pages/Live";
 import { LoginPage } from "./pages/Login";
 import type { Me } from "./types";
 
-type Route = "canli" | "karsilastir" | "arena" | "raporlar";
+type Route = "canli" | "karsilastir" | "pano" | "raporlar";
 
 const NAV: { route: Route; label: string; soon?: boolean; adminOnly?: boolean }[] = [
   { route: "canli", label: "Canlı" },
   { route: "karsilastir", label: "Karşılaştır", soon: true },
-  { route: "arena", label: "Arena", soon: true },
+  { route: "pano", label: "Ekip Panosu", soon: true },
   { route: "raporlar", label: "Raporlar", soon: true },
 ];
 
@@ -79,7 +79,7 @@ const SOON_TEXT: Record<Exclude<Route, "canli">, [string, string]> = {
     "Karşılaştırma",
     "İki dönemi veya iki temsilciyi yan yana, araba karşılaştırır gibi: bugün vs geçen salı, bu hafta vs geçen hafta, Ayşe vs Mehmet.",
   ],
-  arena: ["Arena", "Canlı liderlik tablosu ve TV modu: günün yarışı, hedef ilerlemesi, rozetler."],
+  pano: ["Ekip Panosu", "Ekip hedefine canlı ilerleme, kişisel rekorlar ve ofis TV'si için büyük ekran."],
   raporlar: ["Raporlar", "Huni, dönüşüm, satış döngüsü, ciro ve haftalık seriler."],
 };
 
