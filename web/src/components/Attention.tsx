@@ -16,6 +16,21 @@ export function attentionItems(data: LivePayload): Item[] {
   const items: Item[] = [];
   if (!data.is_today || !data.in_shift) return items;
   for (const r of data.reps) {
+    if (r.on_leave) {
+      const parts = [
+        r.today.arama ? `${int(r.today.arama)} arama` : "",
+        r.today.whatsapp ? `${int(r.today.whatsapp)} WhatsApp` : "",
+        r.today.katildi ? `${int(r.today.katildi)} toplantı` : "",
+      ].filter(Boolean);
+      if (parts.length) {
+        items.push({
+          level: "warning",
+          title: `${r.name} izinli ama bugün faaliyet var`,
+          text: `${parts.join(", ")} kaydı; doluluğa sayılmadı. Hat veya hesap başkası tarafından kullanılmış olabilir.`,
+        });
+      }
+      continue;
+    }
     if (r.status === "hareketsiz") {
       items.push({
         level: "critical",
