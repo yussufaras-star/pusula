@@ -469,4 +469,18 @@ CREATE TABLE IF NOT EXISTS rep_snapshots (
 -- nudges.nudge_type bilinen değerler (serbest text; yeni tip eklenince güncelle):
 -- pencere_aciliyor | kayip_randevu | gecikmis_taahhut | planlanmis_arama | karar_bekleyen | blok_ozeti
 
+-- Hourly KPI messages are idempotent by rep/team and Istanbul work-hour slot.
+CREATE TABLE IF NOT EXISTS kpi_nudge_sends (
+    org_id       text NOT NULL DEFAULT 'rexven',
+    rep_id       text NOT NULL,
+    nudge_date   date NOT NULL,
+    nudge_hour   smallint NOT NULL CHECK (nudge_hour BETWEEN 0 AND 23),
+    scope        text NOT NULL CHECK (scope IN ('person', 'team')),
+    status       text NOT NULL CHECK (status IN ('sending', 'sent', 'failed')),
+    sent_at      timestamptz,
+    failure      text,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    updated_at   timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (org_id, rep_id, nudge_date, nudge_hour, scope)
+);
 
