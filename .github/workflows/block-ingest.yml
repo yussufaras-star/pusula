@@ -30,6 +30,9 @@ env:
   CLIQ_WEBHOOK_URL: ${{ secrets.CLIQ_WEBHOOK_URL }}
   PUSULA_SHADOW_EMAIL: ${{ secrets.PUSULA_SHADOW_EMAIL }}
   ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  # 1: tempo dürtmesi temsilciye gider (gölge adresi atlanır). 0/boş: gölge.
+  PUSULA_PACE_NUDGES_LIVE: ${{ vars.PUSULA_PACE_NUDGES_LIVE }}
+  PUSULA_WHATSAPP_INGEST: ${{ vars.PUSULA_WHATSAPP_INGEST }}
 
 jobs:
   sync-hourly:
@@ -47,6 +50,11 @@ jobs:
         run: python scripts/block_ingest.py
       - name: Zoho Meeting katılımı (son 2 gün)
         run: python scripts/meeting_ingest.py --days 2
+      # WhatsApp ve CRM işlemleri saatlik akışta yoktu; doluluk ve dürtme
+      # bunlar olmadan eksik ölçer. Mesai dışında kendiliğinden atlar.
+      - name: WhatsApp ve CRM işlemleri
+        continue-on-error: true
+        run: python scripts/live_ingest.py
       # Taze veriyle hedef temposu; gerisindekilere Cliq (ilk 14 gün AI'lı
       # mesajlar panelde onay bekler). Hata ingest'i başarısız saymaz.
       - name: Tempo dürtmesi

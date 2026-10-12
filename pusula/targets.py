@@ -9,8 +9,8 @@ Kurallar (pusula.blocks takvimi; hafta içi arama 09-11 + 14-17, toplantı
   arama süresi sayılır ve hedefe eklenir (5 dk'da bir arama), o pencerede
   birikir. Cumartesi de geçerlidir.
 - Ulaşma oranı: %70. Ulaşılan sayısı hedefi arama hedefinin %70'idir.
-- Toplantı ve doluluk: aynı gün tipinin geçmiş ortalaması; toplantı
-  toplantı bloklarında birikir.
+- Doluluk: %80 (yönetici kararı, 12 Ekim; ölçüm olgunlaşınca %90).
+- Toplantı: aynı gün tipinin geçmiş ortalaması; toplantı bloklarında birikir.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ METRIC_KIND = {"arama": "call", "ulasilan": "call", "randevu": "meeting"}
 CALL_BAND_MIN = 5.0
 NO_SHOW_WAIT_MIN = 10.0
 REACH_TARGET = 70.0
+OCCUPANCY_TARGET = 80.0
 
 
 def _weekday_minutes(kind: str) -> float:
@@ -160,13 +161,12 @@ def rep_targets(
             "source": "ortalama",
             "actual": today.get("randevu"),
         }
-    if hist.get("doluluk"):
-        out["doluluk"] = {
-            "daily": round(float(hist["doluluk"]), 1),
-            "by_now": round(float(hist["doluluk"]), 1),
-            "source": "ortalama",
-            "actual": today.get("doluluk"),
-        }
+    out["doluluk"] = {
+        "daily": OCCUPANCY_TARGET,
+        "by_now": OCCUPANCY_TARGET,
+        "source": "standart",
+        "actual": today.get("doluluk"),
+    }
     return out
 
 
@@ -209,7 +209,7 @@ def attach_targets(
         team[metric] = {
             "daily": mean,
             "by_now": mean,
-            "source": "standart" if metric == "ulasma_orani" else "ortalama",
+            "source": "standart",
         }
     team_today = payload["team"]["today"]
     for metric, item in team.items():

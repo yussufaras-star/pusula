@@ -194,7 +194,7 @@ function LiveBody({ data, me, refresh }: { data: LivePayload; me: Me; refresh: (
                 ? undefined
                 : `ort. ${pct(x.doluluk)}`
           }
-          title={`Dolu ${minutes(k.dolu_dk)} / (dolu + kayıp ${minutes(k.kayip_dk)}). Arama 1 dk önce ve sonrasıyla, toplantı süresi, WhatsApp konuşma başına 3 dk. Günün en uzun boşluklarından ${minutes(k.mola_dk)} mola düşüldü.`}
+          title={`Hedef %80 (mola dışında boş zaman kalmamalı). Dolu ${minutes(k.dolu_dk)} / (dolu + kayıp ${minutes(k.kayip_dk)}). Arama 1 dk önce ve sonrasıyla, toplantı süresi (gelmeyen toplantıda 10 dk bekleme), WhatsApp konuşma başına 3 dk, CRM işlemi başına 2 dk. Günün en uzun boşluklarından ${minutes(k.mola_dk)} mola düşüldü.`}
         />
       </div>
 

@@ -181,7 +181,7 @@ function live(): LivePayload {
       ulasilan: { daily: (45 + bonus) * 0.7, by_now: Math.round(byNow * 7) / 10, source: "standart", actual: c.today.ulasilan },
       ulasma_orani: { daily: 70, by_now: 70, source: "standart", actual: c.today.ulasma_orani },
       randevu: { daily: 4, by_now: Math.round(4 * share * 10) / 10, source: "ortalama", actual: c.today.randevu },
-      doluluk: { daily: 60, by_now: 60, source: "ortalama", actual: c.today.doluluk },
+      doluluk: { daily: 80, by_now: 80, source: "standart", actual: c.today.doluluk },
     };
   }
   const teamTarget = (["arama", "ulasilan", "randevu"] as const).reduce(
@@ -198,7 +198,7 @@ function live(): LivePayload {
     {} as NonNullable<RepCard["target"]>,
   );
   teamTarget.ulasma_orani = { daily: 70, by_now: 70, source: "standart", actual: null };
-  teamTarget.doluluk = { daily: 60, by_now: 60, source: "ortalama", actual: null };
+  teamTarget.doluluk = { daily: 80, by_now: 80, source: "standart", actual: null };
 
   const avail = ((nowHour - 9) * 60 + minute) * (465 / 540);
   const n = cards.length;

@@ -172,3 +172,14 @@ def test_message_uses_first_name_and_labels_average_honestly() -> None:
     assert "Mesai bitimine 6 sa 0 dk var" in body
     assert compose("x", None) == "x"
     assert compose("x", "Arama bloğuna dön.") == "x\n💡 Arama bloğuna dön."
+
+
+def test_occupancy_target_is_fixed_80() -> None:
+    out = rep_targets(today={"doluluk": 72.0}, hist_hours={}, meetings=[], day=SATURDAY, cutoff=at(SATURDAY, 12))
+    assert out["doluluk"] == {"daily": 80.0, "by_now": 80.0, "source": "standart", "actual": 72.0}
+    # Dürtme 10 puan altında: %72 uyarı değil, %69 uyarı.
+    c = card(doluluk=out["doluluk"])
+    c["today"]["doluluk"] = 72.0
+    assert gaps_for(c) == []
+    c["today"]["doluluk"] = 69.0
+    assert [g["metric"] for g in gaps_for(c)] == ["doluluk"]
