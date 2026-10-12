@@ -392,8 +392,12 @@ def main() -> int:
     )
     bounds = shift_bounds(day)
     if bounds is not None:
+        # Eski sorgu DB now() kullanır; script başındaki now 2-3 dk geride
+        # kalır ve o arada başlayan toplantılar farklı sayılır. Kesim anı
+        # karşılaştırmanın hemen öncesi olmalı.
+        cmp_now = datetime.now(ISTANBUL) if day == datetime.now(ISTANBUL).date() else now
         old = sum_hour_rows(today_hours(None, day))
-        new_rows = query_kpis(Span(*bounds), group="team", now=now)
+        new_rows = query_kpis(Span(*bounds), group="team", now=cmp_now)
         new = new_rows[0] if new_rows else {}
         for key in ("arama", "ulasilan", "randevu", "katildi", "sonuc_girilmedi"):
             if int(old.get(key) or 0) != int(new.get(key) or 0):
