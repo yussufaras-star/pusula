@@ -170,10 +170,13 @@ def live(day: str | None = None, user: AuthUser = Depends(current_user)) -> Any:
         HISTORY_TTL,
         lambda: history_by_rep_hour(chosen, now),
     )
-    ttl = LIVE_TTL if chosen == now.date() else HISTORY_TTL
+    is_today = chosen == now.date()
+    # Bugün için anahtar veri damgasını içerir: başka örnekte yapılan
+    # güncelleme de önbelleği anında geçersiz kılar.
+    as_of = data_as_of() if is_today else None
     payload = cache.cached(
-        ("live", chosen.isoformat()),
-        ttl,
+        ("live", chosen.isoformat(), as_of.isoformat() if as_of else None),
+        LIVE_TTL if is_today else HISTORY_TTL,
         lambda: jsonable_encoder(load_live(chosen, now, history=history)),
     )
     return scope_live(payload, user)
@@ -233,6 +236,8 @@ def ingest_now(user: AuthUser = Depends(admin_user)) -> Any:
     last = data_as_of()
     if last is not None and (now - last).total_seconds() < MANUAL_INGEST_MIN_GAP:
         return {"skipped": "yeni_guncellendi", "data_as_of": last}
+    # Mesai dışında da çalışır; pencereli kaynaklar çeyrek saat kuralına uyar
+    # ki istek Vercel'in 60 sn sınırına sığsın.
     report = run_live_ingest(now, force=True)
     cache.clear()
     return jsonable_encoder(report)

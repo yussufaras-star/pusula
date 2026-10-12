@@ -5,8 +5,10 @@ Her çalıştırmada: aramalar ve WhatsApp (imleçten), CRM işlemleri.
 Eşzamanlı iki tetik (GitHub Actions + harici pinger) Postgres advisory
 lock ile tekilleşir; ikincisi hiçbir şey yapmadan döner.
 
-Başarılı arama senkronunda sync_state 'live_ingest' damgalanır; panelin
-"veri x dk önce" göstergesi ve hareketsizlik ölçüm ucu bunu okur.
+Başarılı arama senkronunda sync_state 'live_ingest' hemen damgalanır
+(sonraki adımlar beklenmez); panelin "veri x dk önce" göstergesi ve
+hareketsizlik ölçüm ucu bunu okur. Vercel 60 sn'de keserse damga yine
+yazılmış olur.
 """
 
 from __future__ import annotations
@@ -115,11 +117,19 @@ def _steps(now: datetime, run_slow: bool) -> list[tuple[str, Callable[[], Any]]]
     return steps
 
 
+def _stamp_if_calls_ok(report: dict[str, Any], now: datetime) -> None:
+    calls = report.get("aramalar", {})
+    if isinstance(calls, dict) and calls.get("failed") == 0:
+        client.set_sync_state(
+            SyncState(source_name=LIVE_SOURCE, last_synced_at=now, last_cursor="ok")
+        )
+
+
 def _run_steps(
-    now: datetime, *, force: bool, budget_sec: float, started: float
+    now: datetime, *, all_steps: bool, budget_sec: float, started: float
 ) -> dict[str, Any]:
     slow_state = client.get_sync_state(f"{LIVE_SOURCE}:slow")
-    run_slow = force or slow_due(now, slow_state.last_synced_at if slow_state else None)
+    run_slow = all_steps or slow_due(now, slow_state.last_synced_at if slow_state else None)
     report: dict[str, Any] = {}
     for name, step in _steps(now, run_slow):
         if time.monotonic() - started > budget_sec:
@@ -130,11 +140,8 @@ def _run_steps(
         except Exception as exc:
             logger.exception("canli ingest adimi basarisiz: %s", name)
             report[name] = {"error": str(exc)[:300]}
-    calls = report.get("aramalar", {})
-    if isinstance(calls, dict) and calls.get("failed") == 0:
-        client.set_sync_state(
-            SyncState(source_name=LIVE_SOURCE, last_synced_at=now, last_cursor="ok")
-        )
+        if name == "aramalar":
+            _stamp_if_calls_ok(report, now)
     slow_ok = all(
         isinstance(report.get(s), dict) and "error" not in report[s] and "skipped" not in report[s]
         for s in ("randevular", "leadler", "kisiler")
@@ -149,7 +156,10 @@ def run_live_ingest(
     *,
     budget_sec: float = DEFAULT_BUDGET_SEC,
     force: bool = False,
+    all_steps: bool = False,
 ) -> dict[str, Any]:
+    """force: mesai dışında da çalışır. all_steps: pencereli kaynaklar çeyrek
+    saati beklemeden çalışır (yalnız GitHub Actions; Vercel 60 sn'ye sığmaz)."""
     now = now or datetime.now(TZ)
     if not force and not is_active(now):
         return {"skipped": "mesai_disi", "at": now.isoformat()}
@@ -158,7 +168,7 @@ def run_live_ingest(
     with connect() as lock_conn:
         if not _try_lock(lock_conn):
             return {"skipped": "baska_calisma_suruyor", "at": now.isoformat()}
-        steps = _run_steps(now, force=force, budget_sec=budget_sec, started=started)
+        steps = _run_steps(now, all_steps=all_steps, budget_sec=budget_sec, started=started)
     return {
         "at": now.isoformat(),
         "org_id": get_org_id(),

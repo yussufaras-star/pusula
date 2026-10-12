@@ -30,7 +30,7 @@ def main() -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     load_dotenv()
 
-    report = run_live_ingest(force=args.force, budget_sec=args.budget)
+    report = run_live_ingest(force=args.force, all_steps=args.force, budget_sec=args.budget)
     print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     steps = report.get("steps", {})
     failed = [name for name, step in steps.items() if isinstance(step, dict) and "error" in step]

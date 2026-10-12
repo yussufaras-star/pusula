@@ -1,5 +1,6 @@
 """Canlı ingest zamanlaması ve CRM işlem çıkarımı (veritabanı gerektirmez)."""
 
+import time
 from datetime import datetime, timedelta
 
 from pusula.ingest.crm_actions import actions_from_record, parse_zoho_time
@@ -98,3 +99,35 @@ def test_whatsapp_step_is_on_unless_disabled(monkeypatch) -> None:
     monkeypatch.setenv("PUSULA_WHATSAPP_INGEST", "0")
     names = [name for name, _ in _steps(at(12, 11), run_slow=False)]
     assert names == ["aramalar", "crm_islemleri"]
+
+
+def test_freshness_is_stamped_right_after_calls(monkeypatch) -> None:
+    """Sonraki adım uzar ve Vercel keserse bile damga yazılmış olmalı."""
+    from pusula import live_ingest
+
+    order: list[str] = []
+    monkeypatch.setattr(live_ingest.client, "get_sync_state", lambda name: None)
+    monkeypatch.setattr(
+        live_ingest.client, "set_sync_state", lambda state: order.append(f"damga:{state.source_name}")
+    )
+    monkeypatch.setattr(
+        live_ingest,
+        "_steps",
+        lambda now, run_slow: [
+            ("aramalar", lambda: order.append("aramalar") or {"failed": 0}),
+            ("crm_islemleri", lambda: order.append("crm") or {}),
+        ],
+    )
+    live_ingest._run_steps(at(12, 11), all_steps=False, budget_sec=40, started=time.monotonic())
+    assert order[:3] == ["aramalar", "damga:live_ingest", "crm"]
+
+
+def test_failed_calls_do_not_stamp(monkeypatch) -> None:
+    from pusula import live_ingest
+
+    stamps: list[str] = []
+    monkeypatch.setattr(live_ingest.client, "get_sync_state", lambda name: None)
+    monkeypatch.setattr(live_ingest.client, "set_sync_state", lambda state: stamps.append(state.source_name))
+    monkeypatch.setattr(live_ingest, "_steps", lambda now, run_slow: [("aramalar", lambda: {"failed": 2})])
+    live_ingest._run_steps(at(12, 11), all_steps=False, budget_sec=40, started=time.monotonic())
+    assert "live_ingest" not in stamps

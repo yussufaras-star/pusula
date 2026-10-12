@@ -72,7 +72,16 @@ export function SyncButton({ onDone }: { onDone: () => void }) {
       }
       onDone();
     } catch (err) {
-      setNote({ text: err instanceof ApiError ? err.message : "Bağlantı hatası", tone: "warn" });
+      const timedOut = err instanceof ApiError && (err.status === 504 || err.status === 502);
+      setNote({
+        text: timedOut
+          ? "Süre doldu; çekilen kayıtlar yine de kaydedildi"
+          : err instanceof ApiError
+            ? err.message
+            : "Bağlantı hatası",
+        tone: "warn",
+      });
+      onDone();
     } finally {
       setBusy(false);
     }
