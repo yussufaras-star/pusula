@@ -8,8 +8,10 @@ import type {
   MeetingItem,
   Meetings,
   Me,
+  NudgeItem,
   RepCard,
   RepStatus,
+  TargetsPayload,
   Segment,
 } from "../src/types";
 
@@ -167,6 +169,35 @@ function live(): LivePayload {
     };
   });
 
+  for (const c of cards) {
+    if (c.on_leave) {
+      c.target = {};
+      continue;
+    }
+    const share = c.expected.arama / 90;
+    const own = c.rep_id === "r1";
+    c.target = {
+      arama: { daily: 90, by_now: Math.round(c.expected.arama * 10) / 10, source: own ? "kisi" : "ekip", actual: c.today.arama },
+      ulasilan: { daily: 24, by_now: Math.round(24 * share * 10) / 10, source: "ortalama", actual: c.today.ulasilan },
+      randevu: { daily: 4, by_now: Math.round(4 * share * 10) / 10, source: "ekip", actual: c.today.randevu },
+      doluluk: { daily: 70, by_now: 70, source: "ekip", actual: c.today.doluluk },
+    };
+  }
+  const teamTarget = (["arama", "ulasilan", "randevu"] as const).reduce(
+    (acc, m) => {
+      const items = cards.map((c) => c.target?.[m]).filter((t) => t !== undefined);
+      acc[m] = {
+        daily: items.reduce((a, t) => a + t.daily, 0),
+        by_now: Math.round(items.reduce((a, t) => a + t.by_now, 0) * 10) / 10,
+        source: "hedef",
+        actual: null,
+      };
+      return acc;
+    },
+    {} as NonNullable<RepCard["target"]>,
+  );
+  teamTarget.doluluk = { daily: 70, by_now: 70, source: "hedef", actual: null };
+
   const avail = ((nowHour - 9) * 60 + minute) * (465 / 540);
   const n = cards.length;
   const teamHours: HourRow[] = hours.map((h, i) => ({
@@ -186,6 +217,7 @@ function live(): LivePayload {
     team: {
       today: sum(cards.map((c) => c.today), avail, n),
       expected: sum(cards.map((c) => c.expected), avail, n),
+      target: teamTarget,
     },
     hours: teamHours,
     reps: cards,
@@ -291,6 +323,58 @@ function mockMeetings(repIds: string[], now: Date): Meetings {
 
 const LEAVES = new Set<string>(["r5"]);
 
+const NUDGES: NudgeItem[] = [
+  {
+    id: 2,
+    rep_id: "r2",
+    rep_name: REPS[1][1],
+    created_at: new Date(Date.now() - 6 * 60000).toISOString(),
+    body: `🧭 Pusula · 11:12
+${REPS[1][1].split(" ")[0]}, bugün şu başlıklarda temponun gerisindesin:
+- Arama: 14; bu saate kadar 26 bekleniyordu (günlük hedef 90)
+- Doluluk: %48 (günlük hedef %70)
+Mesai bitimine 6 sa 48 dk var; toparlamak için vakit var.`,
+    ai_text: "Sabah 38 dakikalık boşluk temponu düşürmüş; önümüzdeki bir saati kesintisiz arama bloğuna ayırırsan farkı hızla kapatırsın.",
+    text: "",
+    status: "bekliyor",
+    decided_by: null,
+    sent_at: null,
+    failure: null,
+    shadow: null,
+  },
+  {
+    id: 1,
+    rep_id: "r4",
+    rep_name: REPS[3][1],
+    created_at: new Date(Date.now() - 70 * 60000).toISOString(),
+    body: `🧭 Pusula · 10:08
+${REPS[3][1].split(" ")[0]}, bugün şu başlıklarda temponun gerisindesin:
+- Ulaşılan: 2; bu saate kadar 5 bekleniyordu (günlük ortalaman 24)`,
+    ai_text: null,
+    text: "",
+    status: "gonderildi",
+    decided_by: null,
+    sent_at: new Date(Date.now() - 70 * 60000).toISOString(),
+    failure: null,
+    shadow: true,
+  },
+];
+for (const n of NUDGES) n.text = n.ai_text ? `${n.body}\n💡 ${n.ai_text}` : n.body;
+
+function mockTargets(): TargetsPayload {
+  const empty = { arama: null, ulasilan: null, randevu: null, doluluk: null };
+  return {
+    metrics: { arama: "Arama", ulasilan: "Ulaşılan", randevu: "Toplantı", doluluk: "Doluluk" },
+    default: { values: { ...empty, arama: 90, randevu: 4, doluluk: 70 }, average: { arama: 74.2, ulasilan: 21.5, randevu: 3.1, doluluk: 63.4 } },
+    reps: REPS.map(([rep_id, full_name, perf]) => ({
+      rep_id,
+      name: full_name,
+      values: rep_id === "r1" ? { ...empty, arama: 110 } : empty,
+      average: perf === 0 ? empty : { arama: Math.round(80 * perf * 10) / 10, ulasilan: Math.round(22 * perf * 10) / 10, randevu: 3, doluluk: 60 + perf * 5 },
+    })),
+  };
+}
+
 const ME: Me = { email: "yusuf.aras@rexven.com", role: "admin", rep_id: null, full_name: "Yusuf Aras" };
 
 export function mockApi(method: string, url: string): unknown {
@@ -300,6 +384,29 @@ export function mockApi(method: string, url: string): unknown {
   if (path === "/api/leaves" && method === "POST") {
     LEAVES.has("r5") ? LEAVES.delete("r5") : LEAVES.add("r5");
     return { ok: true };
+  }
+  if (path === "/api/targets") return method === "PUT" ? { saved: 1 } : mockTargets();
+  if (path === "/api/nudges") return { items: NUDGES, approval_required: true, ai: true };
+  if (path.startsWith("/api/nudges/") && method === "POST") {
+    const item = NUDGES.find((n) => String(n.id) === path.split("/").pop());
+    if (item) {
+      item.status = "gonderildi";
+      item.sent_at = new Date().toISOString();
+      item.shadow = true;
+    }
+    return { status: "gonderildi" };
+  }
+  if (path === "/api/commentary" && method === "POST") {
+    return {
+      text: [
+        "- En büyük risk Mehmet: 38 dk hareketsiz ve arama hedefin %55'inde; şimdi kısa bir görüşme iyi olur.",
+        "- Ekip doluluğu %66 ile hedefin (%70) biraz altında; kayıp zaman öğle sonrasında toplanıyor.",
+        "- Ayşe arama ve toplantıda hedefin üstünde; bugünkü temposu ekibin en iyisi.",
+        "- 3 toplantının sonucu girilmemiş; saat 14:00'ten önce tamamlatmak raporları düzeltir.",
+      ].join("\n"),
+      data_as_of: new Date(Date.now() - 4 * 60000).toISOString(),
+      at: new Date().toISOString(),
+    };
   }
   if (path === "/api/reps") return REPS.map(([rep_id, full_name]) => ({ rep_id, full_name }));
   if (path === "/api/compare") {

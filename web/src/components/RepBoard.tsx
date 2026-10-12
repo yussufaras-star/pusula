@@ -159,9 +159,12 @@ export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now, onLeave, m
                 <td className="pace-cell">
                   <div className="row">
                     <b>{int(r.today.arama)}</b>
-                    <span className="muted">beklenen {num(r.expected.arama)}</span>
+                    <span className="muted">
+                      beklenen {num(r.target?.arama?.by_now ?? r.expected.arama)}
+                      {r.target?.arama && r.target.arama.source !== "ortalama" ? ` / ${int(r.target.arama.daily)}` : ""}
+                    </span>
                   </div>
-                  <PaceMeter actual={r.today.arama} expected={r.expected.arama} />
+                  <PaceMeter actual={r.today.arama} expected={r.target?.arama?.by_now ?? r.expected.arama} />
                 </td>
                 <td className="num">{int(r.today.ulasilan)}</td>
                 <td className="num">{pct(r.today.ulasma_orani)}</td>

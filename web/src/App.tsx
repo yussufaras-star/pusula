@@ -5,13 +5,15 @@ import { Logo } from "./components/Logo";
 import { ComparePage } from "./pages/Compare";
 import { LivePage } from "./pages/Live";
 import { LoginPage } from "./pages/Login";
+import { TargetsPage } from "./pages/Targets";
 import type { Me } from "./types";
 
-type Route = "canli" | "karsilastir" | "pano" | "raporlar";
+type Route = "canli" | "karsilastir" | "hedefler" | "pano" | "raporlar";
 
 const NAV: { route: Route; label: string; soon?: boolean; adminOnly?: boolean }[] = [
   { route: "canli", label: "Canlı" },
   { route: "karsilastir", label: "Karşılaştır" },
+  { route: "hedefler", label: "Hedefler", adminOnly: true },
   { route: "pano", label: "Ekip Panosu", soon: true },
   { route: "raporlar", label: "Raporlar", soon: true },
 ];
@@ -73,6 +75,10 @@ export function App() {
           <LivePage me={me} />
         ) : route === "karsilastir" ? (
           <ComparePage me={me} />
+        ) : route === "hedefler" && me.role === "admin" ? (
+          <TargetsPage />
+        ) : route === "hedefler" ? (
+          <LivePage me={me} />
         ) : (
           <Soon route={route} />
         )}
@@ -81,7 +87,7 @@ export function App() {
   );
 }
 
-type SoonRoute = Exclude<Route, "canli" | "karsilastir">;
+type SoonRoute = Exclude<Route, "canli" | "karsilastir" | "hedefler">;
 
 const SOON_TEXT: Record<SoonRoute, [string, string]> = {
   pano: ["Ekip Panosu", "Ekip hedefine canlı ilerleme, kişisel rekorlar ve ofis TV'si için büyük ekran."],

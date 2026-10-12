@@ -24,12 +24,15 @@ from pusula.compare import (
     series_group,
     side_cut,
 )
+from pusula import llm
+from pusula.commentary import commentary
 from pusula.config import get_org_id
 from pusula.hourly_nudges import run_hourly_nudges
 from pusula.leaves import set_leave
 from pusula.live import data_as_of, history_by_rep_hour, load_live
 from pusula.live_ingest import run_live_ingest
 from pusula.metrics import TZ
+from pusula.pace_nudges import QueueError, decide, list_queue, run_pace_nudges
 from pusula.panel_auth import (
     ADMIN_EMAIL,
     AuthUser,
@@ -40,6 +43,7 @@ from pusula.panel_auth import (
 )
 from pusula.panel_data import DateWindow, load_rep_by_email, load_reps
 from pusula.panel_profile import PROFILE_WARNING, performance_profiles
+from pusula.targets import METRICS, TEAM_DEFAULT, history_daily, load_targets, save_targets
 from pusula.web import cache
 from pusula.web.auth import (
     COOKIE_NAME,
@@ -74,6 +78,21 @@ class LeaveBody(BaseModel):
     rep_id: str
     day: str
     on: bool
+
+
+class TargetRow(BaseModel):
+    rep_id: str
+    metric: str
+    value: float | None
+
+
+class TargetsBody(BaseModel):
+    rows: list[TargetRow]
+
+
+class DecisionBody(BaseModel):
+    approve: bool
+    text: str | None = None
 
 
 def _now() -> datetime:
@@ -126,7 +145,7 @@ def health() -> dict[str, Any]:
         "CLIQ_WEBHOOK_URL",
     )
     missing = [key for key in required if not os.environ.get(key)]
-    return {"ok": not missing, "missing_configuration": missing}
+    return {"ok": not missing, "missing_configuration": missing, "ai": llm.enabled()}
 
 
 @app.post("/api/login")
@@ -181,11 +200,7 @@ def representatives(user: AuthUser = Depends(admin_user)) -> Any:
 # --- canlı kokpit -----------------------------------------------------------
 
 
-@app.get("/api/live")
-def live(day: str | None = None, user: AuthUser = Depends(current_user)) -> Any:
-    require_database()
-    now = _now()
-    chosen = parse_day(day, now.date())
+def live_payload(chosen: date, now: datetime) -> dict[str, Any]:
     history = cache.cached(
         ("history", chosen.isoformat()),
         HISTORY_TTL,
@@ -195,12 +210,34 @@ def live(day: str | None = None, user: AuthUser = Depends(current_user)) -> Any:
     # Bugün için anahtar veri damgasını içerir: başka örnekte yapılan
     # güncelleme de önbelleği anında geçersiz kılar.
     as_of = data_as_of() if is_today else None
-    payload = cache.cached(
+    return cache.cached(
         ("live", chosen.isoformat(), as_of.isoformat() if as_of else None),
         LIVE_TTL if is_today else HISTORY_TTL,
         lambda: jsonable_encoder(load_live(chosen, now, history=history)),
     )
-    return scope_live(payload, user)
+
+
+@app.get("/api/live")
+def live(day: str | None = None, user: AuthUser = Depends(current_user)) -> Any:
+    require_database()
+    now = _now()
+    return scope_live(live_payload(parse_day(day, now.date()), now), user)
+
+
+@app.post("/api/commentary")
+def live_commentary(day: str | None = None, user: AuthUser = Depends(admin_user)) -> Any:
+    """Yöneticiye kısa AI yorumu. Aynı veri damgası için bir kez üretilir."""
+    require_database()
+    if not llm.enabled():
+        raise HTTPException(status_code=503, detail="Yapay zekâ anahtarı (ANTHROPIC_API_KEY) tanımlı değil")
+    now = _now()
+    chosen = parse_day(day, now.date())
+    payload = live_payload(chosen, now)
+    key = ("commentary", chosen.isoformat(), payload.get("data_as_of"))
+    text = cache.cached(key, HISTORY_TTL, lambda: commentary(payload))
+    if text is None:  # None önbelleğe isabet sayılmaz; sonraki tık yeniden dener
+        raise HTTPException(status_code=502, detail="Yorum üretilemedi, biraz sonra tekrar deneyin")
+    return {"text": text, "data_as_of": payload.get("data_as_of"), "at": now}
 
 
 # --- karşılaştırma ----------------------------------------------------------
@@ -297,6 +334,93 @@ def mark_leave(body: LeaveBody, user: AuthUser = Depends(admin_user)) -> dict[st
     return {"rep_id": body.rep_id, "day": day, "on": body.on}
 
 
+# --- hedefler ----------------------------------------------------------------
+
+
+def reference_weekday(today: date) -> date:
+    """Hedefler hafta içi tam gün içindir; ortalama da hafta içinden."""
+    return today - timedelta(days=max(0, today.weekday() - 4))
+
+
+@app.get("/api/targets")
+def targets(user: AuthUser = Depends(admin_user)) -> Any:
+    require_database()
+    now = _now()
+    ref = reference_weekday(now.date())
+    history = cache.cached(
+        ("history", ref.isoformat()), HISTORY_TTL, lambda: history_by_rep_hour(ref, now)
+    )
+    stored = load_targets()
+    reps = load_reps()
+
+    def values(rep_id: str) -> dict[str, float | None]:
+        return {metric: stored.get((rep_id, metric)) for metric in METRICS}
+
+    def rounded(avg: dict[str, float | None]) -> dict[str, float | None]:
+        return {k: (round(v, 1) if v is not None else None) for k, v in avg.items()}
+
+    averages = {rep.rep_id: rounded(history_daily(history.get(rep.rep_id, {}))) for rep in reps}
+    team_avg = {
+        metric: (
+            round(sum(vals) / len(vals), 1)
+            if (vals := [a[metric] for a in averages.values() if a[metric]])
+            else None
+        )
+        for metric in METRICS
+    }
+    return jsonable_encoder(
+        {
+            "metrics": METRICS,
+            "default": {"values": values(TEAM_DEFAULT), "average": team_avg},
+            "reps": [
+                {
+                    "rep_id": rep.rep_id,
+                    "name": rep.full_name,
+                    "values": values(rep.rep_id),
+                    "average": averages[rep.rep_id],
+                }
+                for rep in reps
+            ],
+        }
+    )
+
+
+@app.put("/api/targets")
+def put_targets(body: TargetsBody, user: AuthUser = Depends(admin_user)) -> dict[str, Any]:
+    require_database()
+    known = {rep.rep_id for rep in load_reps()} | {TEAM_DEFAULT}
+    for row in body.rows:
+        if row.rep_id not in known:
+            raise HTTPException(status_code=404, detail="Temsilci bulunamadı")
+        if row.metric not in METRICS:
+            raise HTTPException(status_code=400, detail=f"Bilinmeyen hedef: {row.metric}")
+        if row.value is not None and not (0 <= row.value <= (100 if row.metric == "doluluk" else 1000)):
+            raise HTTPException(status_code=400, detail=f"{METRICS[row.metric]} hedefi aralık dışında")
+    save_targets(((r.rep_id, r.metric, r.value) for r in body.rows), by=user.email)
+    cache.clear()
+    return {"saved": len(body.rows)}
+
+
+# --- dürtmeler ------------------------------------------------------------------
+
+
+@app.get("/api/nudges")
+def nudges(day: str | None = None, user: AuthUser = Depends(admin_user)) -> Any:
+    require_database()
+    now = _now()
+    return jsonable_encoder(list_queue(parse_day(day, now.date()), now))
+
+
+@app.post("/api/nudges/{row_id}")
+def nudge_decision(row_id: int, body: DecisionBody, user: AuthUser = Depends(admin_user)) -> Any:
+    require_database()
+    try:
+        status = decide(row_id, approve=body.approve, text=body.text, by=user.email, now=_now())
+    except QueueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"id": row_id, "status": status}
+
+
 # --- raporlar (eski panel analizleri) ----------------------------------------
 
 
@@ -341,6 +465,13 @@ def profiles(days: int = 90, user: AuthUser = Depends(admin_user)) -> Any:
 def hourly_nudges() -> Any:
     require_database()
     return jsonable_encoder(run_hourly_nudges(_now()))
+
+
+@app.get("/api/cron/pace-nudges", dependencies=[Depends(require_cron)])
+def pace_nudges() -> Any:
+    """Tempo dürtmesi. Saatlik ingest sonrası GitHub Actions'tan da çalışır."""
+    require_database()
+    return jsonable_encoder(run_pace_nudges(_now()))
 
 
 @app.post("/api/ingest")

@@ -35,6 +35,7 @@ from pusula.occupancy import (
     timelines_for,
 )
 from pusula.panel_data import connect, load_reps
+from pusula.targets import attach_targets, load_targets
 
 HISTORY_DAYS = 90
 IDLE_WARN_MIN = 15.0
@@ -112,7 +113,6 @@ def scale(row: dict[str, Any], factor: float) -> dict[str, Any]:
         value = out.get(key)
         if isinstance(value, (int, float)):
             out[key] = round(float(value) * factor, 2)
-    out["ulasilan"] = round(float(out.get("ulasilan") or 0) * factor, 2)
     return out
 
 
@@ -307,6 +307,7 @@ def load_live(
     leaves = load_leaves(span)
     timelines = timelines_for(span, cutoff, rep_ids=rep_ids, leaves=leaves)
     occ = aggregate(timelines, "rep_hour", running_day=day if is_today else None)
+    history = history if history is not None else history_by_rep_hour(day, now)
     payload = build_live(
         day=day,
         now=now,
@@ -314,10 +315,11 @@ def load_live(
         today_rows=attach(query_kpis(span, group="rep_hour", now=now), occ),
         timelines={rep_id: t for (rep_id, _), t in timelines.items()},
         on_leave={rep_id for rep_id, leave_day in leaves if leave_day == day},
-        history=history if history is not None else history_by_rep_hour(day, now),
+        history=history,
         activity=last_activity(day, now=now),
         as_of=as_of,
         crm_tracking=crm_tracking_enabled(),
     )
+    attach_targets(payload, history=history, stored=load_targets(), day=day, cutoff=cutoff)
     payload["meetings"] = meetings_payload(day, now)
     return payload

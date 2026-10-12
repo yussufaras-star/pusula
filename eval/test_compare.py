@@ -206,3 +206,11 @@ def test_reversed_range_is_rejected(monkeypatch) -> None:
     client = _client(monkeypatch, admin)
     bad = "/api/compare?a_from=2026-10-05&a_to=2026-10-01&b_from=2026-09-28&b_to=2026-09-28"
     assert client.get(bad).status_code == 400
+
+
+def test_per_rep_divides_reached_once() -> None:
+    from pusula.compare import per_rep
+
+    out = per_rep({"arama": 40, "ulasilan": 12}, 4)
+    assert out["arama"] == 10
+    assert out["ulasilan"] == 3
