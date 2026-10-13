@@ -2081,3 +2081,11 @@ table.meet-list {
   font-size: 14px;
   font-weight: 620;
 }
+
+.churn-future td {
+  color: var(--muted);
+}
+
+.churn-table td.name {
+  white-space: nowrap;
+}
