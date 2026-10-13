@@ -21,11 +21,64 @@ from typing import Any
 from pusula.config import get_org_id
 from pusula.metrics import Span, combine, finish, query_kpis, ratio
 from pusula.occupancy import attach, occupancy_rows
-from pusula.panel_ciro import ciro_by_rep, ciro_team_monthly, workdays_inclusive
+from pusula.panel_ciro import REAL_SALES_START, add_months, month_first, month_label, workdays_inclusive
+from pusula.sifir_satis import WON_STAGE
 from pusula.panel_data import DateWindow, connect, load_reps, sales_cycle
 
 SUM_KEYS = ("atanan", "satis", "ciro")
 REPORT_START = date(2026, 6, 1)
+
+
+# Ciro ve satış prim kartıyla aynı kaynaktan (deal_packages): TL'ye çevrilmiş
+# tutar, kapanış tarihi dönemde olan tüm "Kapandı Kazanıldı" deal'ler (ileri
+# tarihli kapanış dahil; yöneticinin aylık toplam tanımı).
+_WON_DAY = "coalesce(closing_date, (created_at AT TIME ZONE 'Europe/Istanbul')::date)"
+
+
+def won_by_rep(start: date, end: date) -> dict[str, dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT owner_rep_id, count(*)::int, coalesce(sum(amount), 0)::float
+            FROM deal_packages
+            WHERE org_id = %s AND stage = %s AND {_WON_DAY} BETWEEN %s AND %s
+            GROUP BY 1
+            """,
+            (get_org_id(), WON_STAGE, start, end),
+        ).fetchall()
+    return {str(r): {"satis": n, "ciro": c} for r, n, c in rows}
+
+
+def won_team_monthly(rep_ids: list[str], today: date, months: int = 12) -> list[dict[str, Any]]:
+    # Nisan 2026 öncesi CRM taşıma dönemi; satış verisi güvenilir değil (panel_ciro ile aynı).
+    first = max(add_months(month_first(today), -(months - 1)), REAL_SALES_START)
+    months = (today.year - first.year) * 12 + today.month - first.month + 1
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT date_trunc('month', {_WON_DAY})::date, count(*)::int, coalesce(sum(amount), 0)::float
+            FROM deal_packages
+            WHERE org_id = %s AND stage = %s AND owner_rep_id = ANY(%s) AND {_WON_DAY} >= %s
+            GROUP BY 1
+            """,
+            (get_org_id(), WON_STAGE, rep_ids, first),
+        ).fetchall()
+    by = {m: (n, c) for m, n, c in rows}
+    out = []
+    for i in range(months):
+        m = add_months(first, i)
+        n, c = by.get(m, (0, 0.0))
+        out.append(
+            {
+                "ay": m,
+                "ay_etiket": month_label(m),
+                "satis": n,
+                "ciro": round(c, 2),
+                "ortalama": round(c / n, 2) if n else None,
+                "kisi_basi": round(c / max(len(rep_ids), 1), 2),
+            }
+        )
+    return out
 
 
 def _assigned(span: Span) -> dict[str, int]:
@@ -103,7 +156,7 @@ def build_sales_report(start: date, end: date, now: datetime) -> dict[str, Any]:
             occupancy_rows(span, group="rep", rep_ids=rep_ids, now=now),
         )
     }
-    ciro = {row["rep_id"]: row for row in ciro_by_rep("sales", start, min(end, today))}
+    ciro = won_by_rep(start, end)
     assigned = _assigned(span)
     cycle_rows, cycle_team = sales_cycle(DateWindow(start=start, end=end))
     cycle = {row["temsilci"]: row for row in cycle_rows}
@@ -134,7 +187,7 @@ def build_sales_report(start: date, end: date, now: datetime) -> dict[str, Any]:
         "reps": rows,
         "team": total,
         "avg": avg,
-        "ciro_monthly": ciro_team_monthly(),
+        "ciro_monthly": won_team_monthly(rep_ids, today),
     }
 
 
