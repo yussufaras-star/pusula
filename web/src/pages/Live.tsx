@@ -179,9 +179,14 @@ function LiveBody({ data, me, refresh }: { data: LivePayload; me: Me; refresh: (
         <StatTile
           label="Ort. görüşme süresi"
           value={duration(k.sure_ort)}
-          expected={`ortalama ${duration(x.sure_ort)}`}
-          tone={paceTone(pace(k.sure_ort, x.sure_ort))}
-          badge={pace(k.sure_ort, x.sure_ort) === null ? undefined : `%${Math.round((pace(k.sure_ort, x.sure_ort) ?? 0) * 100)}`}
+          expected={tg?.sure_ort ? `hedef en az ${duration(tg.sure_ort.daily)}` : `ortalama ${duration(x.sure_ort)}`}
+          tone={paceTone(pace(k.sure_ort, tg?.sure_ort ? tg.sure_ort.daily : x.sure_ort))}
+          badge={
+            pace(k.sure_ort, tg?.sure_ort ? tg.sure_ort.daily : x.sure_ort) === null
+              ? undefined
+              : `%${Math.round((pace(k.sure_ort, tg?.sure_ort ? tg.sure_ort.daily : x.sure_ort) ?? 0) * 100)}`
+          }
+          title="Ulaşılan giden görüşmelerin ortalama süresi. Hedef en az 5 dk; altına düşünce (en az 5 görüşmede) dürtme gider."
         />
         <StatTile
           label="Doluluk"

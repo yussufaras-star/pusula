@@ -9,6 +9,8 @@ Kurallar (pusula.blocks takvimi; hafta içi arama 09-11 + 14-17, toplantı
   arama süresi sayılır ve hedefe eklenir (5 dk'da bir arama), o pencerede
   birikir. Cumartesi de geçerlidir.
 - Ulaşma oranı: %70. Ulaşılan sayısı hedefi arama hedefinin %70'idir.
+- Ortalama görüşme süresi: en az 5 dk (ulaşılan giden görüşmeler; arama
+  günlerinde).
 - Doluluk: %80 (yönetici kararı, 12 Ekim; ölçüm olgunlaşınca %90).
 - Toplantı: aynı gün tipinin geçmiş ortalaması; toplantı bloklarında birikir.
 """
@@ -27,15 +29,19 @@ METRICS: dict[str, str] = {
     "ulasilan": "Ulaşılan",
     "ulasma_orani": "Ulaşma oranı",
     "randevu": "Toplantı",
+    "sure_ort": "Ort. görüşme süresi",
     "doluluk": "Doluluk",
 }
 COUNT_METRICS = ("arama", "ulasilan", "randevu")
 RATE_METRICS = ("ulasma_orani", "doluluk")
+# Ekipte toplanmaz, temsilci hedeflerinin ortalaması alınır.
+MEAN_METRICS = (*RATE_METRICS, "sure_ort")
 METRIC_KIND = {"arama": "call", "ulasilan": "call", "randevu": "meeting"}
 CALL_BAND_MIN = 5.0
 NO_SHOW_WAIT_MIN = 10.0
 REACH_TARGET = 70.0
 OCCUPANCY_TARGET = 80.0
+TALK_TARGET_SEC = 300.0
 
 
 def _weekday_minutes(kind: str) -> float:
@@ -152,6 +158,12 @@ def rep_targets(
             "source": "standart",
             "actual": today.get("ulasma_orani"),
         }
+        out["sure_ort"] = {
+            "daily": TALK_TARGET_SEC,
+            "by_now": TALK_TARGET_SEC,
+            "source": "standart",
+            "actual": today.get("sure_ort"),
+        }
     hist = history_daily(hist_hours)
     if hist.get("randevu"):
         daily = float(hist["randevu"])
@@ -194,7 +206,7 @@ def attach_targets(
         )
         card["target"] = targets
         for metric, item in targets.items():
-            if metric in RATE_METRICS:
+            if metric in MEAN_METRICS:
                 rates.setdefault(metric, []).append(item["daily"])
                 continue
             slot = team.setdefault(

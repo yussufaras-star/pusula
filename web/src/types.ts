@@ -176,7 +176,7 @@ export interface Meetings {
 }
 
 // pusula/targets.py — kural hedefleri ve "bu saate kadar" payı.
-export type TargetMetric = "arama" | "ulasilan" | "ulasma_orani" | "randevu" | "doluluk";
+export type TargetMetric = "arama" | "ulasilan" | "ulasma_orani" | "randevu" | "sure_ort" | "doluluk";
 export type TargetSource = "standart" | "ortalama";
 
 export interface TargetItem {

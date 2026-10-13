@@ -33,6 +33,8 @@ MIN_BY_NOW = {"arama": 5.0, "ulasilan": 3.0, "randevu": 2.0}
 RATE_GAP = 10.0
 DOLULUK_MIN_MESAI = 90.0
 REACH_MIN_SAMPLE = 10
+# Ortalama görüşme süresi için en az bu kadar ulaşılan giden görüşme.
+TALK_MIN_SAMPLE = 5
 FIRST_HOUR = 10
 LAST_MINUTES = 30
 COOLDOWN_MIN = 120
@@ -94,6 +96,13 @@ def gaps_for(card: dict[str, Any]) -> list[dict[str, Any]]:
         if metric in NOT_NUDGED:
             continue
         actual = today.get(metric)
+        if metric == "sure_ort":
+            # Hedef "en az 5 dk": altına düşünce, yeterli görüşme varsa.
+            if actual is None or int(today.get("giden_temas") or 0) < TALK_MIN_SAMPLE:
+                continue
+            if actual < target["daily"]:
+                out.append({"metric": metric, "actual": actual, **target})
+            continue
         if metric in RATE_METRICS:
             # Oran: hedefin 10 puan altı; yeterli örneklem/mesai yoksa yorum yok.
             if actual is None:
@@ -133,9 +142,19 @@ def _fmt(value: float | None) -> str:
     return f"{value:.0f}" if float(value).is_integer() or value >= 10 else f"{value:.1f}"
 
 
+def _duration(sec: float) -> str:
+    total = int(round(sec))
+    minutes, rest = divmod(total, 60)
+    if not minutes:
+        return f"{rest} sn"
+    return f"{minutes} dk {rest} sn" if rest else f"{minutes} dk"
+
+
 def _gap_line(gap: dict[str, Any]) -> str:
     label = METRICS[gap["metric"]]
     basis = "günlük ortalaman" if gap["source"] == "ortalama" else "günlük hedef"
+    if gap["metric"] == "sure_ort":
+        return f"- {label}: {_duration(gap['actual'])} (hedef en az {_duration(gap['daily'])})"
     if gap["metric"] in RATE_METRICS:
         return f"- {label}: %{_fmt(gap['actual'])} ({basis} %{_fmt(gap['daily'])})"
     return (

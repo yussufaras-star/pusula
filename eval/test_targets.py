@@ -183,3 +183,21 @@ def test_occupancy_target_is_fixed_80() -> None:
     assert gaps_for(c) == []
     c["today"]["doluluk"] = 69.0
     assert [g["metric"] for g in gaps_for(c)] == ["doluluk"]
+
+
+def test_talk_time_target_five_minutes_with_sample() -> None:
+    out = rep_targets(today={"sure_ort": 204.0}, hist_hours={}, meetings=[], day=MONDAY, cutoff=at(MONDAY, 12))
+    assert out["sure_ort"]["daily"] == 300.0
+    c = card(sure_ort=out["sure_ort"])
+    c["today"].update({"sure_ort": 204.0, "giden_temas": 12})
+    gaps = gaps_for(c)
+    assert [g["metric"] for g in gaps] == ["sure_ort"]
+    body = format_body("Ayşe Kar", gaps, at(MONDAY, 12))
+    assert "- Ort. görüşme süresi: 3 dk 24 sn (hedef en az 5 dk)" in body
+    c["today"]["giden_temas"] = 4  # az görüşmede yorum yok
+    assert gaps_for(c) == []
+    c["today"].update({"sure_ort": 300.0, "giden_temas": 12})
+    assert gaps_for(c) == []
+    # Cumartesi (arama yok) süre hedefi de yok.
+    sat = rep_targets(today={}, hist_hours={}, meetings=[], day=SATURDAY, cutoff=at(SATURDAY, 12))
+    assert "sure_ort" not in sat
