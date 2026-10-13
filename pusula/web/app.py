@@ -26,6 +26,7 @@ from pusula.compare import (
 )
 from pusula import llm
 from pusula.commentary import commentary
+from pusula.commission import load_commission
 from pusula.config import get_org_id
 from pusula.hourly_nudges import run_hourly_nudges
 from pusula.leaves import set_leave
@@ -420,6 +421,28 @@ def status_sources_api(
     return cache.cached(
         key, REPORT_TTL, lambda: jsonable_encoder(status_sources(dim, rep_id=chosen, span=span))
     )
+
+
+@app.get("/api/commission")
+def commission(month: str | None = None, user: AuthUser = Depends(current_user)) -> Any:
+    """Aylık prim hedefi (Premium/Plus adedi, kademe, prim, ay sonu tahmini)."""
+    require_database()
+    now = _now()
+    if month:
+        try:
+            chosen = date.fromisoformat(f"{month}-01")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Ay YYYY-AA olmalı") from exc
+    else:
+        chosen = now.date().replace(day=1)
+    payload = cache.cached(
+        ("commission", chosen.isoformat(), now.strftime("%Y-%m-%d %H")),
+        REPORT_TTL,
+        lambda: jsonable_encoder(load_commission(chosen, now)),
+    )
+    if user.role == "admin":
+        return payload
+    return {**payload, "reps": [r for r in payload["reps"] if r["rep_id"] == user.rep_id]}
 
 
 @app.get("/api/profiles")

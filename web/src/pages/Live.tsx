@@ -3,6 +3,7 @@ import { useState } from "react";
 import { api, usePolling } from "../api";
 import { Attention } from "../components/Attention";
 import { Commentary } from "../components/Commentary";
+import { CommissionCard } from "../components/CommissionCard";
 import { HourChart } from "../components/HourChart";
 import { LostTime } from "../components/LostTime";
 import { MeetingBoard } from "../components/MeetingBoard";
@@ -203,6 +204,8 @@ function LiveBody({ data, me, refresh }: { data: LivePayload; me: Me; refresh: (
           title={`Hedef %80 (mola dışında boş zaman kalmamalı). Dolu ${minutes(k.dolu_dk)} / (dolu + kayıp ${minutes(k.kayip_dk)}). Arama 1 dk önce ve sonrasıyla, toplantı süresi (gelmeyen toplantıda 10 dk bekleme), WhatsApp konuşma başına 3 dk, CRM işlemi başına 2 dk. Günün en uzun boşluklarından ${minutes(k.mola_dk)} mola düşüldü.`}
         />
       </div>
+
+      <CommissionCard isAdmin={me.role === "admin"} />
 
       <div className="grid-2">
         <section className="card">

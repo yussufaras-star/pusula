@@ -1959,3 +1959,72 @@ table.meet-list {
   color: var(--ink-2);
   font-weight: 500;
 }
+
+/* --- aylık prim hedefi ------------------------------------------------------ */
+
+.cm-table .cm-bar-col {
+  min-width: 260px;
+  width: 34%;
+}
+
+.cm-count {
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.cm-bar {
+  position: relative;
+  height: 12px;
+  margin: 2px 0 16px;
+  border-radius: 4px;
+  background: var(--surface-2);
+}
+
+.cm-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 4px;
+  background: var(--series-1);
+}
+
+.cm-tick {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--ink-2);
+}
+
+.cm-tick span {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.cm-forecast {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 0;
+  margin-left: -1px;
+  border-left: 2px dashed var(--ink-2);
+}
+
+.cm-prim {
+  font-weight: 600;
+}
+
+.cm-top {
+  color: var(--good-ink);
+  font-weight: 600;
+}
+
+.cm-legend {
+  font-weight: 400;
+  color: var(--muted);
+}
