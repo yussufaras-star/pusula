@@ -56,6 +56,10 @@ jobs:
       - name: Deal paketleri
         continue-on-error: true
         run: python scripts/deal_packages.py
+      # Re-Co yenileme analizi: müşteri profili (abonelik, son 1 yıllık satış).
+      - name: Müşteri profilleri
+        continue-on-error: true
+        run: python scripts/contact_profiles.py
       # Raporlar'daki statü × kaynak kırılımı (UTM kaynağı, kampanya, içerik).
       - name: Lead reklam kaynağı
         continue-on-error: true

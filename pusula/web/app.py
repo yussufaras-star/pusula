@@ -28,6 +28,7 @@ from pusula import llm
 from pusula.commentary import commentary
 from pusula.commission import load_commission
 from pusula.config import get_org_id
+from pusula.reco import load_reco
 from pusula.hourly_nudges import run_hourly_nudges
 from pusula.leaves import set_leave
 from pusula.live import data_as_of, history_by_rep_hour, load_live
@@ -443,6 +444,18 @@ def commission(month: str | None = None, user: AuthUser = Depends(current_user))
     if user.role == "admin":
         return payload
     return {**payload, "reps": [r for r in payload["reps"] if r["rep_id"] == user.rep_id]}
+
+
+@app.get("/api/reco")
+def reco(owner: str | None = None, user: AuthUser = Depends(admin_user)) -> Any:
+    """Re-Co yenileme analizi (yönetici): satıyor/yeniledi grupları ve iş listesi."""
+    require_database()
+    today = _now().date()
+    return cache.cached(
+        ("reco", owner, today.isoformat(), _now().strftime("%H")),
+        REPORT_TTL,
+        lambda: jsonable_encoder(load_reco(today, owner or None)),
+    )
 
 
 @app.get("/api/profiles")

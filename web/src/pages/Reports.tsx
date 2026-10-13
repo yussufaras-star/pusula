@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { usePolling } from "../api";
 import { Funnel } from "../components/Funnel";
 import { StatTile } from "../components/StatTile";
+import { RecoBoard } from "../components/RecoBoard";
 import { StatusSources } from "../components/StatusSources";
 import { duration, int, num, pct, tl, tlShort } from "../format";
 import type { CiroMonth, Me, ReportRow, SalesReport } from "../types";
@@ -158,6 +159,18 @@ export function ReportsPage({ me }: { me: Me }) {
               <StatusSources start={data.start} end={data.end} reps={data.reps} isAdmin={isAdmin} />
             </div>
           </section>
+
+          {isAdmin ? (
+            <section className="card">
+              <div className="card-head">
+                <h2>Re-Co · yenileme</h2>
+                <span className="hint">mevcut müşteriler satıyor mu, yeniledi mi · bugünkü durum</span>
+              </div>
+              <div className="card-body">
+                <RecoBoard />
+              </div>
+            </section>
+          ) : null}
 
           <section className="card">
             <div className="card-head">

@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 SOURCE = "zoho_deal_packages"
 FIELDS = (
     "id", "Paket", "Type", "Stage", "Amount", "Exchange_Rate", "Currency", "Owner",
-    "Closing_Date", "Created_Time", "Modified_Time",
+    "Closing_Date", "Created_Time", "Modified_Time", "Contact_Name",
 )
 OVERLAP = timedelta(minutes=5)
 BATCH = 500
@@ -46,9 +46,13 @@ CREATE TABLE IF NOT EXISTS deal_packages (
     PRIMARY KEY (org_id, deal_id)
 );
 CREATE INDEX IF NOT EXISTS idx_deal_packages_close ON deal_packages (org_id, closing_date);
+-- Re-Co yenileme analizi: deal hangi müşterinin (contact).
+ALTER TABLE deal_packages ADD COLUMN IF NOT EXISTS contact_id text;
 """
 
-Row = tuple[str, str | None, str | None, str | None, float | None, str | None, date | None, datetime | None]
+Row = tuple[
+    str, str | None, str | None, str | None, float | None, str | None, date | None, datetime | None, str | None
+]
 
 
 def _name(lookup: Any) -> str | None:
@@ -82,6 +86,7 @@ def row_from_record(record: dict[str, Any]) -> Row | None:
         str(owner["id"]) if isinstance(owner, dict) and owner.get("id") else None,
         _date(record.get("Closing_Date")),
         parse_zoho_time(record.get("Created_Time")),
+        str(contact["id"]) if isinstance(contact := record.get("Contact_Name"), dict) and contact.get("id") else None,
     )
 
 
@@ -94,14 +99,15 @@ def _write(rows: list[Row]) -> int:
             cur.executemany(
                 """
                 INSERT INTO deal_packages (org_id, deal_id, package, deal_type, stage, amount,
-                                           owner_rep_id, closing_date, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                           owner_rep_id, closing_date, created_at, contact_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (org_id, deal_id) DO UPDATE
                 SET package = EXCLUDED.package, deal_type = EXCLUDED.deal_type,
                     stage = EXCLUDED.stage, amount = EXCLUDED.amount,
                     owner_rep_id = EXCLUDED.owner_rep_id,
                     closing_date = EXCLUDED.closing_date,
-                    created_at = EXCLUDED.created_at, updated_at = now()
+                    created_at = EXCLUDED.created_at, contact_id = EXCLUDED.contact_id,
+                    updated_at = now()
                 """,
                 [(org_id, *row) for row in rows],
             )

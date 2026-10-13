@@ -303,3 +303,39 @@ export interface CommissionPayload {
   tiers: { esik: number; oran: number }[];
   reps: CommissionRep[];
 }
+
+// pusula/reco.py load_reco.
+export interface RecoSegment {
+  key: "satiyor_yenilememis" | "satiyor_yenilemis" | "satmiyor";
+  label: string;
+  musteri: number;
+  abonelik_bitmis: number;
+  bitis_30: number;
+  bitis_90: number;
+  abonelik_yok: number;
+  reco_satis: number;
+  reco_ciro: number;
+  medyan_son1: number | null;
+}
+
+export interface RecoItem {
+  contact_id: string;
+  name: string | null;
+  owner: string | null;
+  paket: string | null;
+  abonelik_bit: string | null;
+  gun: number | null;
+  son1_satis: number | null;
+  toplam_satis: number | null;
+}
+
+export interface RecoPayload {
+  available: boolean;
+  owner?: string | null;
+  owners?: [string, number][];
+  bu_ay?: { owner: string; satis: number; ciro: number }[];
+  segments?: RecoSegment[];
+  toplam?: number;
+  liste?: RecoItem[];
+  liste_toplam?: number;
+}
