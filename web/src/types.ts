@@ -339,3 +339,33 @@ export interface RecoPayload {
   liste?: RecoItem[];
   liste_toplam?: number;
 }
+
+// pusula/churn.py load_churn.
+export interface ChurnMonth {
+  ay: string;
+  vadesi_gelen: number;
+  yeniledi: number;
+  kaybedildi: number;
+  geri_kazanildi: number;
+  bekliyor: number;
+  churn: number | null;
+  iade: number;
+  satis: number;
+  iade_orani: number | null;
+}
+
+export interface ChurnPeriod {
+  yeniledi: number;
+  kaybedildi: number;
+  geri_kazanildi: number;
+  churn: number | null;
+}
+
+export interface ChurnPayload {
+  available: boolean;
+  aylar?: ChurnMonth[];
+  son_12_ay?: ChurnPeriod;
+  bu_yil?: ChurnPeriod;
+  musteri?: number;
+  packages?: string[];
+}

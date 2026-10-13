@@ -27,6 +27,7 @@ from pusula.compare import (
 from pusula import llm
 from pusula.commentary import commentary
 from pusula.commission import load_commission
+from pusula.churn import load_churn
 from pusula.config import get_org_id
 from pusula.reco import load_reco
 from pusula.hourly_nudges import run_hourly_nudges
@@ -455,6 +456,18 @@ def reco(owner: str | None = None, user: AuthUser = Depends(admin_user)) -> Any:
         ("reco", owner, today.isoformat(), _now().strftime("%H")),
         REPORT_TTL,
         lambda: jsonable_encoder(load_reco(today, owner or None)),
+    )
+
+
+@app.get("/api/churn")
+def churn(owner: str | None = None, user: AuthUser = Depends(admin_user)) -> Any:
+    """Aylık / yıllık churn (vadesi dolup yenilemeyen), geri kazanılan, iade oranı."""
+    require_database()
+    today = _now().date()
+    return cache.cached(
+        ("churn", owner, today.isoformat(), _now().strftime("%H")),
+        REPORT_TTL,
+        lambda: jsonable_encoder(load_churn(today, owner or None)),
     )
 
 

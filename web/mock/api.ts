@@ -472,6 +472,20 @@ export function mockApi(method: string, url: string): unknown {
     return { ok: true };
   }
   if (path === "/api/sales-report") return mockReport();
+  if (path === "/api/churn") {
+    const aylar = Array.from({ length: 15 }, (_, i) => {
+      const d = new Date(Date.UTC(2025, 10 + i, 1)).toISOString().slice(0, 10);
+      const due = i === 11 ? 62 : i > 11 ? [129, 129, 81][i - 12] : 0;
+      const ren = i === 11 ? 9 : i === 12 ? 2 : 0;
+      const lost = i === 11 ? 16 : 0;
+      const sat = i <= 11 ? [130, 130, 82, 51, 69, 68, 54, 82, 65, 76, 103, 50][i] : 0;
+      const iade = i <= 11 ? [7, 1, 1, 5, 2, 3, 3, 0, 2, 1, 3, 0][i] : 0;
+      return { ay: d, vadesi_gelen: due, yeniledi: ren, kaybedildi: lost, geri_kazanildi: i === 11 ? 2 : 0, bekliyor: due - ren - lost,
+        churn: ren + lost ? Math.round((1000 * lost) / (ren + lost)) / 10 : null, iade, satis: sat, iade_orani: sat ? Math.round((1000 * iade) / sat) / 10 : null };
+    });
+    return { available: true, aylar, son_12_ay: { yeniledi: 9, kaybedildi: 16, geri_kazanildi: 2, churn: 64 }, bu_yil: { yeniledi: 9, kaybedildi: 16, geri_kazanildi: 2, churn: 64 }, musteri: 992,
+      packages: ["Rexven-Premium", "Rexven-Plus", "Rexven-Premium-Kamp", "Re-Co-Premium"] };
+  }
   if (path === "/api/reco") {
     const seg = (key: string, label: string, musteri: number, reco: number) => ({
       key, label, musteri, abonelik_bitmis: Math.round(musteri * 0.2), bitis_30: Math.round(musteri * 0.08),
