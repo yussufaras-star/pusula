@@ -396,7 +396,11 @@ def main() -> int:
         # kalır ve o arada başlayan toplantılar farklı sayılır. Kesim anı
         # karşılaştırmanın hemen öncesi olmalı.
         cmp_now = datetime.now(ISTANBUL) if day == datetime.now(ISTANBUL).date() else now
-        old = sum_hour_rows(today_hours(None, day))
+        old_rows = today_hours(None, day)
+        old = sum_hour_rows(old_rows)
+        # Eski randevu iptalleri de sayar (ayrı 'iptal' alanı); canlı tanım saymaz.
+        cancelled = sum(int(r.get("iptal") or r.get("iptal_edildi") or 0) for r in old_rows)
+        old = {**old, "randevu": int(old.get("randevu") or 0) - cancelled}
         new_rows = query_kpis(Span(*bounds), group="team", now=cmp_now)
         new = new_rows[0] if new_rows else {}
         for key in ("arama", "ulasilan", "randevu", "katildi", "sonuc_girilmedi"):
