@@ -472,6 +472,35 @@ export function mockApi(method: string, url: string): unknown {
     return { ok: true };
   }
   if (path === "/api/sales-report") return mockReport();
+  if (path === "/api/commission") {
+    const rows: [string, string, number, number, number][] = [
+      ["r1", "Ayşe Yılmaz", 18, 22, 812000],
+      ["r2", "Mehmet Kaya", 9, 11, 360000],
+      ["r3", "Zeynep Demir", 28, 31, 1105000],
+      ["r4", "Can Öztürk", 31, 36, 1290000],
+    ];
+    const el = 10.5;
+    const wd = 27;
+    const rate = (n: number) => (n >= 30 ? 5 : n >= 28 ? 3 : 2.5);
+    return {
+      month: "2026-10-01",
+      available: true,
+      elapsed_workdays: el,
+      month_workdays: wd,
+      packages: ["Rexven-Premium", "Rexven-Plus", "Rexven-Premium-Kamp"],
+      tiers: [{ esik: 0, oran: 2.5 }, { esik: 28, oran: 3 }, { esik: 30, oran: 5 }],
+      reps: rows.map(([rep_id, name, n, all, ciro]) => {
+        const fn = (n / el) * wd;
+        const fc = (ciro / el) * wd;
+        const next = n >= 30 ? null : n >= 28 ? { esik: 30, oran: 5 } : { esik: 28, oran: 3 };
+        return {
+          rep_id, name, sayilan: n, toplam_satis: all, ciro, oran: rate(n), prim: (rate(n) / 100) * ciro,
+          tahmin_sayilan: Math.round(fn * 10) / 10, tahmin_ciro: fc, tahmin_oran: rate(fn), tahmin_prim: (rate(fn) / 100) * fc,
+          sonraki: next ? { ...next, kalan: next.esik - n, gunluk_gereken: (next.esik - n) / (wd - el), ek_prim: ((next.oran - rate(n)) / 100) * ciro } : null,
+        };
+      }),
+    };
+  }
   if (path === "/api/status-sources") {
     const statuses = ["1.Arama-Ulaşılamadı", "Düşünmek İstiyor", "Nitelikli Değil-İlgisiz", "Randevu", "Aging", "Yeni Müşteri Adayı"];
     const sources = ["meta", "google", "instagram", "youtube", "facebook", "direct", "tiktok", "linkedin", null];

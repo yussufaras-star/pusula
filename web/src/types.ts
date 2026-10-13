@@ -274,3 +274,29 @@ export interface StatusSourcesPayload {
   available: boolean;
   rows: { status: string; source: string | null; count: number }[];
 }
+
+// pusula/commission.py load_commission.
+export interface CommissionRep {
+  rep_id: string;
+  name: string;
+  sayilan: number;
+  toplam_satis: number;
+  ciro: number;
+  oran: number;
+  prim: number;
+  tahmin_sayilan: number;
+  tahmin_ciro: number;
+  tahmin_oran: number;
+  tahmin_prim: number;
+  sonraki: { esik: number; oran: number; kalan: number; gunluk_gereken: number | null; ek_prim: number } | null;
+}
+
+export interface CommissionPayload {
+  month: string;
+  available: boolean;
+  elapsed_workdays: number;
+  month_workdays: number;
+  packages: string[];
+  tiers: { esik: number; oran: number }[];
+  reps: CommissionRep[];
+}

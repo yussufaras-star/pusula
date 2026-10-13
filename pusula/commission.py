@@ -1,0 +1,141 @@
+"""Aylık prim hedefi: Premium/Plus satış adedine göre kademe, ciro üzerinden prim.
+
+Kural (yönetici, 13 Ekim):
+- Sayılan satış: ay içinde kazanılan (Kapandı Kazanıldı) Rexven-Premium,
+  Rexven-Plus, Rexven-Premium-Kamp paketleri; lead'den veya contact'tan
+  açılmış tüm deal'ler.
+- Oran: 27 satışa kadar %2,5 · 28-29 %3 · 30 ve üzeri %5.
+- Prim = oran × o ay kazanılan TÜM satışların cirosu (Kamp dahil).
+- Ay sonu tahmini: iş günü başına hız × ayın iş günü (pazar hariç); bugün
+  mesainin geçen kısmı kadar sayılır.
+Kaynak tablo pusula.ingest.deal_packages (saatlik).
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+from typing import Any
+
+from pusula.config import get_org_id
+from pusula.metrics import TZ, shift_bounds
+from pusula.panel_ciro import is_workday, month_first, month_last, workdays_inclusive
+from pusula.panel_data import connect, load_reps
+from pusula.sifir_satis import WON_STAGE
+
+COUNTED_PACKAGES = ("Rexven-Premium", "Rexven-Plus", "Rexven-Premium-Kamp")
+# (en az adet, oran %) büyükten küçüğe.
+TIERS: tuple[tuple[int, float], ...] = ((30, 5.0), (28, 3.0), (0, 2.5))
+
+
+def rate_for(count: float) -> float:
+    n = int(count)
+    return next(rate for floor, rate in TIERS if n >= floor)
+
+
+def next_tier(count: int) -> tuple[int, float] | None:
+    """Bir üst kademe (eşik, oran); en üstteyse None."""
+    above = [(floor, rate) for floor, rate in TIERS if floor > count]
+    return min(above) if above else None
+
+
+def elapsed_workdays(month: date, now: datetime) -> tuple[float, int]:
+    """(geçen iş günü, ayın iş günü). Bugün mesainin geçen oranı kadar."""
+    first, last = month_first(month), month_last(month)
+    total = workdays_inclusive(first, last)
+    today = now.astimezone(TZ).date()
+    if today > last:
+        return float(total), total
+    if today < first:
+        return 0.0, total
+    done = float(workdays_inclusive(first, today - timedelta(days=1)))
+    if is_workday(today):
+        bounds = shift_bounds(today)
+        if bounds:
+            start, end = bounds
+            local = now.astimezone(TZ)
+            span = (end - start).total_seconds()
+            done += min(max((local - start).total_seconds() / span, 0.0), 1.0)
+    return done, total
+
+
+def rep_progress(
+    *, counted: int, all_sales: int, ciro: float, elapsed: float, month_wd: int
+) -> dict[str, Any]:
+    """Saf: tek temsilcinin ilerlemesi, tahmini ve sonraki kademe."""
+    rate = rate_for(counted)
+    remaining_wd = max(month_wd - elapsed, 0.0)
+    if elapsed > 0 and remaining_wd > 0:
+        f_counted = counted / elapsed * month_wd
+        f_ciro = ciro / elapsed * month_wd
+    else:
+        f_counted, f_ciro = float(counted), ciro
+    f_rate = rate_for(f_counted)
+    nxt = next_tier(counted)
+    step = None
+    if nxt:
+        floor, nrate = nxt
+        missing = floor - counted
+        step = {
+            "esik": floor,
+            "oran": nrate,
+            "kalan": missing,
+            "gunluk_gereken": round(missing / remaining_wd, 2) if remaining_wd > 0 else None,
+            # Bugünkü ciroyla kademe atlanırsa prim farkı (alt sınır).
+            "ek_prim": round((nrate - rate) / 100 * ciro, 2),
+        }
+    return {
+        "sayilan": counted,
+        "toplam_satis": all_sales,
+        "ciro": round(ciro, 2),
+        "oran": rate,
+        "prim": round(rate / 100 * ciro, 2),
+        "tahmin_sayilan": round(f_counted, 1),
+        "tahmin_ciro": round(f_ciro, 2),
+        "tahmin_oran": f_rate,
+        "tahmin_prim": round(f_rate / 100 * f_ciro, 2),
+        "sonraki": step,
+    }
+
+
+def load_commission(month: date, now: datetime) -> dict[str, Any]:
+    first, last = month_first(month), month_last(month)
+    reps = load_reps()
+    with connect() as conn:
+        exists = conn.execute("SELECT to_regclass('deal_packages')").fetchone()
+        rows = (
+            conn.execute(
+                """
+                SELECT owner_rep_id,
+                       count(*) FILTER (WHERE package = ANY(%s))::int,
+                       count(*)::int,
+                       coalesce(sum(amount), 0)::float
+                FROM deal_packages
+                WHERE org_id = %s AND stage = %s
+                  AND coalesce(closing_date, (created_at AT TIME ZONE 'Europe/Istanbul')::date)
+                      BETWEEN %s AND %s
+                GROUP BY 1
+                """,
+                (list(COUNTED_PACKAGES), get_org_id(), WON_STAGE, first, last),
+            ).fetchall()
+            if exists and exists[0]
+            else []
+        )
+    by_rep = {str(r[0]): r for r in rows}
+    elapsed, month_wd = elapsed_workdays(month, now)
+    out = []
+    for rep in reps:
+        _, counted, all_sales, ciro = by_rep.get(rep.rep_id, (rep.rep_id, 0, 0, 0.0))
+        item = rep_progress(
+            counted=int(counted), all_sales=int(all_sales), ciro=float(ciro),
+            elapsed=elapsed, month_wd=month_wd,
+        )
+        out.append({"rep_id": rep.rep_id, "name": rep.full_name, **item})
+    return {
+        "month": first,
+        "available": bool(exists and exists[0]),
+        "elapsed_workdays": round(elapsed, 2),
+        "month_workdays": month_wd,
+        "packages": COUNTED_PACKAGES,
+        "tiers": [{"esik": floor, "oran": rate} for floor, rate in sorted(TIERS)],
+        "reps": out,
+    }
