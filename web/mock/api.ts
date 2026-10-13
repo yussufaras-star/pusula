@@ -472,6 +472,22 @@ export function mockApi(method: string, url: string): unknown {
     return { ok: true };
   }
   if (path === "/api/sales-report") return mockReport();
+  if (path === "/api/reco") {
+    const seg = (key: string, label: string, musteri: number, reco: number) => ({
+      key, label, musteri, abonelik_bitmis: Math.round(musteri * 0.2), bitis_30: Math.round(musteri * 0.08),
+      bitis_90: Math.round(musteri * 0.15), abonelik_yok: Math.round(musteri * 0.3), reco_satis: reco,
+      reco_ciro: reco * 7600, medyan_son1: key === "satmiyor" ? null : 140,
+    });
+    return {
+      available: true, owner: null, owners: [["Burcu Özkan", 610], ["Nihat Kemer", 540], ["Serkan Şahin", 40]],
+      bu_ay: [{ owner: "Nihat Kemer", satis: 18, ciro: 142433 }],
+      segments: [seg("satiyor_yenilememis", "Satıyor · yenilememiş", 520, 0), seg("satiyor_yenilemis", "Satıyor · yenilemiş", 180, 210), seg("satmiyor", "Satmıyor", 480, 35)],
+      toplam: 1180,
+      liste: Array.from({ length: 8 }, (_, i) => ({ contact_id: String(i), name: `Müşteri ${i + 1}`, owner: i % 2 ? "Nihat Kemer" : "Burcu Özkan",
+        paket: "Premium", abonelik_bit: `2026-${i < 4 ? "10" : "11"}-${String(10 + i * 2).padStart(2, "0")}`, gun: i * 6 - 5, son1_satis: 300 - i * 20, toplam_satis: 800 - i * 50 })),
+      liste_toplam: 520,
+    };
+  }
   if (path === "/api/commission") {
     const rows: [string, string, number, number, number][] = [
       ["r1", "Ayşe Yılmaz", 18, 22, 812000],

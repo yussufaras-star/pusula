@@ -2065,3 +2065,19 @@ table.meet-list {
   height: 14px;
   border-left: 2px dashed var(--ink-2);
 }
+
+/* --- Re-Co --------------------------------------------------------------------- */
+
+.reco-table td.name {
+  white-space: nowrap;
+}
+
+.reco-focus td {
+  background: var(--warning-wash);
+}
+
+.reco-h3 {
+  margin: 20px 0 8px;
+  font-size: 14px;
+  font-weight: 620;
+}
