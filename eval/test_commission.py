@@ -10,7 +10,8 @@ from pusula.metrics import TZ
 def test_tiers_follow_manager_rule() -> None:
     # 27'ye kadar %2,5 · 28-29 %3 · 30+ %5
     assert [rate_for(n) for n in (0, 26, 27, 28, 29, 30, 41)] == [2.5, 2.5, 2.5, 3.0, 3.0, 5.0, 5.0]
-    assert next_tier(20) == (28, 3.0)
+    # Sonraki adım her zaman %5 kademesi.
+    assert next_tier(20) == (30, 5.0)
     assert next_tier(28) == (30, 5.0)
     assert next_tier(30) is None
 
@@ -18,7 +19,7 @@ def test_tiers_follow_manager_rule() -> None:
 def test_prim_is_on_all_sales_ciro() -> None:
     p = rep_progress(counted=20, all_sales=25, ciro=800000.0, elapsed=26, month_wd=26)
     assert p["oran"] == 2.5 and p["prim"] == 20000.0
-    assert p["sonraki"]["kalan"] == 8 and p["sonraki"]["ek_prim"] == 4000.0
+    assert p["sonraki"]["kalan"] == 10 and p["sonraki"]["ek_prim"] == 20000.0
     # Ay bitti: tahmin = gerçekleşen, günlük gereken yok.
     assert p["tahmin_sayilan"] == 20.0 and p["sonraki"]["gunluk_gereken"] is None
 
@@ -29,7 +30,7 @@ def test_forecast_projects_pace_to_month_end() -> None:
     assert p["tahmin_oran"] == 5.0
     assert p["tahmin_ciro"] == 1092000.0
     assert p["tahmin_prim"] == 54600.0
-    assert p["sonraki"]["gunluk_gereken"] == round(16 / 16, 2)
+    assert p["sonraki"]["gunluk_gereken"] == round(18 / 16, 2)
 
 
 def test_elapsed_counts_today_by_shift_fraction() -> None:
