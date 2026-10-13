@@ -289,6 +289,9 @@ export interface CommissionRep {
   tahmin_oran: number;
   tahmin_prim: number;
   sonraki: { esik: number; oran: number; kalan: number; gunluk_gereken: number | null; ek_prim: number } | null;
+  ciro_sayilan: number;
+  ciro_diger: number;
+  diger_satis: number;
 }
 
 export interface CommissionPayload {

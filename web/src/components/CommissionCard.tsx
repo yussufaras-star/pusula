@@ -108,8 +108,17 @@ export function CommissionCard({ isAdmin }: { isAdmin: boolean }) {
                         </div>
                         <TierBar rep={r} tiers={data.tiers} closed={closed} />
                       </td>
-                      <td className="num">{int(r.toplam_satis)}</td>
-                      <td className="num">{tl(r.ciro)}</td>
+                      <td className="num">
+                        {int(r.toplam_satis)}
+                        {r.diger_satis ? <div className="sub">{int(r.diger_satis)} diğer paket</div> : null}
+                      </td>
+                      <td className="num">
+                        {tl(r.ciro)}
+                        <div className="sub">
+                          Premium/Plus {tl(r.ciro_sayilan)}
+                          {r.ciro_diger ? ` + diğer ${tl(r.ciro_diger)}` : ""}
+                        </div>
+                      </td>
                       <td className="num">{pct(r.oran)}</td>
                       <td className="num cm-prim">{tl(r.prim)}</td>
                       {closed ? null : (
@@ -128,8 +137,23 @@ export function CommissionCard({ isAdmin }: { isAdmin: boolean }) {
                 </tbody>
               </table>
             </div>
+            <div className="cm-key" aria-label="Çubuk nasıl okunur">
+              <span>
+                <span className="cm-key-fill" /> Mavi dolu kısım: bu ay gerçekleşen Premium/Plus satış
+              </span>
+              <span>
+                <span className="cm-key-tick" /> Koyu dik çizgiler: kademe eşikleri (28 → %3, 30 → %5)
+              </span>
+              {closed ? null : (
+                <span>
+                  <span className="cm-key-dash" /> Kesikli çizgi: bu hızla ay sonunda ulaşılacak satış (çubuğun sonundaysa ölçeğin
+                  ötesinde)
+                </span>
+              )}
+            </div>
             <p className="muted fn-note">
-              Sayılan: ay içinde kazanılan {data.packages.join(", ")}. Oran: 27'ye kadar %2,5 · 28–29 %3 · 30 ve üzeri %5;
+              Sayılan: ay içinde kazanılan {data.packages.join(", ")}. Ciro: o ay "Kapandı Kazanıldı" olan tüm satışlar
+              (Kamp ve diğer paketler dahil). Oran: 27'ye kadar %2,5 · 28–29 %3 · 30 ve üzeri %5;
               prim o ay kazanılan tüm satışların cirosu üzerinden. Tahmin: iş günü başına hız × ayın {data.month_workdays} iş
               günü (geçen {num(data.elapsed_workdays)}). "+ prim": kademe atlanırsa bugünkü ciroyla oluşacak fark.
             </p>

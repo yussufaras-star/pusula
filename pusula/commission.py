@@ -108,14 +108,15 @@ def load_commission(month: date, now: datetime) -> dict[str, Any]:
                 SELECT owner_rep_id,
                        count(*) FILTER (WHERE package = ANY(%s))::int,
                        count(*)::int,
-                       coalesce(sum(amount), 0)::float
+                       coalesce(sum(amount), 0)::float,
+                       coalesce(sum(amount) FILTER (WHERE package = ANY(%s)), 0)::float
                 FROM deal_packages
                 WHERE org_id = %s AND stage = %s
                   AND coalesce(closing_date, (created_at AT TIME ZONE 'Europe/Istanbul')::date)
                       BETWEEN %s AND %s
                 GROUP BY 1
                 """,
-                (list(COUNTED_PACKAGES), get_org_id(), WON_STAGE, first, last),
+                (list(COUNTED_PACKAGES), list(COUNTED_PACKAGES), get_org_id(), WON_STAGE, first, last),
             ).fetchall()
             if exists and exists[0]
             else []
@@ -124,12 +125,22 @@ def load_commission(month: date, now: datetime) -> dict[str, Any]:
     elapsed, month_wd = elapsed_workdays(month, now)
     out = []
     for rep in reps:
-        _, counted, all_sales, ciro = by_rep.get(rep.rep_id, (rep.rep_id, 0, 0, 0.0))
+        _, counted, all_sales, ciro, counted_ciro = by_rep.get(rep.rep_id, (rep.rep_id, 0, 0, 0.0, 0.0))
         item = rep_progress(
             counted=int(counted), all_sales=int(all_sales), ciro=float(ciro),
             elapsed=elapsed, month_wd=month_wd,
         )
-        out.append({"rep_id": rep.rep_id, "name": rep.full_name, **item})
+        out.append(
+            {
+                "rep_id": rep.rep_id,
+                "name": rep.full_name,
+                **item,
+                # Prim tabanı tüm ciro; kırılım yalnız görünürlük için.
+                "ciro_sayilan": round(float(counted_ciro), 2),
+                "ciro_diger": round(float(ciro) - float(counted_ciro), 2),
+                "diger_satis": int(all_sales) - int(counted),
+            }
+        )
     return {
         "month": first,
         "available": bool(exists and exists[0]),

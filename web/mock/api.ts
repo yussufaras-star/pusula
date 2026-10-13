@@ -495,6 +495,7 @@ export function mockApi(method: string, url: string): unknown {
         const next = n >= 30 ? null : n >= 28 ? { esik: 30, oran: 5 } : { esik: 28, oran: 3 };
         return {
           rep_id, name, sayilan: n, toplam_satis: all, ciro, oran: rate(n), prim: (rate(n) / 100) * ciro,
+          ciro_sayilan: ciro * 0.85, ciro_diger: ciro * 0.15, diger_satis: all - n,
           tahmin_sayilan: Math.round(fn * 10) / 10, tahmin_ciro: fc, tahmin_oran: rate(fn), tahmin_prim: (rate(fn) / 100) * fc,
           sonraki: next ? { ...next, kalan: next.esik - n, gunluk_gereken: (next.esik - n) / (wd - el), ek_prim: ((next.oran - rate(n)) / 100) * ciro } : null,
         };

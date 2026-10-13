@@ -2028,3 +2028,40 @@ table.meet-list {
   font-weight: 400;
   color: var(--muted);
 }
+
+.cm-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  margin-top: 12px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.cm-key > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cm-key-fill {
+  display: inline-block;
+  width: 22px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--series-1);
+}
+
+.cm-key-tick {
+  display: inline-block;
+  width: 2px;
+  height: 14px;
+  background: var(--ink-2);
+}
+
+.cm-key-dash {
+  display: inline-block;
+  width: 0;
+  height: 14px;
+  border-left: 2px dashed var(--ink-2);
+}
