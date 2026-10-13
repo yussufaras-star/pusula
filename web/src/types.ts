@@ -266,3 +266,11 @@ export interface SalesReport {
   avg: ReportRow;
   ciro_monthly: CiroMonth[];
 }
+
+// pusula/sales_report.py status_sources.
+export interface StatusSourcesPayload {
+  dim: string;
+  label: string;
+  available: boolean;
+  rows: { status: string; source: string | null; count: number }[];
+}
