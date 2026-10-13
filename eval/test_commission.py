@@ -46,3 +46,15 @@ def test_deal_row_parsing() -> None:
            "Closing_Date": "2026-10-12", "Created_Time": "2026-10-10T10:00:00+03:00"}
     row = row_from_record(rec)
     assert row[:7] == ("9", "Rexven-Premium", "Yeni Müşteri", "Kapandı Kazanıldı", 34000.0, "77", date(2026, 10, 12))
+
+
+def test_foreign_currency_deal_converted_to_try() -> None:
+    from pusula.ingest.crm_deals import amount_try
+
+    # 950,27 € kur 0.018167 → 52.307,48 TL (Abdullah, 7 Ekim).
+    assert float(amount_try({"Amount": 950.27, "Exchange_Rate": 0.018167})) == 52307.48
+    assert float(amount_try({"Amount": 45800, "Exchange_Rate": 1})) == 45800.0
+    assert float(amount_try({"Amount": 45800})) == 45800.0
+    assert amount_try({"Amount": None, "Exchange_Rate": 0.02}) is None
+    row = row_from_record({"id": 1, "Amount": 855.22, "Exchange_Rate": 0.018051, "Stage": "Kapandı Kazanıldı"})
+    assert round(row[4], 2) == 47377.98

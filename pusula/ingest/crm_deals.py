@@ -29,6 +29,7 @@ _DEAL_FIELDS = [
     "Deal_Name",
     "Stage",
     "Amount",
+    "Exchange_Rate",
     "Closing_Date",
     "Created_Time",
     "Modified_Time",
@@ -155,7 +156,7 @@ def sync_deals(*, since: datetime, dry_run: bool = False) -> dict[str, int]:
                         lead_id,
                         thread_id,
                         _as_str(record.get("Stage")),
-                        _parse_amount(record.get("Amount")),
+                        amount_try(record),
                         _parse_dt(record.get("Created_Time")),
                         _parse_date_as_dt(record.get("Closing_Date")),
                         owner_rep_id,
@@ -335,6 +336,21 @@ def _lookup_id(value: Any) -> str | None:
     if isinstance(value, dict) and value.get("id"):
         return str(value["id"])
     return None
+
+
+def amount_try(record: dict[str, Any]) -> Decimal | None:
+    """TL tutar. Zoho Amount deal'in kendi para biriminde (EUR/USD), Exchange_Rate
+    TL'den o birime kurdur (ör. EUR 0.018): TL = Amount / Exchange_Rate."""
+    amount = _parse_amount(record.get("Amount"))
+    if amount is None:
+        return None
+    try:
+        rate = Decimal(str(record.get("Exchange_Rate")))
+    except Exception:
+        return amount
+    if rate <= 0 or rate == 1:
+        return amount
+    return (amount / rate).quantize(Decimal("0.01"))
 
 
 def _parse_amount(value: Any) -> Decimal | None:
