@@ -136,3 +136,59 @@ def build_sales_report(start: date, end: date, now: datetime) -> dict[str, Any]:
         "avg": avg,
         "ciro_monthly": ciro_team_monthly(),
     }
+
+
+# --- statü × kaynak -----------------------------------------------------------
+
+SOURCE_DIMS: dict[str, tuple[str, str]] = {
+    "lead_source": ("Lead kaynağı", "nullif(btrim(l.source), '')"),
+    "utm_source": ("Reklam kaynağı (UTM)", "a.utm_source"),
+    "utm_campaign": ("Kampanya", "a.utm_campaign"),
+    "utm_content": ("Reklam içeriği", "a.utm_content"),
+}
+
+
+def status_sources(
+    dim: str,
+    *,
+    rep_id: str | None,
+    span: Span | None,
+) -> dict[str, Any]:
+    """Lead statüsü × kaynak sayımları. span None: bugünkü tüm portföy;
+    verilirse yalnız dönemde atanan lead'ler (bugünkü statüleriyle)."""
+    label, expr = SOURCE_DIMS[dim]
+    params: list[Any] = [get_org_id()]
+    where = ""
+    if rep_id:
+        where += " AND l.owner_rep_id = %s"
+        params.append(rep_id)
+    if span:
+        where += " AND l.assigned_at >= %s AND l.assigned_at < %s"
+        params += [span.start, span.end]
+    with connect() as conn:
+        exists = conn.execute("SELECT to_regclass('lead_attribution')").fetchone()
+        has_attr = bool(exists and exists[0])
+        if dim != "lead_source" and not has_attr:
+            return {"dim": dim, "label": label, "available": False, "rows": []}
+        join = (
+            "LEFT JOIN lead_attribution a ON a.org_id = l.org_id AND a.lead_id = l.lead_id"
+            if has_attr
+            else ""
+        )
+        rows = conn.execute(
+            f"""
+            SELECT coalesce(nullif(btrim(l.status), ''), 'Statüsüz'), {expr}, count(*)
+            FROM leads l
+            JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
+            {join}
+            WHERE l.org_id = %s AND r.category = 'sales' AND r.active {where}
+            GROUP BY 1, 2
+            """,
+            params,
+        ).fetchall()
+    return {
+        "dim": dim,
+        "label": label,
+        "available": True,
+        "rows": [{"status": s, "source": src, "count": int(n)} for s, src, n in rows],
+    }

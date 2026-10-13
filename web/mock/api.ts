@@ -472,6 +472,14 @@ export function mockApi(method: string, url: string): unknown {
     return { ok: true };
   }
   if (path === "/api/sales-report") return mockReport();
+  if (path === "/api/status-sources") {
+    const statuses = ["1.Arama-Ulaşılamadı", "Düşünmek İstiyor", "Nitelikli Değil-İlgisiz", "Randevu", "Aging", "Yeni Müşteri Adayı"];
+    const sources = ["meta", "google", "instagram", "youtube", "facebook", "direct", "tiktok", "linkedin", null];
+    const rows = statuses.flatMap((status, i) =>
+      sources.map((source, j) => ({ status, source, count: Math.max(0, Math.round(400 / (j + 1.5) - i * 20 + ((i * 7 + j * 3) % 11) * 5)) })),
+    );
+    return { dim: "utm_source", label: "Reklam kaynağı", available: true, rows };
+  }
   if (path === "/api/nudges") return { items: NUDGES, approval_required: true, ai: true };
   if (path.startsWith("/api/nudges/") && method === "POST") {
     const item = NUDGES.find((n) => String(n.id) === path.split("/").pop());

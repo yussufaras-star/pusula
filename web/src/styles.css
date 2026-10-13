@@ -1919,3 +1919,43 @@ table.meet-list {
 .pf-closed {
   height: 14px;
 }
+
+/* --- statü × kaynak -------------------------------------------------------- */
+
+.ss-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  margin-bottom: 12px;
+}
+
+.ss-rep {
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.ss-table td.name {
+  white-space: normal;
+  min-width: 170px;
+}
+
+.ss-cell.h1 { background: color-mix(in srgb, var(--heat-1) 45%, transparent); }
+.ss-cell.h2 { background: var(--heat-1); }
+.ss-cell.h3 { background: var(--heat-2); }
+.ss-cell.h4 { background: var(--heat-3); color: #fff; }
+.ss-cell.h4 .ss-share { color: rgba(255, 255, 255, 0.85); }
+
+.ss-share {
+  display: block;
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
+.ss-table tfoot td {
+  border-top: 1px solid var(--axis);
+  color: var(--ink-2);
+  font-weight: 500;
+}

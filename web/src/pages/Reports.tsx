@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { usePolling } from "../api";
 import { Funnel } from "../components/Funnel";
 import { StatTile } from "../components/StatTile";
+import { StatusSources } from "../components/StatusSources";
 import { duration, int, num, pct, tl, tlShort } from "../format";
 import type { CiroMonth, Me, ReportRow, SalesReport } from "../types";
 
@@ -147,6 +148,16 @@ export function ReportsPage({ me }: { me: Me }) {
               </div>
             </section>
           </div>
+
+          <section className="card">
+            <div className="card-head">
+              <h2>Statü × kaynak</h2>
+              <span className="hint">lead'ler hangi kaynaktan, hangi statüde</span>
+            </div>
+            <div className="card-body">
+              <StatusSources start={data.start} end={data.end} reps={data.reps} isAdmin={isAdmin} />
+            </div>
+          </section>
 
           <section className="card">
             <div className="card-head">

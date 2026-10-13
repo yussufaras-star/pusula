@@ -31,7 +31,7 @@ from pusula.hourly_nudges import run_hourly_nudges
 from pusula.leaves import set_leave
 from pusula.live import data_as_of, history_by_rep_hour, load_live
 from pusula.live_ingest import run_live_ingest
-from pusula.metrics import TZ
+from pusula.metrics import TZ, Span
 from pusula.pace_nudges import QueueError, decide, list_queue, run_pace_nudges
 from pusula.panel_auth import (
     ADMIN_EMAIL,
@@ -53,7 +53,7 @@ from pusula.web.auth import (
     passwords,
     require_cron,
 )
-from pusula.sales_report import REPORT_START, build_sales_report
+from pusula.sales_report import REPORT_START, SOURCE_DIMS, build_sales_report, status_sources
 from pusula.web.reports import build_reports, selected_rep
 
 load_dotenv()
@@ -399,6 +399,27 @@ def sales_report(
         lambda: jsonable_encoder(build_sales_report(first, last, now)),
     )
     return scope_report(payload, user)
+
+
+@app.get("/api/status-sources")
+def status_sources_api(
+    dim: str = "lead_source",
+    rep_id: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    user: AuthUser = Depends(current_user),
+) -> Any:
+    """Statü × kaynak. start/end yoksa bugünkü tüm portföy."""
+    if dim not in SOURCE_DIMS:
+        raise HTTPException(status_code=400, detail="Bilinmeyen kaynak alanı")
+    require_database()
+    chosen = selected_rep(user, rep_id)
+    today = _now().date()
+    span = Span.days(parse_day(start, today), parse_day(end, today)) if start and end else None
+    key = ("status-sources", dim, chosen, start, end, today.isoformat())
+    return cache.cached(
+        key, REPORT_TTL, lambda: jsonable_encoder(status_sources(dim, rep_id=chosen, span=span))
+    )
 
 
 @app.get("/api/profiles")
