@@ -26,8 +26,8 @@ export function NudgePanel() {
         <h2>Dürtmeler{pending.length ? ` · ${pending.length} onay bekliyor` : ""}</h2>
         <span className="hint">
           {data.approval_required
-            ? "ilk 14 gün yapay zekâlı mesajlar senin onayınla gider · 45 dk içinde onaylanmazsa düşer"
-            : "otomatik gönderim açık"}
+            ? "yapay zekâlı mesajlar senin onayınla gider · 45 dk içinde onaylanmazsa düşer"
+            : "doğrudan temsilciye gider · burada yalnız kayıt"}
           {data.ai ? "" : " · yapay zekâ kapalı, yalnız sayısal uyarı"}
         </span>
       </div>
