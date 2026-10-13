@@ -6,6 +6,8 @@ Kural (yönetici, 13 Ekim):
   açılmış tüm deal'ler.
 - Oran: 27 satışa kadar %2,5 · 28-29 %3 · 30 ve üzeri %5.
 - Prim = oran × o ay kazanılan TÜM satışların cirosu (Kamp dahil).
+- Sonraki adım her zaman en üst kademe (%5, 30 satış): kalan satış, günlük
+  gereken ve prim farkı ona göre (yönetici, 13 Ekim).
 - Ay sonu tahmini: iş günü başına hız × ayın iş günü (pazar hariç); bugün
   mesainin geçen kısmı kadar sayılır.
 Kaynak tablo pusula.ingest.deal_packages (saatlik).
@@ -33,9 +35,9 @@ def rate_for(count: float) -> float:
 
 
 def next_tier(count: int) -> tuple[int, float] | None:
-    """Bir üst kademe (eşik, oran); en üstteyse None."""
-    above = [(floor, rate) for floor, rate in TIERS if floor > count]
-    return min(above) if above else None
+    """Hedef kademe: en üst kademe (eşik, oran); ona ulaşıldıysa None."""
+    top = TIERS[0]
+    return top if count < top[0] else None
 
 
 def elapsed_workdays(month: date, now: datetime) -> tuple[float, int]:
