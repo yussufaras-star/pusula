@@ -1071,10 +1071,12 @@ def main() -> int:
             f"({fmt_tl(row['ciro'])}) satis={row['satis']}"
         )
     print(f"    ortalama={avg.get('ortalama')} ({fmt_tl(avg.get('ortalama'))})")
+    # 13 Ekim: döviz (EUR) deal'ler TL'ye çevrildi (Amount / Exchange_Rate);
+    # eski 2.56 / 2.09 / 2.18 kur çevrilmemiş tutarlardı.
     expected_probe_m = {
-        "Haziran 2026": 2.56,
-        "Temmuz 2026": 2.09,
-        "Ağustos 2026": 2.18,
+        "Haziran 2026": 3.46,
+        "Temmuz 2026": 3.07,
+        "Ağustos 2026": 2.81,
     }
     probe_m: dict[str, float] = {}
     _month_tr = (
@@ -1147,7 +1149,7 @@ def main() -> int:
                     f"hata: UTC probe {label} beklenen {exp}M, olculen {got}M"
                 )
                 return 1
-        print("  UTC probe son 3 tam ay 2.56 / 2.09 / 2.18 tuttu")
+        print("  UTC probe son 3 tam ay 3.46 / 3.07 / 2.81 tuttu")
         sales_rows = avg.get("aylar") or []
         if len(sales_rows) != 3:
             print(f"hata: satis ekibi tam ay sayisi {len(sales_rows)}")
