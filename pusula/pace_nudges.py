@@ -1,9 +1,9 @@
 """Tempo dürtmesi: günlük hedefin gerisinde kalan temsilciye Cliq mesajı.
 
 Sapmayı kod bulur (gaps_for); Claude yalnız bir-iki cümlelik rehberlik
-yazar. Yapay zekâ metni içeren mesajlar ilk 14 gün yöneticinin onayından
-geçer (panelde "Onay bekleyen dürtmeler"); onaylanmazsa 45 dk sonra düşer.
-AI yoksa veya çağrı başarısızsa deterministik mesaj onaysız gider.
+yazar. Mesajlar doğrudan temsilciye gider (yönetici kararı, 13 Ekim; ilk
+plandaki 14 günlük onay kaldırıldı). PUSULA_AI_APPROVAL=1 ile yapay zekâlı
+mesajlar panelde onay bekler; onaylanmazsa 45 dk sonra düşer.
 Gölge mod (PUSULA_SHADOW_EMAIL) tüm gönderimleri o adrese çevirir; tempo
 dürtmesi için PUSULA_PACE_NUDGES_LIVE=1 gölgeyi atlar ve temsilciye gönderir
 (gölge adresi haftalık rapor gibi diğer akışlarda kalır).
@@ -41,7 +41,6 @@ COOLDOWN_MIN = 120
 MAX_PER_DAY = 3
 STALE_MIN = 20
 PENDING_TTL_MIN = 45
-APPROVAL_DAYS = 14
 SKIP_STATUSES = {"izinli", "mesai_disi", "baslamadi", "gecmis"}
 # Ulaşılan = arama × ulaşma oranı; ikisi zaten mesajda, üçüncü satır tekrar olur.
 NOT_NUDGED = {"ulasilan"}
@@ -302,20 +301,11 @@ def _expire(conn: Any, now: datetime) -> None:
 
 
 def approval_required(conn: Any, now: datetime) -> bool:
-    """İlk onaylı AI mesajından 14 gün sonra onay kalkar. Env ile zorlanabilir."""
-    forced = os.environ.get("PUSULA_AI_APPROVAL", "").strip()
-    if forced in ("0", "1"):
-        return forced == "1"
-    row = conn.execute(
-        """
-        SELECT min(decided_at) FROM nudge_queue
-        WHERE org_id = %s AND ai_text IS NOT NULL AND status = 'gonderildi'
-          AND decided_by IS NOT NULL
-        """,
-        (get_org_id(),),
-    ).fetchone()
-    first = row[0] if row else None
-    return first is None or now < first + timedelta(days=APPROVAL_DAYS)
+    """Yönetici kararı (13 Ekim): onay yok, dürtmeler doğrudan temsilciye.
+
+    PUSULA_AI_APPROVAL=1 yapay zekâlı mesajları yeniden onaya bağlar.
+    """
+    return os.environ.get("PUSULA_AI_APPROVAL", "").strip() == "1"
 
 
 def live_mode() -> bool:
