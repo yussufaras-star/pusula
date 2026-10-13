@@ -43,6 +43,7 @@ const STEP_LABEL: Record<string, string> = {
   aramalar: "aramalar",
   whatsapp: "WhatsApp",
   crm_islemleri: "CRM işlemleri",
+  satislar: "satışlar",
   randevular: "randevular",
   leadler: "lead'ler",
   kisiler: "kişiler",
