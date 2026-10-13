@@ -62,17 +62,32 @@ def _webhook_url() -> str:
     return str(raw).strip()
 
 
-def post_cliq(text: str, userids: str) -> None:
-    payload = {"type": "message", "text": text, "userids": userids}
+def _message_url() -> str:
+    """Botun mesaj adresi. /incoming botun webhook betiğine gider ve alıcıyı
+    yok sayıp webhook sahibine (yöneticiye) iletir; /message userids'e gönderir."""
+    return _webhook_url().replace("/incoming?", "/message?")
+
+
+def post_cliq(text: str, userids: str) -> list[str]:
+    """Kişiye bot mesajı. Cliq'in ulaştırdığı kullanıcı numaralarını döner;
+    alıcıların hiçbirine ulaşmadıysa hata fırlatır."""
+    payload = {"text": text, "userids": userids, "broadcast": False}
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
-        _webhook_url(),
+        _message_url(),
         data=body,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
-        resp.read()
+        raw = resp.read()
+    try:
+        delivered = [str(u) for u in (json.loads(raw or b"{}").get("users") or [])]
+    except ValueError:
+        delivered = []
+    if not delivered:
+        raise RuntimeError(f"Cliq mesajı kimseye ulaşmadı: {userids}")
+    return delivered
 
 
 def _shadow_prefix(intended: str) -> str:
