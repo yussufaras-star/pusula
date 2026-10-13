@@ -1892,3 +1892,30 @@ table.meet-list {
 .cs-val {
   white-space: nowrap;
 }
+
+.pf-toggle {
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pf-toggle h2 {
+  margin: 0;
+}
+
+.pf-caret {
+  color: var(--muted);
+}
+
+.pf-alert-text {
+  color: var(--critical-ink);
+  font-weight: 600;
+}
+
+.pf-closed {
+  height: 14px;
+}

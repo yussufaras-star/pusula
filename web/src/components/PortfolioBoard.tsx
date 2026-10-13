@@ -137,3 +137,47 @@ export function PortfolioBoard({ portfolio, reps }: { portfolio: Portfolio; reps
     </>
   );
 }
+
+/** Canlı sayfada kapalı başlar: başlıkta tek satır özet, tıklayınca tablo ve liste. */
+export function PortfolioCard({ portfolio, reps }: { portfolio: Portfolio; reps: RepCard[] }) {
+  const [open, setOpen] = useState(false);
+  const newTotal = portfolio.by_status
+    .filter((r) => r.status === portfolio.new_status)
+    .reduce((sum, r) => sum + r.count, 0);
+  const untouched = portfolio.untouched.length;
+  const never = portfolio.untouched.filter((lead) => !lead.last_touch).length;
+  return (
+    <section className="card">
+      <button className="card-head pf-toggle" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <h2>
+          <span className="pf-caret" aria-hidden>
+            {open ? "▾" : "▸"}
+          </span>{" "}
+          Portföy
+        </h2>
+        <span className="hint">
+          {int(newTotal)} yeni aday
+          {untouched ? (
+            <>
+              {" · "}
+              <span className="pf-alert-text">
+                ⚠ {int(untouched)} tanesi {portfolio.untouched_hours} saattir dokunulmamış
+              </span>
+              {never ? ` (${int(never)} hiç aranmamış)` : ""}
+            </>
+          ) : (
+            " · hepsine dokunulmuş"
+          )}
+          {open ? "" : " · aç"}
+        </span>
+      </button>
+      {open ? (
+        <div className="card-body">
+          <PortfolioBoard portfolio={portfolio} reps={reps} />
+        </div>
+      ) : (
+        <div className="pf-closed" />
+      )}
+    </section>
+  );
+}

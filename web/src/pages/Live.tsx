@@ -7,7 +7,7 @@ import { HourChart } from "../components/HourChart";
 import { LostTime } from "../components/LostTime";
 import { MeetingBoard } from "../components/MeetingBoard";
 import { NudgePanel } from "../components/NudgePanel";
-import { PortfolioBoard } from "../components/PortfolioBoard";
+import { PortfolioCard } from "../components/PortfolioBoard";
 import { RepBoard, StatusPill } from "../components/RepBoard";
 import { StatTile } from "../components/StatTile";
 import { SyncButton } from "../components/SyncButton";
@@ -236,17 +236,7 @@ function LiveBody({ data, me, refresh }: { data: LivePayload; me: Me; refresh: (
         </section>
       ) : null}
 
-      {data.portfolio ? (
-        <section className="card">
-          <div className="card-head">
-            <h2>Portföy</h2>
-            <span className="hint">lead statüsüne göre · ⚠ {data.portfolio.untouched_hours} saattir dokunulmamış yeni aday</span>
-          </div>
-          <div className="card-body">
-            <PortfolioBoard portfolio={data.portfolio} reps={data.reps} />
-          </div>
-        </section>
-      ) : null}
+      {data.portfolio ? <PortfolioCard portfolio={data.portfolio} reps={data.reps} /> : null}
 
       <section className="card">
         <div className="card-head">
