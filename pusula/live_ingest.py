@@ -26,6 +26,7 @@ from pusula.db.models import SyncState
 from pusula.ingest import get
 from pusula.ingest.crm_actions import sync_crm_actions
 from pusula.ingest.crm_contacts import sync_contacts
+from pusula.ingest.deal_packages import sync_deal_packages
 from pusula.ingest.lead_identity import sync_leads
 from pusula.ingest.zoho_meeting import enabled as meetings_enabled
 from pusula.ingest.zoho_meeting import sync_meetings
@@ -111,6 +112,8 @@ def _steps(now: datetime, run_slow: bool) -> list[tuple[str, Callable[[], Any]]]
     if whatsapp_enabled():
         steps.append(("whatsapp", lambda: _run_cursor_source("zoho_crm_whatsapp", now)))
     steps.append(("crm_islemleri", lambda: sync_crm_actions(now)))
+    # Prim kartı: Modified_Time imleciyle yalnız değişen deal'ler, hızlı.
+    steps.append(("satislar", lambda: sync_deal_packages(now)))
     if run_slow:
         steps += [
             ("randevular", lambda: _run_bookings(now)),

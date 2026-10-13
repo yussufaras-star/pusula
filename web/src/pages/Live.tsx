@@ -88,6 +88,7 @@ export function LivePage({ me }: { me: Me }) {
   const path = `/api/live${day === today ? "" : `?day=${day}`}`;
   const { data, error, fetchedAt, refresh, loading } = usePolling<LivePayload>(path, day === today ? REFRESH_MS : 0);
   const now = fetchedAt ?? new Date();
+  const [syncTick, setSyncTick] = useState(0);
 
   return (
     <>
@@ -113,7 +114,12 @@ export function LivePage({ me }: { me: Me }) {
               Bugün
             </button>
           ) : me.role === "admin" ? (
-            <SyncButton onDone={refresh} />
+            <SyncButton
+              onDone={() => {
+                refresh();
+                setSyncTick((n) => n + 1);
+              }}
+            />
           ) : (
             <button className="btn" onClick={refresh}>
               Yenile
@@ -136,13 +142,23 @@ export function LivePage({ me }: { me: Me }) {
           ))}
         </div>
       ) : (
-        <LiveBody data={data} me={me} refresh={refresh} />
+        <LiveBody data={data} me={me} refresh={refresh} syncTick={syncTick} />
       )}
     </>
   );
 }
 
-function LiveBody({ data, me, refresh }: { data: LivePayload; me: Me; refresh: () => void }) {
+function LiveBody({
+  data,
+  me,
+  refresh,
+  syncTick,
+}: {
+  data: LivePayload;
+  me: Me;
+  refresh: () => void;
+  syncTick: number;
+}) {
   async function markLeave(repId: string, on: boolean) {
     await api("/api/leaves", {
       method: "POST",
@@ -205,7 +221,7 @@ function LiveBody({ data, me, refresh }: { data: LivePayload; me: Me; refresh: (
         />
       </div>
 
-      <CommissionCard isAdmin={me.role === "admin"} />
+      <CommissionCard isAdmin={me.role === "admin"} syncTick={syncTick} />
 
       <div className="grid-2">
         <section className="card">

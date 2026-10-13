@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { usePolling } from "../api";
 import { int, num, tl } from "../format";
@@ -51,9 +51,16 @@ function NextStep({ rep, closed }: { rep: CommissionRep; closed: boolean }) {
   );
 }
 
-export function CommissionCard({ isAdmin }: { isAdmin: boolean }) {
+/** syncTick: "Verileri güncelle" sonrası artar, kart beklemeden yenilenir. */
+export function CommissionCard({ isAdmin, syncTick = 0 }: { isAdmin: boolean; syncTick?: number }) {
   const [offset, setOffset] = useState(0);
-  const { data, error } = usePolling<CommissionPayload>(`/api/commission?month=${monthParam(offset)}`, 5 * 60_000);
+  const { data, error, refresh } = usePolling<CommissionPayload>(
+    `/api/commission?month=${monthParam(offset)}`,
+    5 * 60_000,
+  );
+  useEffect(() => {
+    if (syncTick > 0) refresh();
+  }, [syncTick, refresh]);
   const closed = offset < 0;
   const reps = [...(data?.reps ?? [])].sort((a, b) => b.sayilan - a.sayilan || b.ciro - a.ciro);
 
