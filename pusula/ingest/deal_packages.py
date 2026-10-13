@@ -2,7 +2,8 @@
 
 deals tablosu günde bir ve paketsiz gelir; prim ilerlemesi saatlik ve paket
 bazlı olmalı. Ayrı tablo: Paket (lookup adı), Type (Yeni/Mevcut Müşteri),
-Stage (görünen ad, ör. "Kapandı Kazanıldı"), Amount, Owner, Closing_Date.
+Stage (görünen ad, ör. "Kapandı Kazanıldı"), Amount (TL'ye çevrilmiş: döviz
+deal'lerde Amount / Exchange_Rate), Owner, Closing_Date.
 İlk çalıştırma tüm deal'ler, sonra Modified_Time ile değişenler; iptal/iade
 aşamaya taşındığında satır güncellenir ve sayımdan düşer.
 """
@@ -17,12 +18,16 @@ from pusula.config import get_org_id
 from pusula.db import client
 from pusula.db.models import SyncState
 from pusula.ingest.crm_actions import parse_zoho_time
+from pusula.ingest.crm_deals import amount_try
 from pusula.zoho.crm import get_records
 
 logger = logging.getLogger(__name__)
 
 SOURCE = "zoho_deal_packages"
-FIELDS = ("id", "Paket", "Type", "Stage", "Amount", "Owner", "Closing_Date", "Created_Time", "Modified_Time")
+FIELDS = (
+    "id", "Paket", "Type", "Stage", "Amount", "Exchange_Rate", "Currency", "Owner",
+    "Closing_Date", "Created_Time", "Modified_Time",
+)
 OVERLAP = timedelta(minutes=5)
 BATCH = 500
 
@@ -67,13 +72,13 @@ def row_from_record(record: dict[str, Any]) -> Row | None:
     if rid is None:
         return None
     owner = record.get("Owner")
-    amount = record.get("Amount")
+    amount = amount_try(record)
     return (
         str(rid),
         _name(record.get("Paket")),
         _name(record.get("Type")),
         _name(record.get("Stage")),
-        float(amount) if isinstance(amount, (int, float)) else None,
+        float(amount) if amount is not None else None,
         str(owner["id"]) if isinstance(owner, dict) and owner.get("id") else None,
         _date(record.get("Closing_Date")),
         parse_zoho_time(record.get("Created_Time")),
