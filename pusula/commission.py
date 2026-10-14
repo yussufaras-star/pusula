@@ -4,7 +4,7 @@ Kural (yönetici, 13 Ekim):
 - Sayılan satış: ay içinde kazanılan (Kapandı Kazanıldı) Rexven-Premium,
   Rexven-Plus, Rexven-Premium-Kamp paketleri; lead'den veya contact'tan
   açılmış tüm deal'ler.
-- Oran: 27 satışa kadar %2,5 · 28-29 %3 · 30 ve üzeri %5.
+- Oran: 25 satışın altı %2,5 · 25-29 %3 · 30 ve üzeri %5 (yönetici, 14 Ekim).
 - Prim = oran × o ay kazanılan TÜM satışların cirosu (Kamp dahil).
 - Sonraki adım her zaman en üst kademe (%5, 30 satış): kalan satış, günlük
   gereken ve prim farkı ona göre (yönetici, 13 Ekim).
@@ -26,7 +26,7 @@ from pusula.sifir_satis import WON_STAGE
 
 COUNTED_PACKAGES = ("Rexven-Premium", "Rexven-Plus", "Rexven-Premium-Kamp")
 # (en az adet, oran %) büyükten küçüğe.
-TIERS: tuple[tuple[int, float], ...] = ((30, 5.0), (28, 3.0), (0, 2.5))
+TIERS: tuple[tuple[int, float], ...] = ((30, 5.0), (25, 3.0), (0, 2.5))
 
 
 def rate_for(count: float) -> float:

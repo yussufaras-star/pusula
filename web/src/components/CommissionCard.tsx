@@ -149,7 +149,7 @@ export function CommissionCard({ isAdmin, syncTick = 0 }: { isAdmin: boolean; sy
                 <span className="cm-key-fill" /> Mavi dolu kısım: bu ay gerçekleşen Premium/Plus satış
               </span>
               <span>
-                <span className="cm-key-tick" /> Koyu dik çizgiler: kademe eşikleri (28 → %3, 30 → %5)
+                <span className="cm-key-tick" /> Koyu dik çizgiler: kademe eşikleri (25 → %3, 30 → %5)
               </span>
               {closed ? null : (
                 <span>
@@ -160,7 +160,7 @@ export function CommissionCard({ isAdmin, syncTick = 0 }: { isAdmin: boolean; sy
             </div>
             <p className="muted fn-note">
               Sayılan: ay içinde kazanılan {data.packages.join(", ")}. Ciro: o ay "Kapandı Kazanıldı" olan tüm satışlar
-              (Kamp ve diğer paketler dahil). Oran: 27'ye kadar %2,5 · 28–29 %3 · 30 ve üzeri %5;
+              (Kamp ve diğer paketler dahil). Oran: 25'in altı %2,5 · 25–29 %3 · 30 ve üzeri %5;
               prim o ay kazanılan tüm satışların cirosu üzerinden. Tahmin: iş günü başına hız × ayın {data.month_workdays} iş
               günü (geçen {num(data.elapsed_workdays)}). "%5 hedefi": 30 satışa kalan, günlük gereken ve %5'e çıkınca bugünkü ciroyla oluşacak prim farkı.
             </p>
