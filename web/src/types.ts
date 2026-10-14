@@ -447,6 +447,8 @@ export interface ChurnPayload {
   kaybedilen?: ChurnItem[];
   yaklasan_gun?: number;
   kaybedilen_gun?: number;
+  crm_oncesi?: number;
+  baslangic?: string;
 }
 
 export interface ChurnItem {
@@ -459,4 +461,5 @@ export interface ChurnItem {
   vade: string;
   kalan_gun?: number;
   gecen_gun?: number;
+  crm_oncesi?: boolean;
 }

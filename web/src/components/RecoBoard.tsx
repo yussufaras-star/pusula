@@ -4,7 +4,7 @@ import { usePolling } from "../api";
 import { int, num, tl } from "../format";
 import type { RecoPayload } from "../types";
 
-const LIST_SHOWN = 60;
+const LIST_SHOWN = 10;
 const day = new Intl.DateTimeFormat("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "UTC" });
 
 function when(gun: number | null): { text: string; cls: string } {
