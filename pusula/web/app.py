@@ -430,11 +430,25 @@ def source_yield_api(
     )
 
 
+def commission_asof(day: str | None, today: date) -> date | None:
+    """Paneldeki geçmiş gün: kart ay başından o güne kadar. Bugün/gelecek: None."""
+    if not day:
+        return None
+    chosen = parse_day(day, today)
+    return chosen if chosen < today else None
+
+
 @app.get("/api/commission")
-def commission(month: str | None = None, user: AuthUser = Depends(current_user)) -> Any:
-    """Aylık prim hedefi (Premium/Plus adedi, kademe, prim, ay sonu tahmini)."""
+def commission(
+    month: str | None = None, day: str | None = None, user: AuthUser = Depends(current_user)
+) -> Any:
+    """Aylık prim hedefi (Premium/Plus adedi, kademe, prim, ay sonu tahmini).
+    day: paneldeki geçmiş gün; ay o günün ayı, satışlar o güne kadar."""
     require_database()
     now = _now()
+    asof = commission_asof(day, now.date())
+    if asof:
+        month = asof.strftime("%Y-%m")
     if month:
         try:
             chosen = date.fromisoformat(f"{month}-01")
@@ -446,9 +460,9 @@ def commission(month: str | None = None, user: AuthUser = Depends(current_user))
     # önbellek kendiliğinden geçersiz olur (cache.clear yalnız kendi örneğini siler).
     changed, checked = deals_sync_state()
     payload = cache.cached(
-        ("commission", chosen.isoformat(), now.strftime("%Y-%m-%d %H"), changed),
+        ("commission", chosen.isoformat(), asof, now.strftime("%Y-%m-%d %H"), changed),
         REPORT_TTL,
-        lambda: jsonable_encoder(load_commission(chosen, now)),
+        lambda: jsonable_encoder(load_commission(chosen, now, asof)),
     )
     payload = {**payload, "satis_kontrol": checked}
     if user.role == "admin":
@@ -458,7 +472,10 @@ def commission(month: str | None = None, user: AuthUser = Depends(current_user))
 
 @app.get("/api/commission/deals")
 def commission_deals(
-    month: str | None = None, rep_id: str | None = None, user: AuthUser = Depends(current_user)
+    month: str | None = None,
+    rep_id: str | None = None,
+    day: str | None = None,
+    user: AuthUser = Depends(current_user),
 ) -> Any:
     """Prim kartı teşhisi: temsilcinin bu ayki deal'leri ve neden sayılıp sayılmadığı.
     rep_id boş (yönetici): bu ay kazanılan ama sahibi satış ekibinde olmayan deal'ler."""
@@ -469,7 +486,10 @@ def commission_deals(
         raise HTTPException(status_code=400, detail="Ay YYYY-AA olmalı") from exc
     if user.role != "admin":
         rep_id = user.rep_id
-    return jsonable_encoder(load_rep_deals(chosen, rep_id or None))
+    asof = commission_asof(day, _now().date())
+    if asof:
+        chosen = asof.replace(day=1)
+    return jsonable_encoder(load_rep_deals(chosen, rep_id or None, asof))
 
 
 @app.get("/api/reco")

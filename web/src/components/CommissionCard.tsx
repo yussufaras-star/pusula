@@ -18,8 +18,19 @@ const dayFmt = new Intl.DateTimeFormat("tr-TR", { day: "numeric", month: "short"
 const shortDay = (iso: string | null) => (iso ? dayFmt.format(new Date(`${iso}T00:00:00Z`)) : "—");
 
 /** Bir temsilcinin (veya sahibi ekipte olmayan) bu ayki deal'leri ve sayılma durumu. */
-function DealList({ month, repId, emptyText }: { month: string; repId: string; emptyText: string }) {
+function DealList({
+  month,
+  day,
+  repId,
+  emptyText,
+}: {
+  month: string;
+  day: string | null;
+  repId: string;
+  emptyText: string;
+}) {
   const q = new URLSearchParams({ month });
+  if (day) q.set("day", day);
   if (repId) q.set("rep_id", repId);
   const { data, error } = usePolling<CommissionDeals>(`/api/commission/deals?${q}`, 0);
   if (error) return <div className="banner error">Satışlar alınamadı: {error.message}</div>;
@@ -96,17 +107,24 @@ function NextStep({ rep, closed }: { rep: CommissionRep; closed: boolean }) {
   );
 }
 
-/** syncTick: "Verileri güncelle" sonrası artar, kart beklemeden yenilenir. */
-export function CommissionCard({ isAdmin, syncTick = 0 }: { isAdmin: boolean; syncTick?: number }) {
+/** syncTick: "Verileri güncelle" sonrası artar, kart beklemeden yenilenir.
+ *  day: paneldeki geçmiş gün; kart o ayın başından o güne kadar (bugünse null). */
+export function CommissionCard({
+  isAdmin,
+  syncTick = 0,
+  day = null,
+}: {
+  isAdmin: boolean;
+  syncTick?: number;
+  day?: string | null;
+}) {
   const [offset, setOffset] = useState(0);
-  const { data, error, refresh } = usePolling<CommissionPayload>(
-    `/api/commission?month=${monthParam(offset)}`,
-    5 * 60_000,
-  );
+  const path = day ? `/api/commission?day=${day}` : `/api/commission?month=${monthParam(offset)}`;
+  const { data, error, refresh } = usePolling<CommissionPayload>(path, day ? 0 : 5 * 60_000);
   useEffect(() => {
     if (syncTick > 0) refresh();
   }, [syncTick, refresh]);
-  const closed = offset < 0;
+  const closed = !day && offset < 0;
   const [open, setOpen] = useState<string | null>(null);
   const toggle = (id: string) => setOpen((cur) => (cur === id ? null : id));
   const cols = (isAdmin ? 1 : 0) + (closed ? 6 : 7);
@@ -117,13 +135,15 @@ export function CommissionCard({ isAdmin, syncTick = 0 }: { isAdmin: boolean; sy
       <div className="card-head">
         <h2>
           Aylık prim hedefi{data ? ` · ${monthFmt.format(new Date(`${data.month}T00:00:00Z`))}` : ""}
-          {data?.satis_kontrol ? (
+          {day ? <span className="hint cm-sync"> · {shortDay(day)} gün sonu itibarıyla</span> : null}
+          {!day && data?.satis_kontrol ? (
             <span className="hint cm-sync" title="Satışlar Zoho'dan saatlik ve 'Verileri güncelle' ile çekilir">
               {" "}
               · satışlar {ago(data.satis_kontrol, new Date())} kontrol edildi
             </span>
           ) : null}
         </h2>
+        {day ? null : (
         <div className="chips" role="group" aria-label="Ay">
           <button className={`chip${offset === 0 ? " on" : ""}`} onClick={() => setOffset(0)} aria-pressed={offset === 0}>
             Bu ay
@@ -132,6 +152,7 @@ export function CommissionCard({ isAdmin, syncTick = 0 }: { isAdmin: boolean; sy
             Geçen ay
           </button>
         </div>
+        )}
       </div>
       <div className="card-body">
         {error ? <div className="banner error">Prim verisi alınamadı: {error.message}</div> : null}
@@ -204,6 +225,7 @@ export function CommissionCard({ isAdmin, syncTick = 0 }: { isAdmin: boolean; sy
                       <tr className="cm-deals-row">
                         <td colSpan={cols}>
                           <DealList
+                            day={day}
                             month={data.month.slice(0, 7)}
                             repId={r.rep_id}
                             emptyText="Bu ay bu temsilciye ait deal yok. Satış başka birinin üzerinde olabilir."
@@ -237,6 +259,7 @@ export function CommissionCard({ isAdmin, syncTick = 0 }: { isAdmin: boolean; sy
                 </button>
                 {open === "__ekip_disi" ? (
                   <DealList
+                    day={day}
                     month={data.month.slice(0, 7)}
                     repId=""
                     emptyText="Yok: bu ayın tüm kazanılan satışları ekipteki birinin üzerinde."

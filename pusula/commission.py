@@ -99,8 +99,17 @@ def rep_progress(
     }
 
 
-def load_commission(month: date, now: datetime) -> dict[str, Any]:
+def as_of_moment(day: date) -> datetime:
+    """Geçmiş gün görünümü: o günün sonu (tahmin o güne kadarki hızla)."""
+    return datetime(day.year, day.month, day.day, 23, 59, tzinfo=TZ)
+
+
+def load_commission(month: date, now: datetime, asof: date | None = None) -> dict[str, Any]:
+    """asof: paneldeki geçmiş gün; ay başından o güne kadarki satışlar, tahmin o güne göre."""
     first, last = month_first(month), month_last(month)
+    upper = min(asof, last) if asof else last
+    if asof:
+        now = as_of_moment(asof)
     reps = load_reps()
     with connect() as conn:
         exists = conn.execute("SELECT to_regclass('deal_packages')").fetchone()
@@ -118,7 +127,7 @@ def load_commission(month: date, now: datetime) -> dict[str, Any]:
                       BETWEEN %s AND %s
                 GROUP BY 1
                 """,
-                (list(COUNTED_PACKAGES), list(COUNTED_PACKAGES), get_org_id(), WON_STAGE, first, last),
+                (list(COUNTED_PACKAGES), list(COUNTED_PACKAGES), get_org_id(), WON_STAGE, first, upper),
             ).fetchall()
             if exists and exists[0]
             else []
@@ -145,6 +154,7 @@ def load_commission(month: date, now: datetime) -> dict[str, Any]:
         )
     return {
         "month": first,
+        "asof": asof,
         "available": bool(exists and exists[0]),
         "elapsed_workdays": round(elapsed, 2),
         "month_workdays": month_wd,
@@ -190,28 +200,37 @@ def _deal_rows(conn: Any, where: str, params: list[Any]) -> list[dict[str, Any]]
     return [dict(zip(keys, r)) for r in rows]
 
 
-def load_rep_deals(month: date, rep_id: str | None) -> dict[str, Any]:
+def load_rep_deals(month: date, rep_id: str | None, asof: date | None = None) -> dict[str, Any]:
     """Temsilcinin bu ay kapanan veya bu ay açılan deal'leri, sayılma durumuyla.
-    rep_id None: bu ay kazanılan ama sahibi satış ekibinde olmayan deal'ler."""
+    rep_id None: bu ay kazanılan ama sahibi satış ekibinde olmayan deal'ler.
+    asof: geçmiş gün görünümü; o günden sonra kapanan/açılanlar listelenmez."""
     first, last = month_first(month), month_last(month)
+    upper = min(asof, last) if asof else last
+    # Bu ay (seçilen güne kadar) kapanan; ya da bu ay açılıp kapanışı başka ayda/boş
+    # olan (neden "bu ay değil" diye görünsün). Seçilen günden sonra kapananlar yok.
     period = (
         " AND (d.closing_date BETWEEN %s AND %s"
-        " OR (d.created_at AT TIME ZONE 'Europe/Istanbul')::date BETWEEN %s AND %s)"
+        " OR ((d.created_at AT TIME ZONE 'Europe/Istanbul')::date BETWEEN %s AND %s"
+        "     AND (d.closing_date IS NULL OR d.closing_date NOT BETWEEN %s AND %s)))"
     )
     with connect() as conn:
         if rep_id:
-            items = _deal_rows(conn, " AND d.owner_rep_id = %s" + period, [rep_id, first, last, first, last])
+            items = _deal_rows(
+                conn,
+                " AND d.owner_rep_id = %s" + period,
+                [rep_id, first, upper, first, upper, first, last],
+            )
         else:
             sales = [r.rep_id for r in load_reps()]
             items = _deal_rows(
                 conn,
                 " AND d.stage = %s AND d.closing_date BETWEEN %s AND %s"
                 " AND (d.owner_rep_id IS NULL OR NOT d.owner_rep_id = ANY(%s))",
-                [WON_STAGE, first, last, sales],
+                [WON_STAGE, first, upper, sales],
             )
     for item in items:
         item.update(classify_deal(item["asama"], item["paket"], item["kapanis"], month))
-    return {"month": first, "rep_id": rep_id, "deals": items}
+    return {"month": first, "rep_id": rep_id, "asof": asof, "deals": items}
 
 
 def deals_sync_state() -> tuple[datetime | None, datetime | None]:
