@@ -18,7 +18,9 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
+from pusula.ciro_trend import load_trend
 from pusula.config import get_org_id
+from pusula.lead_reach import reach_bucket_sql
 from pusula.metrics import Span, combine, finish, query_kpis, ratio
 from pusula.occupancy import attach, occupancy_rows
 from pusula.panel_ciro import REAL_SALES_START, add_months, month_first, month_label, workdays_inclusive
@@ -33,6 +35,7 @@ REPORT_START = date(2026, 6, 1)
 # tutar, kapanış tarihi dönemde olan tüm "Kapandı Kazanıldı" deal'ler (ileri
 # tarihli kapanış dahil; yöneticinin aylık toplam tanımı).
 _WON_DAY = "coalesce(closing_date, (created_at AT TIME ZONE 'Europe/Istanbul')::date)"
+_WON_DAY_D = "coalesce(d.closing_date, (d.created_at AT TIME ZONE 'Europe/Istanbul')::date)"
 
 
 def won_by_rep(start: date, end: date) -> dict[str, dict[str, Any]]:
@@ -188,10 +191,12 @@ def build_sales_report(start: date, end: date, now: datetime) -> dict[str, Any]:
         "team": total,
         "avg": avg,
         "ciro_monthly": won_team_monthly(rep_ids, today),
+        # Dönem seçiminden bağımsız: haftalık/aylık seri ve aynı güne kadar kıyas.
+        "ciro_trend": load_trend(rep_ids, today),
     }
 
 
-# --- statü × kaynak -----------------------------------------------------------
+# --- kaynak verimi -----------------------------------------------------------
 
 SOURCE_DIMS: dict[str, tuple[str, str]] = {
     "lead_source": ("Lead kaynağı", "nullif(btrim(l.source), '')"),
@@ -201,47 +206,93 @@ SOURCE_DIMS: dict[str, tuple[str, str]] = {
 }
 
 
-def status_sources(
-    dim: str,
-    *,
-    rep_id: str | None,
-    span: Span | None,
-) -> dict[str, Any]:
-    """Lead statüsü × kaynak sayımları. span None: bugünkü tüm portföy;
-    verilirse yalnız dönemde atanan lead'ler (bugünkü statüleriyle)."""
+def yield_row(src: str | None, counts: dict[str, Any]) -> dict[str, Any]:
+    """Saf: bir kaynağın sayımları → oranlar. Payda dönemde atanan lead."""
+    lead = int(counts.get("lead") or 0)
+    worked = lead - int(counts.get("dokunulmamis") or 0)
+    ciro = float(counts.get("ciro") or 0)
+    satan = int(counts.get("satan_lead") or 0)
+    return {
+        "source": src,
+        "lead": lead,
+        "dokunulmamis": int(counts.get("dokunulmamis") or 0),
+        "ulasilamadi": int(counts.get("denendi") or 0),
+        "ulasildi": int(counts.get("ulasildi") or 0),
+        "musteri": int(counts.get("musteri") or 0),
+        "satan_lead": satan,
+        "satis": int(counts.get("satis") or 0),
+        "ciro": round(ciro, 2),
+        "islenme": ratio(worked, lead),
+        "ulasma": ratio(counts.get("ulasildi"), worked),
+        "satis_orani": ratio(satan, lead),
+        "lead_basi_ciro": round(ciro / lead, 2) if lead else None,
+    }
+
+
+def source_yield(dim: str, *, rep_id: str | None, span: Span) -> dict[str, Any]:
+    """Dönemde atanan lead'ler kaynak bazında: işlenme, ulaşma, satışa dönüş,
+    lead başı ciro. Satış: lead'in müşteri kaydına (contacts) bağlı, atamadan
+    sonra kapanan kazanılmış deal'ler (bugüne kadar). Statü bugünkü statü."""
     label, expr = SOURCE_DIMS[dim]
-    params: list[Any] = [get_org_id()]
-    where = ""
-    if rep_id:
-        where += " AND l.owner_rep_id = %s"
-        params.append(rep_id)
-    if span:
-        where += " AND l.assigned_at >= %s AND l.assigned_at < %s"
-        params += [span.start, span.end]
+    org_id = get_org_id()
+    rep_sql = " AND l.owner_rep_id = %s" if rep_id else ""
     with connect() as conn:
-        exists = conn.execute("SELECT to_regclass('lead_attribution')").fetchone()
-        has_attr = bool(exists and exists[0])
-        if dim != "lead_source" and not has_attr:
+        exists = conn.execute(
+            "SELECT to_regclass('lead_attribution') IS NOT NULL, to_regclass('deal_packages') IS NOT NULL"
+        ).fetchone()
+        has_attr, has_deals = bool(exists and exists[0]), bool(exists and exists[1])
+        if (dim != "lead_source" and not has_attr) or not has_deals:
             return {"dim": dim, "label": label, "available": False, "rows": []}
         join = (
             "LEFT JOIN lead_attribution a ON a.org_id = l.org_id AND a.lead_id = l.lead_id"
             if has_attr
             else ""
         )
+        params: list[Any] = [org_id, span.start, span.end, *([rep_id] if rep_id else []), org_id, org_id, WON_STAGE]
         rows = conn.execute(
             f"""
-            SELECT coalesce(nullif(btrim(l.status), ''), 'Statüsüz'), {expr}, count(*)
-            FROM leads l
-            JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
-            {join}
-            WHERE l.org_id = %s AND r.category = 'sales' AND r.active {where}
-            GROUP BY 1, 2
+            WITH cohort AS (
+                SELECT l.lead_id, l.thread_id, l.org_id,
+                       (l.assigned_at AT TIME ZONE 'Europe/Istanbul')::date AS atandi,
+                       {expr} AS src, {reach_bucket_sql('l.status')} AS kova
+                FROM leads l
+                JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
+                {join}
+                WHERE l.org_id = %s AND r.category = 'sales'
+                  AND l.assigned_at >= %s AND l.assigned_at < %s {rep_sql}
+            ),
+            conv AS (
+                SELECT c.lead_id, c.atandi, ct.contact_id
+                FROM cohort c
+                JOIN LATERAL (
+                    SELECT contact_id FROM contacts ct
+                    WHERE ct.org_id = %s AND (ct.lead_id = c.lead_id OR ct.thread_id = c.thread_id)
+                    ORDER BY ct.created_at NULLS LAST
+                    LIMIT 1
+                ) ct ON true
+            ),
+            won AS (
+                SELECT cv.lead_id, count(*)::int AS n, coalesce(sum(d.amount), 0)::float AS ciro
+                FROM conv cv
+                JOIN deal_packages d ON d.org_id = %s AND d.contact_id = cv.contact_id
+                 AND d.stage = %s AND {_WON_DAY_D} >= cv.atandi
+                GROUP BY 1
+            )
+            SELECT c.src, count(*)::int,
+                   count(*) FILTER (WHERE c.kova = 'dokunulmamis')::int,
+                   count(*) FILTER (WHERE c.kova = 'denendi')::int,
+                   count(*) FILTER (WHERE c.kova = 'ulasildi')::int,
+                   count(cv.lead_id)::int, count(w.lead_id)::int,
+                   coalesce(sum(w.n), 0)::int, coalesce(sum(w.ciro), 0)::float
+            FROM cohort c
+            LEFT JOIN conv cv ON cv.lead_id = c.lead_id
+            LEFT JOIN won w ON w.lead_id = c.lead_id
+            GROUP BY 1
             """,
             params,
         ).fetchall()
-    return {
-        "dim": dim,
-        "label": label,
-        "available": True,
-        "rows": [{"status": s, "source": src, "count": int(n)} for s, src, n in rows],
-    }
+    keys = ("lead", "dokunulmamis", "denendi", "ulasildi", "musteri", "satan_lead", "satis", "ciro")
+    out = [yield_row(r[0], dict(zip(keys, r[1:]))) for r in rows]
+    total = yield_row(None, {k: sum(float(r[i + 1] or 0) for r in rows) for i, k in enumerate(keys)})
+    out.sort(key=lambda r: -r["lead"])
+    return {"dim": dim, "label": label, "available": True, "rows": out, "total": total}

@@ -265,14 +265,63 @@ export interface SalesReport {
   team: ReportRow;
   avg: ReportRow;
   ciro_monthly: CiroMonth[];
+  ciro_trend?: CiroTrend;
 }
 
-// pusula/sales_report.py status_sources.
-export interface StatusSourcesPayload {
+// pusula/ciro_trend.py build_trend.
+export interface ToDate {
+  ciro: number;
+  satis: number;
+  onceki_ciro: number;
+  onceki_satis: number;
+  degisim: number | null;
+  satis_degisim: number | null;
+  bas: string;
+  onceki_bas: string;
+  onceki_bit: string;
+}
+
+export interface TrendPoint {
+  satis: number;
+  ciro: number;
+  degisim: number | null;
+  suruyor: boolean;
+  bas?: string;
+  bit?: string;
+  ay?: string;
+  ay_etiket?: string;
+}
+
+export interface CiroTrend {
+  haftalar: TrendPoint[];
+  aylar: TrendPoint[];
+  ayni_gune: { hafta: ToDate; ay: ToDate };
+  temsilci: Record<string, { hafta: ToDate; ay: ToDate }>;
+}
+
+// pusula/sales_report.py source_yield.
+export interface SourceYieldRow {
+  source: string | null;
+  lead: number;
+  dokunulmamis: number;
+  ulasilamadi: number;
+  ulasildi: number;
+  musteri: number;
+  satan_lead: number;
+  satis: number;
+  ciro: number;
+  islenme: number | null;
+  ulasma: number | null;
+  satis_orani: number | null;
+  lead_basi_ciro: number | null;
+}
+
+export interface SourceYieldPayload {
   dim: string;
   label: string;
   available: boolean;
-  rows: { status: string; source: string | null; count: number }[];
+  rows: SourceYieldRow[];
+  total?: SourceYieldRow;
 }
 
 // pusula/commission.py load_commission.
@@ -368,4 +417,20 @@ export interface ChurnPayload {
   bu_yil?: ChurnPeriod;
   musteri?: number;
   packages?: string[];
+  yaklasan?: ChurnItem[];
+  kaybedilen?: ChurnItem[];
+  yaklasan_gun?: number;
+  kaybedilen_gun?: number;
+}
+
+export interface ChurnItem {
+  contact_id: string;
+  musteri: string;
+  sahip: string | null;
+  paket: string | null;
+  son_satis: string;
+  satis_sayisi: number;
+  vade: string;
+  kalan_gun?: number;
+  gecen_gun?: number;
 }

@@ -52,3 +52,23 @@ def test_monthly_rate_uses_decided_only() -> None:
     # Gelecek ay: erken yenileme sayılır ama oran verilmez.
     assert rows[date(2026, 11, 1)]["yeniledi"] == 1 and rows[date(2026, 11, 1)]["churn"] is None
     assert period_churn([sep, oct_])["churn"] == 50.0
+
+
+def test_action_lists_split_upcoming_and_lost() -> None:
+    from pusula.churn import action_lists
+
+    today = date(2026, 10, 14)
+    contacts = {
+        # Vadesi 20 Kasım: yaklaşan (37 gün).
+        "a": {"name": "Ali", "owner": "Nihat Kemer", "sales": [(date(2025, 11, 20), "Rexven-Premium")]},
+        # Vadesi 1 Ekim geçti, yenileme yok: kaybedilen (13 gün).
+        "b": {"name": "Banu", "owner": None, "sales": [(date(2025, 10, 1), "Rexven-Plus")]},
+        # Vadesi 2027'de: listede yok.
+        "c": {"name": "Can", "owner": None, "sales": [(date(2026, 9, 1), "Re-Co-Premium")]},
+        # Vadeden önce yeniledi, yeni vade uzak: listede yok.
+        "d": {"name": "Deniz", "owner": None, "sales": [(date(2025, 10, 5), "Rexven-Premium"), (date(2026, 9, 30), "Re-Co-Premium")]},
+    }
+    out = action_lists(contacts, today)
+    assert [(r["musteri"], r["kalan_gun"]) for r in out["yaklasan"]] == [("Ali", 37)]
+    assert [(r["musteri"], r["gecen_gun"]) for r in out["kaybedilen"]] == [("Banu", 13)]
+    assert out["yaklasan"][0]["sahip"] == "Nihat Kemer" and out["kaybedilen"][0]["paket"] == "Rexven-Plus"

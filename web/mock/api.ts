@@ -396,6 +396,26 @@ function mockReport(): SalesReport {
       ortalama: 33000,
       kisi_basi: ciro[i] / 5,
     })),
+    ciro_trend: mockTrend(reps.map((r) => r.rep_id ?? "")),
+  };
+}
+
+function mockTrend(repIds: string[]) {
+  const wk = [612000, 455000, 701000, 388000, 520000, 940000, 610000, 455000, 802000, 690000, 512000, 288000];
+  const pct = (a: number, b: number) => (b ? Math.round((1000 * (a - b)) / b) / 10 : null);
+  const td = (c: number, p: number) => ({ ciro: c, satis: Math.round(c / 33000), onceki_ciro: p, onceki_satis: Math.round(p / 33000),
+    degisim: pct(c, p), satis_degisim: pct(c, p), bas: "2026-10-12", onceki_bas: "2026-10-05", onceki_bit: "2026-10-07" });
+  const months = [1375436, 1136657, 1652908, 1812934, 1509546, 3208348, 1064787];
+  return {
+    haftalar: wk.map((c, i) => {
+      const bas = new Date(Date.UTC(2026, 6, 27 + i * 7)).toISOString().slice(0, 10);
+      const bit = new Date(Date.UTC(2026, 6, 33 + i * 7)).toISOString().slice(0, 10);
+      return { bas, bit, satis: Math.round(c / 33000), ciro: c, degisim: i ? pct(c, wk[i - 1]) : null, suruyor: i === wk.length - 1 };
+    }),
+    aylar: months.map((c, i) => ({ ay: `2026-${String(i + 4).padStart(2, "0")}-01`, ay_etiket: `${["Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim"][i]} 2026`,
+      satis: Math.round(c / 33000), ciro: c, degisim: i ? pct(c, months[i - 1]) : null, suruyor: i === months.length - 1 })),
+    ayni_gune: { hafta: td(288000, 341000), ay: td(1064787, 1290000) },
+    temsilci: Object.fromEntries(repIds.map((id, i) => [id, { hafta: td(40000 + i * 25000, 60000 + ((i * 37000) % 90000)), ay: td(150000 + i * 60000, 200000 + ((i * 53000) % 160000)) }])),
   };
 }
 
@@ -484,7 +504,13 @@ export function mockApi(method: string, url: string): unknown {
         churn: ren + lost ? Math.round((1000 * lost) / (ren + lost)) / 10 : null, iade, satis: sat, iade_orani: sat ? Math.round((1000 * iade) / sat) / 10 : null };
     });
     return { available: true, aylar, son_12_ay: { yeniledi: 9, kaybedildi: 16, geri_kazanildi: 2, churn: 64 }, bu_yil: { yeniledi: 9, kaybedildi: 16, geri_kazanildi: 2, churn: 64 }, musteri: 992,
-      packages: ["Rexven-Premium", "Rexven-Plus", "Rexven-Premium-Kamp", "Re-Co-Premium"] };
+      packages: ["Rexven-Premium", "Rexven-Plus", "Rexven-Premium-Kamp", "Re-Co-Premium"],
+      yaklasan_gun: 60, kaybedilen_gun: 120,
+      yaklasan: Array.from({ length: 9 }, (_, i) => ({ contact_id: `y${i}`, musteri: `Müşteri ${i + 1}`, sahip: i % 3 ? "Nihat Kemer" : null,
+        paket: i % 2 ? "Rexven-Premium" : "Re-Co-Premium", son_satis: "2025-11-10", satis_sayisi: 1 + (i % 2),
+        vade: new Date(Date.UTC(2026, 9, 15 + i * 6)).toISOString().slice(0, 10), kalan_gun: 1 + i * 6 })),
+      kaybedilen: Array.from({ length: 5 }, (_, i) => ({ contact_id: `k${i}`, musteri: `Eski Müşteri ${i + 1}`, sahip: "Burcu Özkan",
+        paket: "Rexven-Plus", son_satis: "2025-10-02", satis_sayisi: 1, vade: "2026-10-02", gecen_gun: 12 + i })) };
   }
   if (path === "/api/reco") {
     const seg = (key: string, label: string, musteri: number, reco: number) => ({
@@ -532,13 +558,22 @@ export function mockApi(method: string, url: string): unknown {
       }),
     };
   }
-  if (path === "/api/status-sources") {
-    const statuses = ["1.Arama-Ulaşılamadı", "Düşünmek İstiyor", "Nitelikli Değil-İlgisiz", "Randevu", "Aging", "Yeni Müşteri Adayı"];
-    const sources = ["meta", "google", "instagram", "youtube", "facebook", "direct", "tiktok", "linkedin", null];
-    const rows = statuses.flatMap((status, i) =>
-      sources.map((source, j) => ({ status, source, count: Math.max(0, Math.round(400 / (j + 1.5) - i * 20 + ((i * 7 + j * 3) % 11) * 5)) })),
-    );
-    return { dim: "utm_source", label: "Reklam kaynağı", available: true, rows };
+  if (path === "/api/source-yield") {
+    const src: [string | null, number, number, number][] = [
+      ["meta", 820, 0.034, 31000], ["google", 410, 0.055, 36000], ["instagram", 260, 0.02, 30000],
+      ["youtube", 140, 0.064, 41000], ["tiktok", 12, 0.0, 0], [null, 530, 0.03, 32000],
+    ];
+    const row = ([source, lead, conv, avg]: [string | null, number, number, number]) => {
+      const dok = Math.round(lead * 0.18); const den = Math.round(lead * 0.33); const ul = lead - dok - den;
+      const satan = Math.round(lead * conv); const ciro = satan * avg;
+      return { source, lead, dokunulmamis: dok, ulasilamadi: den, ulasildi: ul, musteri: satan, satan_lead: satan, satis: satan, ciro,
+        islenme: Math.round((1000 * (lead - dok)) / lead) / 10, ulasma: Math.round((1000 * ul) / (lead - dok)) / 10,
+        satis_orani: Math.round((1000 * satan) / lead) / 10, lead_basi_ciro: Math.round(ciro / lead) };
+    };
+    const rows = src.map(row);
+    const lead = rows.reduce((a, r) => a + r.lead, 0); const ciro = rows.reduce((a, r) => a + r.ciro, 0);
+    return { dim: "utm_source", label: "Reklam kaynağı (UTM)", available: true, rows,
+      total: { ...rows[0], source: null, lead, ciro, lead_basi_ciro: Math.round(ciro / lead), satis_orani: 3.4, islenme: 82, ulasma: 59.8 } };
   }
   if (path === "/api/nudges") return { items: NUDGES, approval_required: true, ai: true };
   if (path.startsWith("/api/nudges/") && method === "POST") {

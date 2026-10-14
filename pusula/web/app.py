@@ -56,7 +56,7 @@ from pusula.web.auth import (
     passwords,
     require_cron,
 )
-from pusula.sales_report import REPORT_START, SOURCE_DIMS, build_sales_report, status_sources
+from pusula.sales_report import REPORT_START, SOURCE_DIMS, build_sales_report, source_yield
 from pusula.web.reports import build_reports, selected_rep
 
 load_dotenv()
@@ -382,7 +382,12 @@ def scope_report(payload: dict[str, Any], user: AuthUser) -> dict[str, Any]:
     """Temsilci yalnız kendi satırını, ekip toplamını ve ortalamayı görür."""
     if user.role == "admin":
         return payload
-    return {**payload, "reps": [r for r in payload["reps"] if r["rep_id"] == user.rep_id]}
+    out = {**payload, "reps": [r for r in payload["reps"] if r["rep_id"] == user.rep_id]}
+    trend = payload.get("ciro_trend")
+    if trend:
+        mine = {k: v for k, v in trend["temsilci"].items() if k == user.rep_id}
+        out["ciro_trend"] = {**trend, "temsilci": mine}
+    return out
 
 
 @app.get("/api/sales-report")
@@ -404,24 +409,24 @@ def sales_report(
     return scope_report(payload, user)
 
 
-@app.get("/api/status-sources")
-def status_sources_api(
+@app.get("/api/source-yield")
+def source_yield_api(
+    start: str,
+    end: str,
     dim: str = "lead_source",
     rep_id: str | None = None,
-    start: str | None = None,
-    end: str | None = None,
     user: AuthUser = Depends(current_user),
 ) -> Any:
-    """Statü × kaynak. start/end yoksa bugünkü tüm portföy."""
+    """Kaynak verimi: dönemde atanan lead'ler kaynak bazında işlenme, ulaşma, satış, lead başı ciro."""
     if dim not in SOURCE_DIMS:
         raise HTTPException(status_code=400, detail="Bilinmeyen kaynak alanı")
     require_database()
     chosen = selected_rep(user, rep_id)
     today = _now().date()
-    span = Span.days(parse_day(start, today), parse_day(end, today)) if start and end else None
-    key = ("status-sources", dim, chosen, start, end, today.isoformat())
+    span = Span.days(parse_day(start, today), parse_day(end, today))
+    key = ("source-yield", dim, chosen, start, end, today.isoformat())
     return cache.cached(
-        key, REPORT_TTL, lambda: jsonable_encoder(status_sources(dim, rep_id=chosen, span=span))
+        key, REPORT_TTL, lambda: jsonable_encoder(source_yield(dim, rep_id=chosen, span=span))
     )
 
 
