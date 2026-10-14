@@ -114,6 +114,46 @@ def period_churn(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+UPCOMING_DAYS = 60
+LOST_DAYS = 120
+
+
+def action_lists(
+    contacts: dict[str, dict[str, Any]], today: date
+) -> dict[str, list[dict[str, Any]]]:
+    """Saf: müşteri başına satışlar → iş listeleri.
+
+    yaklasan: vadesi önümüzdeki 60 günde dolacak, henüz yenilemeyenler (vade sırası).
+    kaybedilen: son 120 günde vadesi geçip yenilemeyen, geri de dönmeyenler (geri
+    kazanma listesi; en yeni kayıp önce).
+    contacts: contact_id → {name, owner, sales: [(gün, paket)]}.
+    """
+    upcoming: list[dict[str, Any]] = []
+    lost: list[dict[str, Any]] = []
+    for cid, info in contacts.items():
+        sales = sorted(info["sales"])
+        if not sales:
+            continue
+        last = due_events([d for d, _ in sales], today)[-1]
+        base = {
+            "contact_id": cid,
+            "musteri": info.get("name") or "—",
+            "sahip": info.get("owner"),
+            "paket": sales[-1][1],
+            "son_satis": sales[-1][0],
+            "satis_sayisi": len(sales),
+            "vade": last["vade"],
+        }
+        days = (last["vade"] - today).days
+        if last["sonuc"] == "bekliyor" and days <= UPCOMING_DAYS:
+            upcoming.append({**base, "kalan_gun": days})
+        elif last["sonuc"] == "kaybedildi" and -days <= LOST_DAYS:
+            lost.append({**base, "gecen_gun": -days})
+    upcoming.sort(key=lambda r: (r["vade"], r["musteri"]))
+    lost.sort(key=lambda r: (r["gecen_gun"], r["musteri"]))
+    return {"yaklasan": upcoming, "kaybedilen": lost}
+
+
 def load_churn(today: date, owner: str | None = None) -> dict[str, Any]:
     org_id = get_org_id()
     with connect() as conn:
@@ -130,7 +170,8 @@ def load_churn(today: date, owner: str | None = None) -> dict[str, Any]:
             params.append(owner)
         purchases = conn.execute(
             f"""
-            SELECT d.contact_id, coalesce(d.closing_date, (d.created_at AT TIME ZONE 'Europe/Istanbul')::date)
+            SELECT d.contact_id, coalesce(d.closing_date, (d.created_at AT TIME ZONE 'Europe/Istanbul')::date),
+                   d.package, c.full_name, c.owner_name
             FROM deal_packages d
             LEFT JOIN contact_profiles c ON c.org_id = d.org_id AND c.contact_id = d.contact_id
             WHERE d.package = ANY(%s) AND d.org_id = %s AND d.stage = %s
@@ -151,9 +192,12 @@ def load_churn(today: date, owner: str | None = None) -> dict[str, Any]:
             [REFUND_STAGE, WON_STAGE, list(SUBSCRIPTION_PACKAGES), org_id, *([owner] if owner else [])],
         ).fetchall()
     by_contact: dict[str, list[date]] = defaultdict(list)
-    for cid, day in purchases:
+    contacts: dict[str, dict[str, Any]] = {}
+    for cid, day, package, name, owner_name in purchases:
         if day:
             by_contact[str(cid)].append(day)
+            info = contacts.setdefault(str(cid), {"name": name, "owner": owner_name, "sales": []})
+            info["sales"].append((day, package))
     events = [e for days in by_contact.values() for e in due_events(days, today)]
     months = monthly_churn(events, today)
     refund = {m: (iade, satis) for m, iade, satis in refunds}
@@ -171,5 +215,8 @@ def load_churn(today: date, owner: str | None = None) -> dict[str, Any]:
         "son_12_ay": period_churn(past),
         "bu_yil": period_churn(year),
         "musteri": len(by_contact),
+        **action_lists(contacts, today),
+        "yaklasan_gun": UPCOMING_DAYS,
+        "kaybedilen_gun": LOST_DAYS,
         "packages": SUBSCRIPTION_PACKAGES,
     }

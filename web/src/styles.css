@@ -1815,7 +1815,8 @@ table.meet-list {
   fill: var(--heat-4);
 }
 
-.rank .sort-btn {
+.rank .sort-btn,
+.sy-table .sort-btn {
   border: 0;
   background: none;
   padding: 0;
@@ -1825,7 +1826,8 @@ table.meet-list {
   white-space: nowrap;
 }
 
-.rank .sort-btn.on {
+.rank .sort-btn.on,
+.sy-table .sort-btn.on {
   color: var(--ink);
   font-weight: 600;
 }
@@ -1846,51 +1848,6 @@ table.meet-list {
   border-top: 1px solid var(--axis);
   color: var(--ink-2);
   font-weight: 500;
-}
-
-.ciro-share {
-  margin-top: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.ciro-share-head {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.cs-row {
-  display: grid;
-  grid-template-columns: 16px minmax(90px, 130px) 1fr auto;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-}
-
-.cs-rank {
-  color: var(--muted);
-  text-align: right;
-}
-
-.cs-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.cs-track {
-  height: 10px;
-}
-
-.cs-bar {
-  height: 100%;
-  border-radius: 0 4px 4px 0;
-  background: var(--series-1);
-}
-
-.cs-val {
-  white-space: nowrap;
 }
 
 .pf-toggle {
@@ -1937,27 +1894,154 @@ table.meet-list {
   background: var(--surface);
 }
 
-.ss-table td.name {
+/* --- kaynak verimi ---------------------------------------------------------- */
+
+.sy-insights {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.sy-table td.name {
   white-space: normal;
   min-width: 170px;
 }
 
-.ss-cell.h1 { background: color-mix(in srgb, var(--heat-1) 45%, transparent); }
-.ss-cell.h2 { background: var(--heat-1); }
-.ss-cell.h3 { background: var(--heat-2); }
-.ss-cell.h4 { background: var(--heat-3); color: #fff; }
-.ss-cell.h4 .ss-share { color: rgba(255, 255, 255, 0.85); }
-
-.ss-share {
+.sy-table .sub,
+.churn-list .sub {
   display: block;
   font-size: 11px;
-  color: var(--ink-2);
+  color: var(--muted);
 }
 
-.ss-table tfoot td {
+.sy-thin td {
+  color: var(--muted);
+}
+
+.sy-value {
+  position: relative;
+  min-width: 110px;
+}
+
+.sy-bar {
+  position: absolute;
+  right: 0;
+  top: 25%;
+  height: 50%;
+  border-radius: 4px 0 0 4px;
+  background: var(--accent-soft);
+}
+
+.sy-num {
+  position: relative;
+}
+
+.sy-value.good .sy-num {
+  color: var(--good-ink);
+  font-weight: 600;
+}
+
+.sy-value.critical .sy-num {
+  color: var(--critical-ink);
+  font-weight: 600;
+}
+
+.sy-table tfoot td,
+.rep-chg tfoot td {
   border-top: 1px solid var(--axis);
   color: var(--ink-2);
   font-weight: 500;
+}
+
+/* --- ciro trendi ------------------------------------------------------------ */
+
+.chg {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chg.good {
+  color: var(--good-ink);
+}
+
+.chg.critical {
+  color: var(--critical-ink);
+}
+
+.chg.neutral {
+  color: var(--muted);
+}
+
+.trend-cmps {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+@media (max-width: 560px) {
+  .trend-cmps {
+    grid-template-columns: 1fr;
+  }
+}
+
+.trend-cmp {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.trend-cmp-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.trend-cmp-val {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 2px 0;
+}
+
+.trend-cmp-val .chg {
+  font-size: 14px;
+  margin-left: 6px;
+}
+
+.trend-cmp-sub {
+  font-size: 12px;
+}
+
+.trend-chips {
+  margin-bottom: 4px;
+}
+
+.ciro-bar.partial {
+  fill: var(--accent-soft);
+}
+
+.chart .chg-tick {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.chart .chg-tick.up {
+  fill: var(--good-ink);
+}
+
+.chart .chg-tick.down {
+  fill: var(--critical-ink);
+}
+
+/* --- churn iş listeleri ------------------------------------------------------ */
+
+.churn-views {
+  margin: 14px 0 6px;
+}
+
+.churn-list td.name {
+  white-space: normal;
+  min-width: 160px;
 }
 
 /* --- aylık prim hedefi ------------------------------------------------------ */

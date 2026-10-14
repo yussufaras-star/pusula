@@ -5,7 +5,8 @@ import { Funnel } from "../components/Funnel";
 import { StatTile } from "../components/StatTile";
 import { ChurnBoard } from "../components/ChurnBoard";
 import { RecoBoard } from "../components/RecoBoard";
-import { StatusSources } from "../components/StatusSources";
+import { SourceYield } from "../components/SourceYield";
+import { CiroTrendCard, RepCiroChange } from "../components/CiroTrend";
 import { duration, int, num, pct, tl, tlShort } from "../format";
 import type { CiroMonth, Me, ReportRow, SalesReport } from "../types";
 
@@ -141,23 +142,34 @@ export function ReportsPage({ me }: { me: Me }) {
             </section>
             <section className="card">
               <div className="card-head">
-                <h2>Aylık ekip cirosu</h2>
-                <span className="hint">satış ekibi · Nisan 2026'dan</span>
+                <h2>Ciro trendi</h2>
+                <span className="hint">ekip · haftalık ve aylık değişim</span>
               </div>
               <div className="card-body">
-                <CiroChart months={data.ciro_monthly} />
-                {isAdmin ? <CiroShare reps={data.reps} total={data.team.ciro} /> : null}
+                {data.ciro_trend ? <CiroTrendCard trend={data.ciro_trend} /> : <CiroChart months={data.ciro_monthly} />}
               </div>
             </section>
           </div>
 
+          {data.ciro_trend ? (
+            <section className="card">
+              <div className="card-head">
+                <h2>{isAdmin ? "Temsilci ciro değişimi" : "Ciro değişimim"}</h2>
+                <span className="hint">aynı güne kadar: bu hafta / geçen hafta, bu ay / geçen ay</span>
+              </div>
+              <div className="card-body">
+                <RepCiroChange trend={data.ciro_trend} reps={data.reps} total={data.team.ciro} ranked={isAdmin} />
+              </div>
+            </section>
+          ) : null}
+
           <section className="card">
             <div className="card-head">
-              <h2>Statü × kaynak</h2>
-              <span className="hint">lead'ler hangi kaynaktan, hangi statüde</span>
+              <h2>Kaynak verimi</h2>
+              <span className="hint">dönemde atanan lead'ler: hangi kaynak satışa dönüyor</span>
             </div>
             <div className="card-body">
-              <StatusSources start={data.start} end={data.end} reps={data.reps} isAdmin={isAdmin} />
+              <SourceYield start={data.start} end={data.end} reps={data.reps} isAdmin={isAdmin} />
             </div>
           </section>
 
@@ -347,30 +359,6 @@ function RankTable({ data, ranked }: { data: SalesReport; ranked: boolean }) {
           ) : null}
         </tfoot>
       </table>
-    </div>
-  );
-}
-
-/** Seçilen dönemde temsilcilerin ciro payı, büyükten küçüğe. */
-function CiroShare({ reps, total }: { reps: ReportRow[]; total: number }) {
-  const rows = [...reps].filter((r) => r.ciro > 0).sort((x, y) => y.ciro - x.ciro);
-  if (!rows.length || total <= 0) return null;
-  const max = rows[0].ciro;
-  return (
-    <div className="ciro-share">
-      <div className="ciro-share-head">Dönem cirosu · temsilci payı</div>
-      {rows.map((r, i) => (
-        <div key={r.rep_id} className="cs-row" title={`${r.name}: ${tl(r.ciro)} · ${int(r.satis)} satış`}>
-          <span className="cs-rank">{i + 1}</span>
-          <span className="cs-name">{r.name}</span>
-          <div className="cs-track">
-            <div className="cs-bar" style={{ width: `${(r.ciro / max) * 100}%` }} />
-          </div>
-          <span className="cs-val tabular">
-            {tlShort(r.ciro)} <span className="muted">%{num((100 * r.ciro) / total)}</span>
-          </span>
-        </div>
-      ))}
     </div>
   );
 }
