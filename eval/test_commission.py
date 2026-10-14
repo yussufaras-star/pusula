@@ -59,3 +59,16 @@ def test_foreign_currency_deal_converted_to_try() -> None:
     assert amount_try({"Amount": None, "Exchange_Rate": 0.02}) is None
     row = row_from_record({"id": 1, "Amount": 855.22, "Exchange_Rate": 0.018051, "Stage": "Kapandı Kazanıldı"})
     assert round(row[4], 2) == 47377.98
+
+
+def test_classify_deal_explains_why_not_counted() -> None:
+    from pusula.commission import classify_deal
+
+    oct1 = date(2026, 10, 1)
+    won = "Kapandı Kazanıldı"
+    assert classify_deal(won, "Rexven-Premium", date(2026, 10, 14), oct1) == {"ciro": True, "sayilan": True, "neden": None}
+    assert classify_deal("Ödeme Bekleniyor", "Rexven-Premium", date(2026, 10, 14), oct1)["neden"].startswith("Aşama: Ödeme")
+    assert "bu ay değil" in classify_deal(won, "Rexven-Plus", date(2026, 11, 2), oct1)["neden"]
+    empty = classify_deal(won, None, date(2026, 10, 3), oct1)
+    assert empty["ciro"] and not empty["sayilan"] and empty["neden"].startswith("Paket alanı boş")
+    assert classify_deal(won, "Kamp", date(2026, 10, 3), oct1)["neden"] == "Kamp adede girmez; ciroya girer"

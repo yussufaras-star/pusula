@@ -26,7 +26,7 @@ from pusula.compare import (
 )
 from pusula import llm
 from pusula.commentary import commentary
-from pusula.commission import load_commission
+from pusula.commission import deals_sync_state, load_commission, load_rep_deals
 from pusula.churn import load_churn
 from pusula.config import get_org_id
 from pusula.reco import load_reco
@@ -442,14 +442,34 @@ def commission(month: str | None = None, user: AuthUser = Depends(current_user))
             raise HTTPException(status_code=400, detail="Ay YYYY-AA olmalı") from exc
     else:
         chosen = now.date().replace(day=1)
+    # Anahtar son değişen deal'e bağlı: yeni satış gelince her Vercel örneğinde
+    # önbellek kendiliğinden geçersiz olur (cache.clear yalnız kendi örneğini siler).
+    changed, checked = deals_sync_state()
     payload = cache.cached(
-        ("commission", chosen.isoformat(), now.strftime("%Y-%m-%d %H")),
+        ("commission", chosen.isoformat(), now.strftime("%Y-%m-%d %H"), changed),
         REPORT_TTL,
         lambda: jsonable_encoder(load_commission(chosen, now)),
     )
+    payload = {**payload, "satis_kontrol": checked}
     if user.role == "admin":
         return payload
     return {**payload, "reps": [r for r in payload["reps"] if r["rep_id"] == user.rep_id]}
+
+
+@app.get("/api/commission/deals")
+def commission_deals(
+    month: str | None = None, rep_id: str | None = None, user: AuthUser = Depends(current_user)
+) -> Any:
+    """Prim kartı teşhisi: temsilcinin bu ayki deal'leri ve neden sayılıp sayılmadığı.
+    rep_id boş (yönetici): bu ay kazanılan ama sahibi satış ekibinde olmayan deal'ler."""
+    require_database()
+    try:
+        chosen = date.fromisoformat(f"{month}-01") if month else _now().date().replace(day=1)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Ay YYYY-AA olmalı") from exc
+    if user.role != "admin":
+        rep_id = user.rep_id
+    return jsonable_encoder(load_rep_deals(chosen, rep_id or None))
 
 
 @app.get("/api/reco")

@@ -108,12 +108,13 @@ def whatsapp_enabled() -> bool:
 def _steps(now: datetime, run_slow: bool) -> list[tuple[str, Callable[[], Any]]]:
     steps: list[tuple[str, Callable[[], Any]]] = [
         ("aramalar", lambda: _run_cursor_source("zoho_crm_calls", now)),
+        # Prim kartı: imleçle yalnız değişen deal'ler, birkaç saniye. Uzun adımlardan
+        # önce ki 40 sn bütçesi dolunca atlanmasın.
+        ("satislar", lambda: sync_deal_packages(now)),
     ]
     if whatsapp_enabled():
         steps.append(("whatsapp", lambda: _run_cursor_source("zoho_crm_whatsapp", now)))
     steps.append(("crm_islemleri", lambda: sync_crm_actions(now)))
-    # Prim kartı: Modified_Time imleciyle yalnız değişen deal'ler, hızlı.
-    steps.append(("satislar", lambda: sync_deal_packages(now)))
     if run_slow:
         steps += [
             ("randevular", lambda: _run_bookings(now)),
