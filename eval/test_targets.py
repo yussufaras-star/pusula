@@ -201,3 +201,22 @@ def test_talk_time_target_five_minutes_with_sample() -> None:
     # Cumartesi (arama yok) süre hedefi de yok.
     sat = rep_targets(today={}, hist_hours={}, meetings=[], day=SATURDAY, cutoff=at(SATURDAY, 12))
     assert "sure_ort" not in sat
+
+
+def test_every_nudge_carries_occupancy() -> None:
+    from pusula.pace_nudges import occupancy_line
+
+    c = card(arama={"daily": 90, "by_now": 20, "source": "standart"},
+             doluluk={"daily": 80.0, "by_now": 80.0, "source": "standart"})
+    c["today"].update({"doluluk": 74.0, "kayip_dk": 72})
+    line = occupancy_line(c)
+    assert line == "Doluluğun şu an %74 (hedef %80), kayıp zaman 1 sa 12 dk."
+    body = format_body("Ayşe Kar", gaps_for(c), at(MONDAY, 12), occupancy=line)
+    assert "- Arama:" in body and line in body
+    # Doluluk gerideyse tek satır: oran + kayıp zaman.
+    c["today"]["doluluk"] = 60.0
+    body = format_body("Ayşe Kar", gaps_for(c), at(MONDAY, 12), occupancy=occupancy_line(c))
+    assert "- Doluluk: %60 (günlük hedef %80), kayıp zaman 1 sa 12 dk" in body
+    assert "Doluluğun şu an" not in body
+    c["today"]["doluluk"] = None
+    assert occupancy_line(c) is None

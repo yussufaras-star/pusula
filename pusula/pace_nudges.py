@@ -111,7 +111,10 @@ def gaps_for(card: dict[str, Any]) -> list[dict[str, Any]]:
             if metric == "ulasma_orani" and int(today.get("lead_payda") or 0) < REACH_MIN_SAMPLE:
                 continue
             if actual < target["daily"] - RATE_GAP:
-                out.append({"metric": metric, "actual": actual, **target})
+                gap = {"metric": metric, "actual": actual, **target}
+                if metric == "doluluk":
+                    gap["kayip_dk"] = today.get("kayip_dk")
+                out.append(gap)
             continue
         by_now = float(target.get("by_now") or 0)
         if by_now < MIN_BY_NOW.get(metric, 1.0):
@@ -149,13 +152,24 @@ def _duration(sec: float) -> str:
     return f"{minutes} dk {rest} sn" if rest else f"{minutes} dk"
 
 
+def _minutes(value: float) -> str:
+    total = int(round(value))
+    hours, rest = divmod(total, 60)
+    if not hours:
+        return f"{rest} dk"
+    return f"{hours} sa {rest} dk" if rest else f"{hours} sa"
+
+
 def _gap_line(gap: dict[str, Any]) -> str:
     label = METRICS[gap["metric"]]
     basis = "günlük ortalaman" if gap["source"] == "ortalama" else "günlük hedef"
     if gap["metric"] == "sure_ort":
         return f"- {label}: {_duration(gap['actual'])} (hedef en az {_duration(gap['daily'])})"
     if gap["metric"] in RATE_METRICS:
-        return f"- {label}: %{_fmt(gap['actual'])} ({basis} %{_fmt(gap['daily'])})"
+        line = f"- {label}: %{_fmt(gap['actual'])} ({basis} %{_fmt(gap['daily'])})"
+        if gap.get("kayip_dk"):
+            line += f", kayıp zaman {_minutes(float(gap['kayip_dk']))}"
+        return line
     return (
         f"- {label}: {_fmt(gap['actual'])}; bu saate kadar {_fmt(gap['by_now'])} "
         f"bekleniyordu ({basis} {_fmt(gap['daily'])})"
@@ -166,12 +180,33 @@ def first_name(full_name: str) -> str:
     return full_name.split()[0] if full_name.strip() else full_name
 
 
-def format_body(name: str, gaps: list[dict[str, Any]], local: datetime) -> str:
+def occupancy_line(card: dict[str, Any]) -> str | None:
+    """Her dürtmede doluluk bilgisi (yönetici, 14 Ekim): oran, hedef, kayıp zaman."""
+    today = card.get("today") or {}
+    actual = today.get("doluluk")
+    if actual is None:
+        return None
+    target = (card.get("target") or {}).get("doluluk") or {}
+    line = f"Doluluğun şu an %{_fmt(actual)}"
+    if target.get("daily") is not None:
+        line += f" (hedef %{_fmt(target['daily'])})"
+    lost = today.get("kayip_dk")
+    if lost:
+        line += f", kayıp zaman {_minutes(float(lost))}"
+    return line + "."
+
+
+def format_body(
+    name: str, gaps: list[dict[str, Any]], local: datetime, *, occupancy: str | None = None
+) -> str:
     lines = [
         f"🧭 Pusula · {local:%H:%M}",
         f"{first_name(name)}, bugün şu başlıklarda temponun gerisindesin:",
         *(_gap_line(gap) for gap in gaps),
     ]
+    # Doluluk zaten geride listesindeyse (kayıp zamanla) tekrar yazılmaz.
+    if occupancy and not any(g["metric"] == "doluluk" for g in gaps):
+        lines.append(occupancy)
     bounds = shift_bounds(local.date())
     if bounds:
         left = int((bounds[1] - local).total_seconds() // 60)
@@ -389,7 +424,7 @@ def run_pace_nudges(now: datetime | None = None, *, payload: dict[str, Any] | No
             if not cooldown_ok(times.get(card["rep_id"], []), now):
                 continue
             facts = ai_facts(card, gaps, now)
-            body = format_body(card["name"], gaps, now)
+            body = format_body(card["name"], gaps, now, occupancy=occupancy_line(card))
             ai_text = guidance(facts)
             pending = bool(ai_text) and needs_approval
             row = conn.execute(
