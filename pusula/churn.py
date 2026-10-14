@@ -10,6 +10,13 @@ Kural (yönetici, 13 Ekim):
   vadesi geçmiş müşterilerde. Yıllık: aynı oran 12 ay toplamıyla.
 - İadeler churn'e girmez; iade oranı = iade / satış, ayrı.
 Kaynak: deal_packages (contact_id ile), contact_profiles (sahip süzmesi).
+
+CRM öncesi müşteriler (yönetici, 14 Ekim; churn operasyonu 2026 başından beri):
+satışı CRM'de olmayan abonelik müşteri kaydındaki abonelik bitişinden kurulur.
+- CRM'de abonelik satışı varsa ilk satış önceki dönemin yenilemesidir: vade = o
+  satışın günü (Re-Co satışı kendi ayına "yeniledi" yazılır).
+- CRM'de satış yoksa vade = Zoho "Abonelik Bitiş"; geçtiyse kaybedildi.
+Tablo Ocak 2026'dan başlar (öncesinde yenilemeler CRM'de görünmez).
 """
 
 from __future__ import annotations
@@ -26,6 +33,9 @@ from pusula.sifir_satis import WON_STAGE
 SUBSCRIPTION_PACKAGES = ("Rexven-Premium", "Rexven-Plus", "Rexven-Premium-Kamp", "Re-Co-Premium")
 REFUND_STAGE = "İptaller-İadeler"
 TERM_MONTHS = 12
+CRM_START = date(2025, 10, 1)
+CHURN_START = date(2026, 1, 1)
+RENEWAL_PACKAGE = "Re-Co-Premium"
 
 
 def plus_months(day: date, months: int) -> date:
@@ -68,9 +78,26 @@ def due_events(purchases: Iterable[date], today: date) -> list[dict[str, Any]]:
         end = plus_months(nxt, TERM_MONTHS)
 
 
+def pre_crm_start(
+    sales: list[tuple[date, str | None]], bas: date | None, bit: date | None
+) -> date | None:
+    """Saf: CRM öncesi müşterinin varsayılan ilk abonelik günü (vade 12 ay sonra).
+
+    CRM öncesi: abonelik başlangıcı CRM'den önce, ya da CRM'deki ilk abonelik
+    satışı Re-Co (yenileme). Satış varsa ilk satış vadedir; yoksa abonelik bitişi.
+    """
+    first = min(sales)[0] if sales else None
+    first_pkg = min(sales)[1] if sales else None
+    pre = (bas is not None and bas < CRM_START) or first_pkg == RENEWAL_PACKAGE or (not sales and bit is not None)
+    if not pre:
+        return None
+    due = first if first is not None else bit
+    return plus_months(due, -TERM_MONTHS) if due else None
+
+
 def monthly_churn(events: Iterable[dict[str, Any]], today: date, months_back: int = 12, months_ahead: int = 3) -> list[dict[str, Any]]:
-    """Saf: vade olayları → ay satırları (geçmiş 12 ay + önümüzdeki 3 ay)."""
-    start = add_months(month_first(today), -(months_back - 1))
+    """Saf: vade olayları → ay satırları (en fazla 12 ay geri, Ocak 2026'dan; + önümüzdeki 3 ay)."""
+    start = max(add_months(month_first(today), -(months_back - 1)), CHURN_START)
     stop = add_months(month_first(today), months_ahead)
     rows: dict[date, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for e in events:
@@ -126,22 +153,26 @@ def action_lists(
     yaklasan: vadesi önümüzdeki 60 günde dolacak, henüz yenilemeyenler (vade sırası).
     kaybedilen: son 120 günde vadesi geçip yenilemeyen, geri de dönmeyenler (geri
     kazanma listesi; en yeni kayıp önce).
-    contacts: contact_id → {name, owner, sales: [(gün, paket)]}.
+    contacts: contact_id → {name, owner, sales: [(gün, paket)], pre: CRM öncesi
+    varsayılan başlangıç | None, paket/bas: müşteri kaydından}.
     """
     upcoming: list[dict[str, Any]] = []
     lost: list[dict[str, Any]] = []
     for cid, info in contacts.items():
         sales = sorted(info["sales"])
-        if not sales:
+        pre = info.get("pre")
+        starts = ([pre] if pre else []) + [d for d, _ in sales]
+        if not starts:
             continue
-        last = due_events([d for d, _ in sales], today)[-1]
+        last = due_events(starts, today)[-1]
         base = {
             "contact_id": cid,
             "musteri": info.get("name") or "—",
             "sahip": info.get("owner"),
-            "paket": sales[-1][1],
-            "son_satis": sales[-1][0],
+            "paket": sales[-1][1] if sales else (info.get("paket") or "CRM öncesi"),
+            "son_satis": sales[-1][0] if sales else (info.get("bas") or pre),
             "satis_sayisi": len(sales),
+            "crm_oncesi": pre is not None,
             "vade": last["vade"],
         }
         days = (last["vade"] - today).days
@@ -179,6 +210,15 @@ def load_churn(today: date, owner: str | None = None) -> dict[str, Any]:
             """,
             params,
         ).fetchall()
+        # CRM öncesi müşteriler: abonelik başlangıç/bitiş müşteri kaydından.
+        profiles = conn.execute(
+            f"""
+            SELECT c.contact_id, c.full_name, c.owner_name, c.paket, c.abonelik_bas, c.abonelik_bit
+            FROM contact_profiles c
+            WHERE c.org_id = %s AND (c.abonelik_bas IS NOT NULL OR c.abonelik_bit IS NOT NULL) {owner_sql}
+            """,
+            [org_id, *([owner] if owner else [])],
+        ).fetchall()
         refunds = conn.execute(
             f"""
             SELECT date_trunc('month', coalesce(d.closing_date, (d.created_at AT TIME ZONE 'Europe/Istanbul')::date))::date,
@@ -191,14 +231,25 @@ def load_churn(today: date, owner: str | None = None) -> dict[str, Any]:
             """,
             [REFUND_STAGE, WON_STAGE, list(SUBSCRIPTION_PACKAGES), org_id, *([owner] if owner else [])],
         ).fetchall()
-    by_contact: dict[str, list[date]] = defaultdict(list)
     contacts: dict[str, dict[str, Any]] = {}
     for cid, day, package, name, owner_name in purchases:
         if day:
-            by_contact[str(cid)].append(day)
             info = contacts.setdefault(str(cid), {"name": name, "owner": owner_name, "sales": []})
             info["sales"].append((day, package))
-    events = [e for days in by_contact.values() for e in due_events(days, today)]
+    for cid, name, owner_name, paket, bas, bit in profiles:
+        info = contacts.get(str(cid))
+        if info is None:
+            if bit is None:
+                continue
+            info = contacts.setdefault(str(cid), {"name": name, "owner": owner_name, "sales": []})
+        info.update({"paket": paket, "bas": bas})
+        info["pre"] = pre_crm_start(info["sales"], bas, bit)
+    events = []
+    pre_count = 0
+    for info in contacts.values():
+        starts = ([info["pre"]] if info.get("pre") else []) + [d for d, _ in info["sales"]]
+        pre_count += 1 if info.get("pre") else 0
+        events += due_events(starts, today)
     months = monthly_churn(events, today)
     refund = {m: (iade, satis) for m, iade, satis in refunds}
     for r in months:
@@ -214,7 +265,9 @@ def load_churn(today: date, owner: str | None = None) -> dict[str, Any]:
         "aylar": months,
         "son_12_ay": period_churn(past),
         "bu_yil": period_churn(year),
-        "musteri": len(by_contact),
+        "musteri": len(contacts),
+        "crm_oncesi": pre_count,
+        "baslangic": CHURN_START,
         **action_lists(contacts, today),
         "yaklasan_gun": UPCOMING_DAYS,
         "kaybedilen_gun": LOST_DAYS,

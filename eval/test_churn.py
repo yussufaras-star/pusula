@@ -72,3 +72,29 @@ def test_action_lists_split_upcoming_and_lost() -> None:
     assert [(r["musteri"], r["kalan_gun"]) for r in out["yaklasan"]] == [("Ali", 37)]
     assert [(r["musteri"], r["gecen_gun"]) for r in out["kaybedilen"]] == [("Banu", 13)]
     assert out["yaklasan"][0]["sahip"] == "Nihat Kemer" and out["kaybedilen"][0]["paket"] == "Rexven-Plus"
+
+
+def test_pre_crm_customers_from_subscription_dates() -> None:
+    from pusula.churn import action_lists, monthly_churn, pre_crm_start
+
+    today = date(2026, 10, 14)
+    # Re-Co satışı Mart 2026: önceki dönemin vadesi o gün → Mart'a "yeniledi".
+    reco = [(date(2026, 3, 10), "Re-Co-Premium")]
+    start = pre_crm_start(reco, date(2025, 3, 10), date(2027, 3, 10))
+    assert start == date(2025, 3, 10)
+    events = due_events([start] + [d for d, _ in reco], today)
+    assert events[0] == {"vade": date(2026, 3, 10), "sonuc": "yeniledi", "geri_kazanildi": False}
+    # CRM'de satışı yok, aboneliği Mayıs 2026'da bitmiş → Mayıs'ta kaybedildi.
+    gone = pre_crm_start([], date(2025, 5, 2), date(2026, 5, 2))
+    assert due_events([gone], today) == [{"vade": date(2026, 5, 2), "sonuc": "kaybedildi", "geri_kazanildi": False}]
+    # CRM'de yeni müşteri (Premium, Kasım 2025): CRM öncesi değil.
+    assert pre_crm_start([(date(2025, 11, 20), "Rexven-Premium")], date(2025, 11, 20), date(2026, 11, 20)) is None
+    # Tablo Ocak 2026'dan başlar.
+    rows = monthly_churn(events + due_events([gone], today), today)
+    assert rows[0]["ay"] == date(2026, 1, 1)
+    by = {r["ay"]: r for r in rows}
+    assert by[date(2026, 3, 1)]["yeniledi"] == 1 and by[date(2026, 5, 1)]["kaybedildi"] == 1
+    # Kayıp listesinde CRM öncesi müşteri, paket müşteri kaydından.
+    out = action_lists({"x": {"name": "Eski", "owner": None, "sales": [], "pre": date(2025, 8, 1),
+                              "paket": "Premium", "bas": date(2025, 8, 1)}}, today)
+    assert out["kaybedilen"][0]["paket"] == "Premium" and out["kaybedilen"][0]["crm_oncesi"]

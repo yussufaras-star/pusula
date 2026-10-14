@@ -12,6 +12,9 @@ const OWNERS = ["Nihat Kemer", "Burcu Özkan"];
 
 type View = "yaklasan" | "kaybedilen" | "aylik";
 
+/** Liste ilk bu kadar satırla açılır; en acil olanlar üstte. */
+const LIST_SHOWN = 10;
+
 const rate = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `%${num(v)}`);
 
 function periodNote(p: ChurnPeriod | undefined): string {
@@ -27,6 +30,7 @@ function dueTone(days: number): string {
 
 /** Müşteri iş listesi: yaklaşan vadeler (yenileme araması) veya kaybedilenler (geri kazanma). */
 function ItemTable({ items, kind }: { items: ChurnItem[]; kind: "yaklasan" | "kaybedilen" }) {
+  const [all, setAll] = useState(false);
   if (!items.length) {
     return (
       <div className="empty">
@@ -49,9 +53,12 @@ function ItemTable({ items, kind }: { items: ChurnItem[]; kind: "yaklasan" | "ka
           </tr>
         </thead>
         <tbody>
-          {items.map((r) => (
+          {(all ? items : items.slice(0, LIST_SHOWN)).map((r) => (
             <tr key={r.contact_id}>
-              <td className="name">{r.musteri}</td>
+              <td className="name">
+                {r.musteri}
+                {r.crm_oncesi ? <span className="sub">CRM öncesi müşteri</span> : null}
+              </td>
               <td>{r.sahip ?? <span className="muted">—</span>}</td>
               <td>{r.paket ?? "—"}</td>
               <td className="num muted">{day(r.son_satis)}</td>
@@ -70,6 +77,11 @@ function ItemTable({ items, kind }: { items: ChurnItem[]; kind: "yaklasan" | "ka
           ))}
         </tbody>
       </table>
+      {items.length > LIST_SHOWN ? (
+        <button className="link-btn" onClick={() => setAll((v) => !v)}>
+          {all ? "Daha az göster" : `Tümünü göster (${int(items.length)})`}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -126,7 +138,7 @@ export function ChurnBoard() {
               : ""
           }
         />
-        <StatTile label="Son 12 ay churn" value={rate(data.son_12_ay?.churn)} expected={periodNote(data.son_12_ay)} />
+        <StatTile label="2026 churn" value={rate(data.bu_yil?.churn)} expected={periodNote(data.bu_yil)} />
         <StatTile
           label="İade oranı"
           value={refunds[1] ? `%${num((100 * refunds[0]) / refunds[1])}` : "—"}
@@ -203,8 +215,9 @@ export function ChurnBoard() {
       <p className="muted fn-note">
         Churn: aboneliği (satıştan 12 ay) o ay dolan müşterilerden vade gününe kadar yeni abonelik satışı olmayanlar; ek süre
         yok. Oran yalnız vadesi geçmiş olanlar üzerinden (bekleyenler hariç). Abonelik satışı: {data.packages?.join(", ")}.
-        Ölçüm CRM'e geçişten (Ekim 2025) itibaren satın alanlar için yapılabiliyor; CRM öncesi müşterilerin vadeleri bu
-        listelere girmez.
+        CRM öncesi müşteriler ({int(data.crm_oncesi ?? 0)}) Zoho müşteri kaydındaki abonelik bitişinden kurulur: CRM'de
+        satışı yoksa vade abonelik bitişi, Re-Co (veya başka abonelik) satışı varsa o satış kendi ayına "yeniledi" yazılır.
+        Tablo Ocak 2026'dan başlar.
       </p>
     </>
   );
