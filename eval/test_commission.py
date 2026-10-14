@@ -8,8 +8,8 @@ from pusula.metrics import TZ
 
 
 def test_tiers_follow_manager_rule() -> None:
-    # 27'ye kadar %2,5 · 28-29 %3 · 30+ %5
-    assert [rate_for(n) for n in (0, 26, 27, 28, 29, 30, 41)] == [2.5, 2.5, 2.5, 3.0, 3.0, 5.0, 5.0]
+    # 25 altı %2,5 · 25-29 %3 · 30+ %5
+    assert [rate_for(n) for n in (0, 24, 25, 28, 29, 30, 41)] == [2.5, 2.5, 3.0, 3.0, 3.0, 5.0, 5.0]
     # Sonraki adım her zaman %5 kademesi.
     assert next_tier(20) == (30, 5.0)
     assert next_tier(28) == (30, 5.0)

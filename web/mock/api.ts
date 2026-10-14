@@ -537,18 +537,18 @@ export function mockApi(method: string, url: string): unknown {
     ];
     const el = 10.5;
     const wd = 27;
-    const rate = (n: number) => (n >= 30 ? 5 : n >= 28 ? 3 : 2.5);
+    const rate = (n: number) => (n >= 30 ? 5 : n >= 25 ? 3 : 2.5);
     return {
       month: "2026-10-01",
       available: true,
       elapsed_workdays: el,
       month_workdays: wd,
       packages: ["Rexven-Premium", "Rexven-Plus", "Rexven-Premium-Kamp"],
-      tiers: [{ esik: 0, oran: 2.5 }, { esik: 28, oran: 3 }, { esik: 30, oran: 5 }],
+      tiers: [{ esik: 0, oran: 2.5 }, { esik: 25, oran: 3 }, { esik: 30, oran: 5 }],
       reps: rows.map(([rep_id, name, n, all, ciro]) => {
         const fn = (n / el) * wd;
         const fc = (ciro / el) * wd;
-        const next = n >= 30 ? null : n >= 28 ? { esik: 30, oran: 5 } : { esik: 28, oran: 3 };
+        const next = n >= 30 ? null : { esik: 30, oran: 5 };
         return {
           rep_id, name, sayilan: n, toplam_satis: all, ciro, oran: rate(n), prim: (rate(n) / 100) * ciro,
           ciro_sayilan: ciro * 0.85, ciro_diger: ciro * 0.15, diger_satis: all - n,
