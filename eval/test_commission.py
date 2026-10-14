@@ -72,3 +72,15 @@ def test_classify_deal_explains_why_not_counted() -> None:
     empty = classify_deal(won, None, date(2026, 10, 3), oct1)
     assert empty["ciro"] and not empty["sayilan"] and empty["neden"].startswith("Paket alanı boş")
     assert classify_deal(won, "Kamp", date(2026, 10, 3), oct1)["neden"] == "Kamp adede girmez; ciroya girer"
+
+
+def test_past_day_view_uses_end_of_that_day() -> None:
+    from pusula.commission import as_of_moment
+    from pusula.web.app import commission_asof
+
+    today = date(2026, 10, 14)
+    assert commission_asof("2026-10-13", today) == date(2026, 10, 13)
+    assert commission_asof("2026-10-14", today) is None and commission_asof(None, today) is None
+    # 13 Ekim gün sonu: 10 tam iş günü + 13'ü tamamı = 11.
+    done, total = elapsed_workdays(date(2026, 10, 1), as_of_moment(date(2026, 10, 13)))
+    assert (done, total) == (11.0, 27)

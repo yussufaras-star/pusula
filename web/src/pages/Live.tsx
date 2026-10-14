@@ -221,7 +221,7 @@ function LiveBody({
         />
       </div>
 
-      <CommissionCard isAdmin={me.role === "admin"} syncTick={syncTick} />
+      <CommissionCard isAdmin={me.role === "admin"} syncTick={syncTick} day={data.is_today ? null : data.day} />
 
       <div className="grid-2">
         <section className="card">

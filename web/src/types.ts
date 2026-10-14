@@ -345,6 +345,8 @@ export interface CommissionRep {
 
 export interface CommissionPayload {
   month: string;
+  /** Geçmiş gün görünümü: satışlar bu güne kadar. */
+  asof?: string | null;
   available: boolean;
   elapsed_workdays: number;
   month_workdays: number;
