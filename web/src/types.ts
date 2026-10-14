@@ -351,6 +351,30 @@ export interface CommissionPayload {
   packages: string[];
   tiers: { esik: number; oran: number }[];
   reps: CommissionRep[];
+  /** Zoho'dan satışların en son kontrol edildiği an. */
+  satis_kontrol?: string | null;
+}
+
+// pusula/commission.py load_rep_deals.
+export interface CommissionDeal {
+  deal_id: string;
+  paket: string | null;
+  asama: string | null;
+  tutar: number | null;
+  kapanis: string | null;
+  olusturma: string | null;
+  owner_rep_id: string | null;
+  musteri: string | null;
+  guncellendi: string | null;
+  ciro: boolean;
+  sayilan: boolean;
+  neden: string | null;
+}
+
+export interface CommissionDeals {
+  month: string;
+  rep_id: string | null;
+  deals: CommissionDeal[];
 }
 
 // pusula/reco.py load_reco.

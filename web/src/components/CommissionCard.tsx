@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 
 import { usePolling } from "../api";
-import { int, num, tl } from "../format";
-import type { CommissionPayload, CommissionRep } from "../types";
+import { ago, int, num, tl } from "../format";
+import type { CommissionDeals, CommissionPayload, CommissionRep } from "../types";
 
 const monthFmt = new Intl.DateTimeFormat("tr-TR", { month: "long", year: "numeric", timeZone: "UTC" });
 
@@ -13,6 +13,51 @@ function monthParam(offset: number): string {
 }
 
 const pct = (v: number) => `%${num(v)}`;
+
+const dayFmt = new Intl.DateTimeFormat("tr-TR", { day: "numeric", month: "short", timeZone: "UTC" });
+const shortDay = (iso: string | null) => (iso ? dayFmt.format(new Date(`${iso}T00:00:00Z`)) : "—");
+
+/** Bir temsilcinin (veya sahibi ekipte olmayan) bu ayki deal'leri ve sayılma durumu. */
+function DealList({ month, repId, emptyText }: { month: string; repId: string; emptyText: string }) {
+  const q = new URLSearchParams({ month });
+  if (repId) q.set("rep_id", repId);
+  const { data, error } = usePolling<CommissionDeals>(`/api/commission/deals?${q}`, 0);
+  if (error) return <div className="banner error">Satışlar alınamadı: {error.message}</div>;
+  if (!data) return <div className="skeleton" />;
+  if (!data.deals.length) return <div className="empty">{emptyText}</div>;
+  return (
+    <table className="board cm-deals">
+      <thead>
+        <tr>
+          <th>Müşteri</th>
+          <th>Paket</th>
+          <th>Aşama</th>
+          <th className="num">Kapanış</th>
+          <th className="num">Tutar</th>
+          <th>Prim kartında</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.deals.map((d) => (
+          <tr key={d.deal_id} className={d.ciro ? undefined : "cm-deal-out"}>
+            <td className="name">{d.musteri ?? <span className="muted">isimsiz</span>}</td>
+            <td>{d.paket ?? <span className="warn-text">boş</span>}</td>
+            <td>{d.asama ?? "—"}</td>
+            <td className="num">{shortDay(d.kapanis)}</td>
+            <td className="num">{d.tutar === null ? "—" : tl(d.tutar)}</td>
+            <td>
+              {d.sayilan ? (
+                <span className="badge good">sayıldı</span>
+              ) : (
+                <span className={`badge ${d.ciro ? "warning" : "critical"}`}>{d.neden}</span>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
 
 /** Satış adedi çubuğu: kademe eşikleri, gerçekleşen ve ay sonu tahmini işareti. */
 function TierBar({ rep, tiers, closed }: { rep: CommissionRep; tiers: CommissionPayload["tiers"]; closed: boolean }) {
@@ -62,12 +107,23 @@ export function CommissionCard({ isAdmin, syncTick = 0 }: { isAdmin: boolean; sy
     if (syncTick > 0) refresh();
   }, [syncTick, refresh]);
   const closed = offset < 0;
+  const [open, setOpen] = useState<string | null>(null);
+  const toggle = (id: string) => setOpen((cur) => (cur === id ? null : id));
+  const cols = (isAdmin ? 1 : 0) + (closed ? 6 : 7);
   const reps = [...(data?.reps ?? [])].sort((a, b) => b.sayilan - a.sayilan || b.ciro - a.ciro);
 
   return (
     <section className="card">
       <div className="card-head">
-        <h2>Aylık prim hedefi{data ? ` · ${monthFmt.format(new Date(`${data.month}T00:00:00Z`))}` : ""}</h2>
+        <h2>
+          Aylık prim hedefi{data ? ` · ${monthFmt.format(new Date(`${data.month}T00:00:00Z`))}` : ""}
+          {data?.satis_kontrol ? (
+            <span className="hint cm-sync" title="Satışlar Zoho'dan saatlik ve 'Verileri güncelle' ile çekilir">
+              {" "}
+              · satışlar {ago(data.satis_kontrol, new Date())} kontrol edildi
+            </span>
+          ) : null}
+        </h2>
         <div className="chips" role="group" aria-label="Ay">
           <button className={`chip${offset === 0 ? " on" : ""}`} onClick={() => setOffset(0)} aria-pressed={offset === 0}>
             Bu ay
@@ -106,12 +162,16 @@ export function CommissionCard({ isAdmin, syncTick = 0 }: { isAdmin: boolean; sy
                 </thead>
                 <tbody>
                   {reps.map((r) => (
-                    <tr key={r.rep_id}>
+                    <Fragment key={r.rep_id}>
+                    <tr>
                       {isAdmin ? <td className="name">{r.name}</td> : null}
                       <td className="cm-bar-col">
                         <div className="cm-count">
                           <b>{int(r.sayilan)}</b>
                           {closed ? null : <span className="muted"> · tahmin {num(r.tahmin_sayilan)}</span>}
+                          <button className="link-btn cm-open" onClick={() => toggle(r.rep_id)} aria-expanded={open === r.rep_id}>
+                            {open === r.rep_id ? "satışları gizle ▴" : "satışları gör ▾"}
+                          </button>
                         </div>
                         <TierBar rep={r} tiers={data.tiers} closed={closed} />
                       </td>
@@ -140,6 +200,18 @@ export function CommissionCard({ isAdmin, syncTick = 0 }: { isAdmin: boolean; sy
                         <NextStep rep={r} closed={closed} />
                       </td>
                     </tr>
+                    {open === r.rep_id ? (
+                      <tr className="cm-deals-row">
+                        <td colSpan={cols}>
+                          <DealList
+                            month={data.month.slice(0, 7)}
+                            repId={r.rep_id}
+                            emptyText="Bu ay bu temsilciye ait deal yok. Satış başka birinin üzerinde olabilir."
+                          />
+                        </td>
+                      </tr>
+                    ) : null}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -158,8 +230,24 @@ export function CommissionCard({ isAdmin, syncTick = 0 }: { isAdmin: boolean; sy
                 </span>
               )}
             </div>
+            {isAdmin ? (
+              <div className="cm-orphans">
+                <button className="link-btn" onClick={() => toggle("__ekip_disi")} aria-expanded={open === "__ekip_disi"}>
+                  {open === "__ekip_disi" ? "▴" : "▾"} Bu ay kazanılan ama sahibi satış ekibinde olmayan satışlar
+                </button>
+                {open === "__ekip_disi" ? (
+                  <DealList
+                    month={data.month.slice(0, 7)}
+                    repId=""
+                    emptyText="Yok: bu ayın tüm kazanılan satışları ekipteki birinin üzerinde."
+                  />
+                ) : null}
+              </div>
+            ) : null}
             <p className="muted fn-note">
-              Sayılan: ay içinde kazanılan {data.packages.join(", ")}. Ciro: o ay "Kapandı Kazanıldı" olan tüm satışlar
+              Satış görünmüyorsa temsilcinin "satışları gör" listesine bakın: Zoho'da aşaması "Kapandı Kazanıldı" değilse,
+              kapanış tarihi başka aydaysa veya paket alanı boşsa nedeni orada yazar. Listede hiç yoksa satış başka birinin
+              üzerindedir (alttaki "sahibi ekipte olmayan" listesi) ya da henüz çekilmemiştir. Sayılan: ay içinde kazanılan {data.packages.join(", ")}. Ciro: o ay "Kapandı Kazanıldı" olan tüm satışlar
               (Kamp ve diğer paketler dahil). Oran: 25'in altı %2,5 · 25–29 %3 · 30 ve üzeri %5;
               prim o ay kazanılan tüm satışların cirosu üzerinden. Tahmin: iş günü başına hız × ayın {data.month_workdays} iş
               günü (geçen {num(data.elapsed_workdays)}). "%5 hedefi": 30 satışa kalan, günlük gereken ve %5'e çıkınca bugünkü ciroyla oluşacak prim farkı.

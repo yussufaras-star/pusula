@@ -29,6 +29,21 @@ function minuteOfDay(iso: string): number {
   return get("hour") * 60 + get("minute") + get("second") / 60;
 }
 
+/** Şeritteki mola dilimleri; bitişik dilimler tek aralık. 1 dk altı kırıntılar atlanır. */
+function breakIntervals(timeline: RepCard["timeline"]): { start: string; end: string; min: number }[] {
+  const out: { start: string; end: string; min: number }[] = [];
+  for (const s of [...timeline].filter((t) => t.kind === "mola").sort((a, b) => a.start.localeCompare(b.start))) {
+    const last = out[out.length - 1];
+    if (last && new Date(s.start).getTime() - new Date(last.end).getTime() <= 60_000) {
+      last.end = s.end;
+    } else {
+      out.push({ start: s.start, end: s.end, min: 0 });
+    }
+  }
+  for (const b of out) b.min = (new Date(b.end).getTime() - new Date(b.start).getTime()) / 60000;
+  return out.filter((b) => b.min >= 1);
+}
+
 interface Props {
   reps: RepCard[];
   day: string;
@@ -72,7 +87,7 @@ export function LostTime({ reps, day, now }: Props) {
       </div>
       <div className="lost-grid">
         {rows.map((r) => {
-          const lost = r.gaps.filter((g) => g.kind !== "mola").slice(0, 3);
+          const breaks = breakIntervals(r.timeline);
           return (
             <div key={r.rep_id} className="lost-row">
               <div className="lost-name">
@@ -97,16 +112,19 @@ export function LostTime({ reps, day, now }: Props) {
                     <span className="tl tl-future" style={{ left: `${nowPos}%`, width: `${100 - nowPos}%` }} />
                   ) : null}
                 </div>
-                <div className="lost-gaps">
-                  {lost.length ? (
-                    lost.map((g) => (
-                      <span key={g.start} className={g.kind === "girilmemis" ? "gap-meet" : undefined}>
-                        {clock(g.start)}–{clock(g.end)} <b>{minutes(g.minutes)}</b>
-                        {g.kind === "girilmemis" ? " · sonucu girilmemiş toplantı" : ""}
-                      </span>
-                    ))
+                <div className="lost-gaps" title="Günün en uzun boşluklarından mola olarak düşülen aralıklar">
+                  {breaks.length ? (
+                    <>
+                      <span className="muted">Mola</span>
+                      {breaks.map((b) => (
+                        <span key={b.start}>
+                          {clock(b.start)}–{clock(b.end)} <b>{minutes(b.min)}</b>
+                        </span>
+                      ))}
+                      <span className="muted">toplam {minutes(r.today.mola_dk)}</span>
+                    </>
                   ) : (
-                    <span className="muted">5 dk üstü kayıp boşluk yok</span>
+                    <span className="muted">Henüz mola düşülmedi</span>
                   )}
                 </div>
               </div>

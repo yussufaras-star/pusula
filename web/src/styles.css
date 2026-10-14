@@ -2173,3 +2173,38 @@ table.meet-list {
 .churn-table td.name {
   white-space: nowrap;
 }
+
+/* --- prim kartı teşhisi ------------------------------------------------------ */
+
+.cm-sync {
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.cm-open {
+  margin-left: 8px;
+  font-size: 12px;
+}
+
+.cm-deals-row > td {
+  background: var(--surface-2);
+  padding: 8px 10px 12px;
+}
+
+.cm-deals {
+  width: 100%;
+  font-size: 13px;
+}
+
+.cm-deal-out td {
+  color: var(--ink-2);
+}
+
+.cm-deals .badge {
+  white-space: normal;
+}
+
+.cm-orphans {
+  margin: 10px 0;
+  font-size: 13px;
+}

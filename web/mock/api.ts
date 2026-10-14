@@ -528,6 +528,21 @@ export function mockApi(method: string, url: string): unknown {
       liste_toplam: 520,
     };
   }
+  if (path === "/api/commission/deals") {
+    const deal = (i: number, paket: string | null, asama: string, kapanis: string, ciro: boolean, sayilan: boolean, neden: string | null) => ({
+      deal_id: `d${i}`, paket, asama, tutar: 32000 + i * 1500, kapanis, olusturma: kapanis, owner_rep_id: "r1",
+      musteri: `Müşteri ${i}`, guncellendi: null, ciro, sayilan, neden,
+    });
+    return {
+      month: "2026-10-01", rep_id: "r1",
+      deals: [
+        deal(1, "Rexven-Premium", "Kapandı Kazanıldı", "2026-10-14", true, true, null),
+        deal(2, null, "Kapandı Kazanıldı", "2026-10-13", true, false, "Paket alanı boş; ciroya girer"),
+        deal(3, "Rexven-Plus", "Ödeme Bekleniyor", "2026-10-12", false, false, "Aşama: Ödeme Bekleniyor (kazanılmadı)"),
+        deal(4, "Rexven-Premium", "Kapandı Kazanıldı", "2026-10-09", true, true, null),
+      ],
+    };
+  }
   if (path === "/api/commission") {
     const rows: [string, string, number, number, number][] = [
       ["r1", "Ayşe Yılmaz", 18, 22, 812000],

@@ -152,3 +152,74 @@ def load_commission(month: date, now: datetime) -> dict[str, Any]:
         "tiers": [{"esik": floor, "oran": rate} for floor, rate in sorted(TIERS)],
         "reps": out,
     }
+
+
+# --- teşhis: "satış yansımıyor" sorusuna ekrandan cevap ---------------------------
+
+
+def classify_deal(stage: str | None, package: str | None, closing: date | None, month: date) -> dict[str, Any]:
+    """Saf: bir deal bu ayın prim kartına nasıl girer. ciro: ciroya girer mi;
+    sayilan: Premium/Plus adedine girer mi; neden: girmiyorsa sebebi."""
+    first, last = month_first(month), month_last(month)
+    if stage != WON_STAGE:
+        return {"ciro": False, "sayilan": False, "neden": f"Aşama: {stage or 'boş'} (kazanılmadı)"}
+    if closing is not None and not first <= closing <= last:
+        return {"ciro": False, "sayilan": False, "neden": f"Kapanış tarihi {closing:%d.%m.%Y} (bu ay değil)"}
+    if package not in COUNTED_PACKAGES:
+        why = "Paket alanı boş" if not package else f"{package} adede girmez"
+        return {"ciro": True, "sayilan": False, "neden": f"{why}; ciroya girer"}
+    return {"ciro": True, "sayilan": True, "neden": None}
+
+
+def _deal_rows(conn: Any, where: str, params: list[Any]) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        f"""
+        SELECT d.deal_id, d.package, d.stage, d.amount::float, d.closing_date,
+               (d.created_at AT TIME ZONE 'Europe/Istanbul')::date, d.owner_rep_id,
+               coalesce(cp.full_name, ct.full_name), d.updated_at
+        FROM deal_packages d
+        LEFT JOIN contact_profiles cp ON cp.org_id = d.org_id AND cp.contact_id = d.contact_id
+        LEFT JOIN contacts ct ON ct.org_id = d.org_id AND ct.contact_id = d.contact_id
+        WHERE d.org_id = %s {where}
+        ORDER BY coalesce(d.closing_date, (d.created_at AT TIME ZONE 'Europe/Istanbul')::date) DESC
+        LIMIT 200
+        """,
+        [get_org_id(), *params],
+    ).fetchall()
+    keys = ("deal_id", "paket", "asama", "tutar", "kapanis", "olusturma", "owner_rep_id", "musteri", "guncellendi")
+    return [dict(zip(keys, r)) for r in rows]
+
+
+def load_rep_deals(month: date, rep_id: str | None) -> dict[str, Any]:
+    """Temsilcinin bu ay kapanan veya bu ay açılan deal'leri, sayılma durumuyla.
+    rep_id None: bu ay kazanılan ama sahibi satış ekibinde olmayan deal'ler."""
+    first, last = month_first(month), month_last(month)
+    period = (
+        " AND (d.closing_date BETWEEN %s AND %s"
+        " OR (d.created_at AT TIME ZONE 'Europe/Istanbul')::date BETWEEN %s AND %s)"
+    )
+    with connect() as conn:
+        if rep_id:
+            items = _deal_rows(conn, " AND d.owner_rep_id = %s" + period, [rep_id, first, last, first, last])
+        else:
+            sales = [r.rep_id for r in load_reps()]
+            items = _deal_rows(
+                conn,
+                " AND d.stage = %s AND d.closing_date BETWEEN %s AND %s"
+                " AND (d.owner_rep_id IS NULL OR NOT d.owner_rep_id = ANY(%s))",
+                [WON_STAGE, first, last, sales],
+            )
+    for item in items:
+        item.update(classify_deal(item["asama"], item["paket"], item["kapanis"], month))
+    return {"month": first, "rep_id": rep_id, "deals": items}
+
+
+def deals_sync_state() -> tuple[datetime | None, datetime | None]:
+    """(son değişen deal'in zamanı, son kontrol). Önbellek anahtarı ve kart notu."""
+    from pusula.db import client
+    from pusula.ingest.deal_packages import SOURCE
+
+    state = client.get_sync_state(SOURCE)
+    if state is None:
+        return None, None
+    return state.last_synced_at, state.updated_at
