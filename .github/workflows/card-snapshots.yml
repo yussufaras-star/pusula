@@ -1,10 +1,12 @@
-# Temsilci tablosu öğle + akşam, prim kartı yalnız akşam (gün sonu) ekip Cliq kanalına.
+# Ekip Cliq kanalına kart görselleri, önce veri güncellenir (İstanbul, Pzt–Cmt):
+# 12:30 Temsilciler + Kayıp zaman · 15:30 Kayıp zaman · 18:30 (gün sonu) hepsi.
 name: card-snapshots
 
 on:
   schedule:
     # 12:30 ve 18:30 İstanbul (UTC+3), Pzt–Cmt. GitHub zamanlaması gecikebilir.
     - cron: "30 9 * * 1-6"
+    - cron: "30 12 * * 1-6"
     - cron: "30 15 * * 1-6"
   workflow_dispatch:
 
@@ -21,6 +23,14 @@ env:
   DATABASE_URL_POOLED: ${{ secrets.DATABASE_URL_POOLED }}
   CLIQ_WEBHOOK_URL: ${{ secrets.CLIQ_WEBHOOK_URL }}
   CLIQ_SHARE_CHANNEL: salessupport
+  # --sync: "Verileri güncelle" ile aynı senkron (block-ingest ile aynı kaynaklar).
+  ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
+  ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
+  ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
+  ZOHO_ACCOUNTS_DOMAIN: ${{ secrets.ZOHO_ACCOUNTS_DOMAIN }}
+  ZOHO_API_DOMAIN: ${{ secrets.ZOHO_API_DOMAIN }}
+  ZOHO_MEETING_REFRESH_TOKEN: ${{ secrets.ZOHO_MEETING_REFRESH_TOKEN }}
+  PUSULA_WHATSAPP_INGEST: ${{ vars.PUSULA_WHATSAPP_INGEST }}
 
 jobs:
   card-snapshots:
@@ -44,5 +54,12 @@ jobs:
           python -m pip install -r requirements.txt uvicorn==0.32.0 playwright==1.48.0
           python -m playwright install --with-deps chromium
       - name: Kart görsellerini kanala gönder
-        # Öğle tetiği yalnız temsilciler; akşam ve elle çalıştırma ikisi birden.
-        run: python scripts/card_snapshots.py --cards "${{ github.event.schedule == '30 9 * * 1-6' && 'temsilciler' || 'prim,temsilciler' }}"
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          case "$SCHEDULE" in
+            "30 9 * * 1-6") cards=temsilciler,kayip ;;
+            "30 12 * * 1-6") cards=kayip ;;
+            *) cards=prim,temsilciler,kayip ;;  # akşam ve elle çalıştırma
+          esac
+          python scripts/card_snapshots.py --sync --cards "$cards"
