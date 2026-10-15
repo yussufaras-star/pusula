@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 
 import { usePolling } from "../api";
+import { ShareButton } from "./ShareButton";
 import { ago, int, num, tl } from "../format";
 import type { CommissionDeals, CommissionPayload, CommissionRep } from "../types";
 
@@ -131,7 +132,7 @@ export function CommissionCard({
   const reps = [...(data?.reps ?? [])].sort((a, b) => b.sayilan - a.sayilan || b.ciro - a.ciro);
 
   return (
-    <section className="card">
+    <section className="card" data-share="prim">
       <div className="card-head">
         <h2>
           Aylık prim hedefi{data ? ` · ${monthFmt.format(new Date(`${data.month}T00:00:00Z`))}` : ""}
@@ -143,6 +144,7 @@ export function CommissionCard({
             </span>
           ) : null}
         </h2>
+        <div className="card-actions" data-share-skip>
         {day ? null : (
         <div className="chips" role="group" aria-label="Ay">
           <button className={`chip${offset === 0 ? " on" : ""}`} onClick={() => setOffset(0)} aria-pressed={offset === 0}>
@@ -153,6 +155,8 @@ export function CommissionCard({
           </button>
         </div>
         )}
+        {isAdmin ? <ShareButton kart="prim" baslik="Aylık prim hedefi" /> : null}
+        </div>
       </div>
       <div className="card-body">
         {error ? <div className="banner error">Prim verisi alınamadı: {error.message}</div> : null}

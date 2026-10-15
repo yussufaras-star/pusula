@@ -229,7 +229,9 @@ uyumlu host seçilmelidir.
 - `pusula/panel_data.py`, `pusula/panel_ciro.py`, `pusula/panel_profile.py`:
   KPI sorguları ve hesaplamaları.
 - `pusula/zoho`: Zoho OAuth/CRM istemcileri; `pusula/block_share.py` Cliq
-  gönderim yüzeyi.
+  gönderim yüzeyi; `pusula/card_share.py` kart görselini ekip kanalına
+  (`CLIQ_SHARE_CHANNEL`, varsayılan `salessupport`) yollar — panelde
+  "Cliq'e gönder" butonu ve `scripts/card_snapshots.py` (öğle + akşam).
 - `scripts/`: ingest, raporlama, bakım ve mevcut ayrı günlük dürtü işleri.
 - `eval/`: kimlik, panel metrikleri ve saatlik KPI standart testleri.
 - `pusula/metrics.py`, `pusula/live.py`, `pusula/web/`: canlı KPI vektörü,
