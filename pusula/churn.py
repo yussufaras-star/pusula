@@ -22,6 +22,11 @@ Re-Co (yönetici, 15 Ekim): Deals'teki her kazanılmış Re-Co satışı yenilem
 Dönem başında da olsa yok sayılmaz, vadeden sonra gelse de kayıp / geri
 kazanma değil "yeniledi" olur (açık dönemin vade ayına yazılır). Müşteri
 kaydında abonelik tarihi olmasa da ilk Re-Co önceki dönemin yenilemesidir.
+
+Free (yönetici, 15 Ekim): Zoho müşteri kaydında paketi free'ye çekilmiş müşteri
+aboneliğini yenilememiştir. Vadesi gelmemiş görünse de açık dönemi "kaybedildi"
+olur (vade ayına yazılır; vade gelmeden oran gösterilmez) ve kaybedilenler
+listesinde 120 gün sınırı olmadan "Free'ye çekildi" diye görünür.
 """
 
 from __future__ import annotations
@@ -41,6 +46,11 @@ TERM_MONTHS = 12
 CRM_START = date(2025, 10, 1)
 CHURN_START = date(2026, 1, 1)
 RENEWAL_PACKAGE = "Re-Co-Premium"
+FREE_PACKAGES = ("free", "freemium")
+
+
+def is_free(paket: str | None) -> bool:
+    return (paket or "").strip().lower() in FREE_PACKAGES
 
 
 def plus_months(day: date, months: int) -> date:
@@ -151,11 +161,15 @@ def period_churn(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def contact_events(info: dict[str, Any], today: date) -> list[dict[str, Any]]:
-    """Saf: müşteri kaydı (sales, pre) → vade olayları; Re-Co satışları yenileme."""
+    """Saf: müşteri kaydı (sales, pre, paket) → vade olayları; Re-Co satışları
+    yenileme, paketi free'ye çekilmişse açık dönem kaybedildi."""
     pre = info.get("pre")
     starts = ([pre] if pre else []) + [d for d, _ in info["sales"]]
     renewals = [d for d, pkg in info["sales"] if pkg == RENEWAL_PACKAGE]
-    return due_events(starts, today, renewals) if starts else []
+    events = due_events(starts, today, renewals) if starts else []
+    if events and events[-1]["sonuc"] == "bekliyor" and is_free(info.get("paket")):
+        events[-1] = {**events[-1], "sonuc": "kaybedildi", "free": True}
+    return events
 
 
 UPCOMING_DAYS = 60
@@ -169,7 +183,8 @@ def action_lists(
 
     yaklasan: vadesi önümüzdeki 60 günde dolacak, henüz yenilemeyenler (vade sırası).
     kaybedilen: son 120 günde vadesi geçip yenilemeyen, geri de dönmeyenler (geri
-    kazanma listesi; en yeni kayıp önce).
+    kazanma listesi; en yeni kayıp önce). Paketi free'ye çekilenler süre sınırı
+    olmadan bu listededir (free=True).
     contacts: contact_id → {name, owner, sales: [(gün, paket)], pre: CRM öncesi
     varsayılan başlangıç | None, paket/bas: müşteri kaydından}.
     """
@@ -191,11 +206,12 @@ def action_lists(
             "satis_sayisi": len(sales),
             "crm_oncesi": pre is not None,
             "vade": last["vade"],
+            "free": bool(last.get("free")),
         }
         days = (last["vade"] - today).days
         if last["sonuc"] == "bekliyor" and days <= UPCOMING_DAYS:
             upcoming.append({**base, "kalan_gun": days})
-        elif last["sonuc"] == "kaybedildi" and -days <= LOST_DAYS:
+        elif last["sonuc"] == "kaybedildi" and (-days <= LOST_DAYS or base["free"]):
             lost.append({**base, "gecen_gun": -days})
     upcoming.sort(key=lambda r: (r["vade"], r["musteri"]))
     lost.sort(key=lambda r: (r["gecen_gun"], r["musteri"]))

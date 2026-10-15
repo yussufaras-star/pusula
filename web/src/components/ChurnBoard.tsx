@@ -58,6 +58,7 @@ function ItemTable({ items, kind }: { items: ChurnItem[]; kind: "yaklasan" | "ka
               <td className="name">
                 {r.musteri}
                 {r.crm_oncesi ? <span className="sub">CRM öncesi müşteri</span> : null}
+                {r.free ? <span className="sub">Paketi free'ye çekildi</span> : null}
               </td>
               <td>{r.sahip ?? <span className="muted">—</span>}</td>
               <td>{r.paket ?? "—"}</td>
@@ -68,6 +69,8 @@ function ItemTable({ items, kind }: { items: ChurnItem[]; kind: "yaklasan" | "ka
                   <span className={`badge ${dueTone(r.kalan_gun ?? 0)}`}>
                     {r.kalan_gun === 0 ? "bugün" : `${int(r.kalan_gun)} gün`}
                   </span>
+                ) : (r.gecen_gun ?? 0) < 0 ? (
+                  <span className="badge critical" title="Vadesi gelmeden free'ye çekildi">free</span>
                 ) : (
                   <span className="badge critical">{int(r.gecen_gun)} gün</span>
                 )}
@@ -165,8 +168,8 @@ export function ChurnBoard() {
       ) : view === "kaybedilen" ? (
         <>
           <p className="muted fn-note">
-            Son {int(data.kaybedilen_gun ?? 120)} günde vadesi geçip yenilemeyen ve geri de dönmeyen müşteriler: geri kazanma
-            listesi, en yeni kayıp önce.
+            Son {int(data.kaybedilen_gun ?? 120)} günde vadesi geçip yenilemeyen ve geri de dönmeyen müşteriler ile Zoho'da
+            paketi free'ye çekilenler: geri kazanma listesi, en yeni kayıp önce.
           </p>
           <ItemTable items={lost} kind="kaybedilen" />
         </>
@@ -217,7 +220,8 @@ export function ChurnBoard() {
         yok. Oran yalnız vadesi geçmiş olanlar üzerinden (bekleyenler hariç). Abonelik satışı: {data.packages?.join(", ")}.
         CRM öncesi müşteriler ({int(data.crm_oncesi ?? 0)}) Zoho müşteri kaydındaki abonelik bitişinden kurulur: CRM'de
         satışı yoksa vade abonelik bitişi, Re-Co (veya başka abonelik) satışı varsa o satış kendi ayına "yeniledi" yazılır.
-        Deals'teki her Re-Co satışı yenilemedir: vadeden sonra da gelse "yeniledi" sayılır. Tablo Ocak 2026'dan başlar.
+        Deals'teki her Re-Co satışı yenilemedir: vadeden sonra da gelse "yeniledi" sayılır. Zoho'da paketi free'ye
+        çekilen müşteri yenilememiştir: vadesi gelmemiş olsa da vade ayına "kaybedildi" yazılır. Tablo Ocak 2026'dan başlar.
       </p>
     </>
   );
