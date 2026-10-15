@@ -11,6 +11,7 @@ import { NudgePanel } from "../components/NudgePanel";
 import { PortfolioCard } from "../components/PortfolioBoard";
 import { RepBoard, StatusPill, type ExcuseHandlers } from "../components/RepBoard";
 import { StatTile } from "../components/StatTile";
+import { ShareButton } from "../components/ShareButton";
 import { SyncButton } from "../components/SyncButton";
 import { ago, dayLabel, duration, int, minutes, num, pace, paceTone, pct, type Tone } from "../format";
 import type { Kpis, LivePayload, Me, TargetItem, Targets } from "../types";
@@ -292,10 +293,11 @@ function LiveBody({
       </section>
 
       {me.role === "admin" ? (
-        <section className="card">
+        <section className="card" data-share="temsilciler">
           <div className="card-head">
             <h2>Temsilciler</h2>
             <span className="hint">en acil durum üstte</span>
+            <ShareButton kart="temsilciler" baslik="Temsilciler" />
           </div>
           <div className="card-body">
             <RepBoard

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 import os
 from datetime import date, datetime, time, timedelta
@@ -26,6 +28,7 @@ from pusula.compare import (
 )
 from pusula import llm
 from pusula.commentary import commentary
+from pusula.card_share import post_channel_image, validate_png
 from pusula.commission import deals_sync_state, load_commission, load_rep_deals
 from pusula.churn import load_churn
 from pusula.config import get_org_id
@@ -82,6 +85,12 @@ class LeaveBody(BaseModel):
     rep_id: str
     day: str
     on: bool
+
+
+class ShareCardBody(BaseModel):
+    kart: str
+    baslik: str
+    png: str  # base64
 
 
 class ExcusedBody(BaseModel):
@@ -344,6 +353,24 @@ def mark_leave(body: LeaveBody, user: AuthUser = Depends(admin_user)) -> dict[st
     set_leave(body.rep_id, day, body.on, by=user.email)
     cache.clear()
     return {"rep_id": body.rep_id, "day": day, "on": body.on}
+
+
+@app.post("/api/share-card")
+def share_card(body: ShareCardBody, user: AuthUser = Depends(admin_user)) -> dict[str, Any]:
+    """Kartın görselini ekip Cliq kanalına gönderir. Buton = onay."""
+    try:
+        data = base64.b64decode(body.png.split(",", 1)[-1], validate=True)
+        validate_png(data)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Görsel geçersiz: {exc}") from exc
+    stamp = _now().strftime("%d.%m %H:%M")
+    slug = "".join(c for c in body.kart.lower() if c.isalnum() or c == "-")[:40] or "kart"
+    try:
+        ids = post_channel_image(data, f"pusula-{slug}.png", f"{body.baslik} · {stamp}")
+    except Exception as exc:  # noqa: BLE001 — Cliq hatası kullanıcıya dönsün
+        logger.exception("Kart paylaşımı başarısız")
+        raise HTTPException(status_code=502, detail=f"Cliq'e gönderilemedi: {exc}") from exc
+    return {"ok": True, "message_ids": ids}
 
 
 @app.post("/api/excused")

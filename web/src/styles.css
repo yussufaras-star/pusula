@@ -2249,3 +2249,14 @@ table.meet-list {
   width: auto;
   max-width: 90px;
 }
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.share-btn {
+  align-self: center;
+  font-size: 12.5px;
+}
