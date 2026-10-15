@@ -478,3 +478,39 @@ export interface ChurnItem {
   free?: boolean;
   paket_zoho?: string | null;
 }
+
+// pusula/paket.py load_paket.
+export interface PaketGroup {
+  key: string;
+  ad: string;
+  tur: "aktif" | "pasif" | "bos";
+  musteri: number;
+  pay: number | null;
+  sahip: Record<string, number>;
+  satiyor: number;
+  bitis_gecmis: number;
+  bitis_yakin: number;
+  bitis_ileri: number;
+  bitis_yok: number;
+  abonelik_satisi: number;
+  reco: number;
+  cikis_30g: number;
+  cikis_bu_yil: number;
+}
+
+export interface PaketExitMonth {
+  ay: string;
+  toplam: number;
+  [key: string]: number | string;
+}
+
+export interface PaketPayload {
+  available: boolean;
+  toplam?: number;
+  aktif?: number;
+  pasif?: number;
+  bos?: number;
+  gruplar?: PaketGroup[];
+  cikislar?: PaketExitMonth[];
+  yakin_gun?: number;
+}

@@ -4,6 +4,7 @@ import { usePolling } from "../api";
 import { Funnel } from "../components/Funnel";
 import { StatTile } from "../components/StatTile";
 import { ChurnBoard } from "../components/ChurnBoard";
+import { PaketBoard } from "../components/PaketBoard";
 import { RecoBoard } from "../components/RecoBoard";
 import { SyncButton } from "../components/SyncButton";
 import { SourceYield } from "../components/SourceYield";
@@ -199,6 +200,18 @@ export function ReportsPage({ me }: { me: Me }) {
               </div>
               <div className="card-body">
                 <ChurnBoard />
+              </div>
+            </section>
+          ) : null}
+
+          {isAdmin ? (
+            <section className="card">
+              <div className="card-head">
+                <h2>Paket dağılımı</h2>
+                <span className="hint">Zoho müşteri kaydındaki pakete göre müşteriler · bugünkü durum</span>
+              </div>
+              <div className="card-body">
+                <PaketBoard />
               </div>
             </section>
           ) : null}
