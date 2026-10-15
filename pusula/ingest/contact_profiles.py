@@ -6,8 +6,9 @@ yöneticisi. İlk çalıştırma tüm contact'lar, sonra Modified_Time ile deği
 
 Free'ye geçiş günü (churn): paketi Premium / Plus / Elite dışında (free,
 Freemium, Inactive...) olan müşterinin Zoho timeline'ında Paket alanının bu
-pasif bir değere çekildiği en son gün (free_since). Paket aktif pakete veya
-boşa dönünce sıfırlanır; tekrar pasife geçince yeniden okunur.
+pasif bir değere çekildiği en son gün (free_since). Premium'dan boşa çekilen
+paket de free'dir (yönetici, 15 Ekim); hiç paket girilmemişse geçiş günü yoktur.
+Paket aktif pakete dönünce sıfırlanır; tekrar pasife geçince yeniden okunur.
 """
 
 from __future__ import annotations
@@ -126,11 +127,11 @@ def _write(rows: list[Row]) -> int:
                     abonelik_bas = EXCLUDED.abonelik_bas, abonelik_bit = EXCLUDED.abonelik_bit,
                     son1_satis = EXCLUDED.son1_satis, toplam_satis = EXCLUDED.toplam_satis,
                     customer_status = EXCLUDED.customer_status, portfoy_yon = EXCLUDED.portfoy_yon,
-                    free_since = CASE WHEN NOT lower(EXCLUDED.paket) = ANY(%s)
-                                      AND NOT lower(contact_profiles.paket) = ANY(%s)
+                    free_since = CASE WHEN NOT lower(coalesce(EXCLUDED.paket, '')) = ANY(%s)
+                                      AND NOT lower(coalesce(contact_profiles.paket, '')) = ANY(%s)
                                       THEN contact_profiles.free_since END,
-                    free_checked_at = CASE WHEN NOT lower(EXCLUDED.paket) = ANY(%s)
-                                      AND NOT lower(contact_profiles.paket) = ANY(%s)
+                    free_checked_at = CASE WHEN NOT lower(coalesce(EXCLUDED.paket, '')) = ANY(%s)
+                                      AND NOT lower(coalesce(contact_profiles.paket, '')) = ANY(%s)
                                       THEN contact_profiles.free_checked_at END,
                     updated_at = now()
                 """,
@@ -140,16 +141,24 @@ def _write(rows: list[Row]) -> int:
 
 
 def free_since_from_timeline(timeline: list[dict[str, Any]]) -> date | None:
-    """Saf: Zoho timeline → Paket'in pasif bir değere (free, Inactive...) çekildiği en son gün."""
-    days = []
+    """Saf: Zoho timeline → Paket'in aktif paketten (Premium / Plus / Elite) son
+    çıkış günü: son aktif değerden sonraki ilk pasif değişiklik (free, Inactive, boş)."""
+    changes = []
     for entry in timeline:
+        day = _date(entry.get("audited_time"))
         for field in entry.get("field_history") or []:
-            new = (field.get("_value") or {}).get("new")
-            if field.get("api_name") == "Paket" and isinstance(new, str) and new.strip() and not any(a in new.lower() for a in ACTIVE_PACKAGES):
-                day = _date(entry.get("audited_time"))
-                if day:
-                    days.append(day)
-    return max(days) if days else None
+            if field.get("api_name") == "Paket" and day:
+                value = field.get("_value") or {}
+                new, old = (str(value.get(k) or "").lower() for k in ("new", "old"))
+                changes.append((entry.get("audited_time"), day,
+                                any(a in new for a in ACTIVE_PACKAGES), any(a in old for a in ACTIVE_PACKAGES)))
+    since = None
+    for _, day, active, was_active in sorted(changes, key=lambda c: c[0]):
+        if active:
+            since = None
+        elif was_active or since is None:
+            since = day
+    return since
 
 
 def sync_free_dates(limit: int = FREE_LOOKUPS) -> dict[str, int]:
@@ -160,7 +169,7 @@ def sync_free_dates(limit: int = FREE_LOOKUPS) -> dict[str, int]:
             r[0]
             for r in conn.execute(
                 """SELECT contact_id FROM contact_profiles
-                   WHERE org_id = %s AND NOT lower(paket) = ANY(%s) AND free_checked_at IS NULL
+                   WHERE org_id = %s AND NOT lower(coalesce(paket, '')) = ANY(%s) AND free_checked_at IS NULL
                      AND (abonelik_bas IS NOT NULL OR abonelik_bit IS NOT NULL
                           OR contact_id IN (SELECT contact_id::text FROM deal_packages WHERE org_id = %s))
                    ORDER BY contact_id LIMIT %s""",

@@ -33,8 +33,8 @@ Premium / Plus (yönetici, 15 Ekim): paketi Premium veya Plus (Elite de üst
 paket) olmayan herkes churn olmuştur: free, Freemium, Inactive... hepsi yukarıdaki
 free kuralına girer. Paketi Premium / Plus / Elite olan müşteri kaybedilmemiştir:
 CRM'de yenileme satışı görünmese de vadesi geçen dönemi "yeniledi" sayılır.
-Paket alanı boş müşteri (çoğu yeni satış, Zoho'da paket girilmemiş) satış
-tarihlerine göre hesaplanır.
+Paket alanı boş müşteri: Premium'dan boşa çekildiyse free'dir (boşa çekildiği
+gün kaybedildi); hiç paket girilmemişse (çoğu yeni satış) satış tarihlerine göre.
 """
 
 from __future__ import annotations
@@ -183,9 +183,10 @@ def contact_events(info: dict[str, Any], today: date) -> list[dict[str, Any]]:
     events = due_events(starts, today, renewals) if starts else []
     if events and is_active(info.get("paket")) and events[-1]["sonuc"] == "kaybedildi":
         events[-1] = {**events[-1], "sonuc": "yeniledi"}
-    if not events or not is_free(info.get("paket")):
-        return events
     since = info.get("free_since")
+    emptied = not (info.get("paket") or "").strip() and since is not None
+    if not events or not (is_free(info.get("paket")) or emptied):
+        return events
     last_sale = max((d for d, _ in info["sales"]), default=None)
     if since and last_sale and since < last_sale:
         return events
@@ -275,7 +276,7 @@ def load_churn(today: date, owner: str | None = None) -> dict[str, Any]:
                    (to_jsonb(c) ->> 'free_since')::date
             FROM contact_profiles c
             WHERE c.org_id = %s AND (c.abonelik_bas IS NOT NULL OR c.abonelik_bit IS NOT NULL
-                   OR (c.paket IS NOT NULL AND NOT lower(c.paket) = ANY(%s))) {owner_sql}
+                   OR NOT lower(coalesce(c.paket, '')) = ANY(%s)) {owner_sql}
             """,
             [org_id, list(ACTIVE_PACKAGES), *([owner] if owner else [])],
         ).fetchall()
