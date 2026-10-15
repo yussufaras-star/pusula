@@ -6,6 +6,8 @@ cevaplanan gelen arama, giden WhatsApp, ya da CRM'de lead kaydını
 değiştirmek (crm_actions, işlemi yapan temsilci). Süre en son dokunuştan,
 hiç yoksa atanmadan başlar; yeni atanan lead 24 saat dolmadan uyarı vermez.
 Saat takvim saatidir (pazartesi sabahı cumartesiden kalanlar görünür).
+Zoho'da silinen ya da kişiye dönüştürülen lead (leads.zoho_removed_at,
+pusula.ingest.lead_sync) portföyde sayılmaz.
 """
 
 from __future__ import annotations
@@ -22,7 +24,11 @@ UNTOUCHED_HOURS = 24
 NEW_STATUS_LABEL = "Yeni Müşteri Adayı"
 
 
-def _touch_sql(has_crm: bool) -> str:
+def _live_sql(has_removed: bool) -> str:
+    return " AND l.zoho_removed_at IS NULL" if has_removed else ""
+
+
+def _touch_sql(has_crm: bool, has_removed: bool = False) -> str:
     call = (
         f"e.channel = 'call' AND {is_not_planned_sql('e')} AND {is_not_future_sql('e')} "
         f"AND (e.direction = 'outbound' OR ({is_answered_inbound_sql('e')}))"
@@ -45,7 +51,7 @@ def _touch_sql(has_crm: bool) -> str:
         FROM leads l
         JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
         WHERE l.org_id = %s AND r.category = 'sales' AND r.active
-          AND {is_dokunulmamis_sql('l.status')}
+          AND {is_dokunulmamis_sql('l.status')}{_live_sql(has_removed)}
     """
 
 
@@ -76,19 +82,25 @@ def untouched_rows(rows: list[tuple[Any, ...]], now: datetime) -> list[dict[str,
 def load_portfolio(now: datetime) -> dict[str, Any]:
     org_id = get_org_id()
     with connect() as conn:
+        has_removed = bool(
+            conn.execute(
+                """SELECT 1 FROM information_schema.columns
+                   WHERE table_name = 'leads' AND column_name = 'zoho_removed_at'"""
+            ).fetchone()
+        )
         status_rows = conn.execute(
-            """
+            f"""
             SELECT l.owner_rep_id, coalesce(nullif(btrim(l.status), ''), 'Statüsüz'), count(*)
             FROM leads l
             JOIN reps r ON r.org_id = l.org_id AND r.rep_id = l.owner_rep_id
-            WHERE l.org_id = %s AND r.category = 'sales' AND r.active
+            WHERE l.org_id = %s AND r.category = 'sales' AND r.active{_live_sql(has_removed)}
             GROUP BY 1, 2
             """,
             (org_id,),
         ).fetchall()
         exists = conn.execute("SELECT to_regclass('crm_actions')").fetchone()
         has_crm = bool(exists and exists[0])
-        lead_rows = conn.execute(_touch_sql(has_crm), (org_id,)).fetchall()
+        lead_rows = conn.execute(_touch_sql(has_crm, has_removed), (org_id,)).fetchall()
     return {
         "new_status": NEW_STATUS_LABEL,
         "untouched_hours": UNTOUCHED_HOURS,

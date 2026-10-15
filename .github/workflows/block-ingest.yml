@@ -64,6 +64,11 @@ jobs:
       - name: Lead reklam kaynağı
         continue-on-error: true
         run: python scripts/lead_attribution.py
+      # Lead sahibi/statüsü Zoho'dan; silinen ya da kişiye dönüştürülen lead
+      # portföyde temsilcinin üzerinde kalmasın.
+      - name: Lead senkronu
+        continue-on-error: true
+        run: python scripts/lead_sync.py
       - name: WhatsApp ve CRM işlemleri
         continue-on-error: true
         run: python scripts/live_ingest.py
