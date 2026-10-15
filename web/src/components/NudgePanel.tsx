@@ -14,6 +14,13 @@ const STATUS_LABEL: Record<NudgeStatus, string> = {
 };
 
 /** Tempo dürtmeleri: onay bekleyenler üstte, bugün gidenler altta. */
+const KIND_LABEL: Record<string, string> = {
+  portfoy: "portföy listesi",
+  randevu_ara: "randevu öncesi arama",
+  randevu_hatirlat: "randevu hatırlatma",
+  randevu_oda: "oda açılmadı",
+};
+
 export function NudgePanel() {
   const { data, refresh } = usePolling<NudgeQueue>("/api/nudges", 60_000);
   if (!data) return null;
@@ -46,7 +53,7 @@ export function NudgePanel() {
                 <li key={n.id}>
                   <div className="nudge-meta">
                     <b>{n.rep_name}</b> · {clock(n.sent_at ?? n.created_at)} ·{" "}
-                    {n.kind === "portfoy" ? "portföy listesi · " : ""}
+                    {n.kind && n.kind !== "tempo" ? `${KIND_LABEL[n.kind]} · ` : ""}
                     <span className={`nudge-status ${n.status}`}>{STATUS_LABEL[n.status]}</span>
                     {n.shadow ? <span className="muted"> · gölge</span> : null}
                     {n.failure ? <span className="muted"> · {n.failure}</span> : null}

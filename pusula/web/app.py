@@ -588,6 +588,15 @@ def pace_nudges() -> Any:
     return jsonable_encoder(run_pace_nudges(_now()))
 
 
+@app.get("/api/cron/meeting-nudges", dependencies=[Depends(require_cron)])
+def meeting_nudges() -> Any:
+    """Randevu dürtmeleri (5 dk). GitHub Actions'tan da çalışır."""
+    require_database()
+    from pusula.meeting_nudges import run_meeting_nudges
+
+    return jsonable_encoder(run_meeting_nudges(_now()))
+
+
 @app.post("/api/ingest")
 def ingest_now(user: AuthUser = Depends(admin_user)) -> Any:
     """Paneldeki 'Verileri güncelle' butonu. Dakikada en fazla bir kez."""

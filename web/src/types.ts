@@ -216,7 +216,7 @@ export interface NudgeItem {
   sent_at: string | null;
   failure: string | null;
   shadow: boolean | null;
-  kind?: "tempo" | "portfoy";
+  kind?: "tempo" | "portfoy" | "randevu_ara" | "randevu_hatirlat" | "randevu_oda";
 }
 
 export interface NudgeQueue {
