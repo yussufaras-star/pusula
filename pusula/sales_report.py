@@ -142,7 +142,7 @@ COUNT_LIKE = {
     "arama", "giden_temas", "donus", "gelen", "ulasilan", "lead_payda", "lead_pay",
     "randevu", "katildi", "katilmadi", "sonuc_girilmedi", "whatsapp", "sure_toplam",
     "call_sec", "meet_dk", "dolu_dk", "mola_dk", "kayip_dk", "girilmemis_dk",
-    "toplanti_dk", *SUM_KEYS,
+    "toplanti_dk", "muaf_dk", *SUM_KEYS,
 }
 
 

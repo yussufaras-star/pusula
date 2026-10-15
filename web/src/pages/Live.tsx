@@ -9,7 +9,7 @@ import { LostTime } from "../components/LostTime";
 import { MeetingBoard } from "../components/MeetingBoard";
 import { NudgePanel } from "../components/NudgePanel";
 import { PortfolioCard } from "../components/PortfolioBoard";
-import { RepBoard, StatusPill } from "../components/RepBoard";
+import { RepBoard, StatusPill, type ExcuseHandlers } from "../components/RepBoard";
 import { StatTile } from "../components/StatTile";
 import { SyncButton } from "../components/SyncButton";
 import { ago, dayLabel, duration, int, minutes, num, pace, paceTone, pct, type Tone } from "../format";
@@ -167,6 +167,25 @@ function LiveBody({
     refresh();
   }
 
+  const excuse: ExcuseHandlers = {
+    async add(repId, start, end, reason) {
+      try {
+        await api("/api/excused", {
+          method: "POST",
+          body: JSON.stringify({ rep_id: repId, day: data.day, start, end, reason }),
+        });
+      } catch (err) {
+        return err instanceof Error ? err.message : "Kaydedilemedi";
+      }
+      refresh();
+      return null;
+    },
+    async remove(id) {
+      await api(`/api/excused/${id}`, { method: "DELETE" }).catch(() => undefined);
+      refresh();
+    },
+  };
+
   const t = data.team.today;
   const e = data.team.expected;
   const nowHour = data.is_today ? istanbulHour(data.now) : null;
@@ -286,6 +305,7 @@ function LiveBody({
               crmTracking={data.crm_tracking}
               now={new Date(data.now)}
               onLeave={markLeave}
+              onExcuse={excuse}
               meetings={data.meetings?.by_rep}
             />
           </div>

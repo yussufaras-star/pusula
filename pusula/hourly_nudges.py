@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -27,6 +27,21 @@ from pusula.panel_data import connect, hour_history, today_hours
 
 logger = logging.getLogger(__name__)
 _TZ = ZoneInfo("Europe/Istanbul")
+
+
+def _excused_reps(day: date, hour: int) -> set[str]:
+    """O gün izinli ya da kontrol saatiyle muaf süresi çakışan temsilciler."""
+    from pusula.leaves import load_excused, load_leaves
+    from pusula.metrics import Span
+
+    span = Span.day(day)
+    start = datetime(day.year, day.month, day.day, hour, tzinfo=_TZ)
+    end = start + timedelta(hours=1)
+    out = {rep_id for rep_id, _ in load_leaves(span)}
+    for (rep_id, _), items in load_excused(span).items():
+        if any(x.start < end and x.end > start for x in items):
+            out.add(rep_id)
+    return out
 
 
 def _control_hour(now: datetime) -> int | None:
@@ -213,7 +228,11 @@ def run_hourly_nudges(now: datetime | None = None) -> dict[str, Any]:
     sent = 0
     people_below: list[tuple[SalesRep, list[dict[str, Any]]]] = []
 
+    skip = _excused_reps(day, hour)
+
     for rep in reps:
+        if rep.rep_id in skip:
+            continue
         actual_by_hour = {
             int(row["saat"]): row for row in today_hours(rep.rep_id, day)
         }

@@ -2208,3 +2208,38 @@ table.meet-list {
   margin: 10px 0;
   font-size: 13px;
 }
+
+/* --- muaf süre ----------------------------------------------------------- */
+
+.legend .sw.tl-muaf,
+.tl-muaf {
+  background: repeating-linear-gradient(135deg, var(--axis) 0 3px, var(--surface-2) 3px 6px);
+}
+
+.status.muaf {
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+
+.status .dot.muaf {
+  background: var(--axis);
+}
+
+.excused {
+  margin-top: 2px;
+}
+
+.excused-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.excused-form input {
+  font-size: 12px;
+  padding: 2px 4px;
+  width: auto;
+  max-width: 90px;
+}

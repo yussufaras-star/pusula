@@ -1,7 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import { ago, clock, duration, hourLabel, int, minutes, num, pace, paceTone, pct } from "../format";
-import type { MeetingSummary, RepCard, RepStatus } from "../types";
+import type { Excused, MeetingSummary, RepCard, RepStatus } from "../types";
 
 const STATUS_LABEL: Record<RepStatus, string> = {
   aktif: "Aktif",
@@ -13,6 +13,7 @@ const STATUS_LABEL: Record<RepStatus, string> = {
   mesai_disi: "Mesai dışı",
   gecmis: "Geçmiş gün",
   izinli: "İzinli",
+  muaf: "Muaf",
 };
 
 const STATUS_ORDER: Record<RepStatus, number> = {
@@ -22,9 +23,10 @@ const STATUS_ORDER: Record<RepStatus, number> = {
   aktif: 3,
   aramada: 4,
   toplantida: 5,
-  mesai_disi: 6,
-  gecmis: 7,
-  izinli: 8,
+  mesai_disi: 7,
+  gecmis: 8,
+  muaf: 6,
+  izinli: 9,
 };
 
 export function StatusPill({ status }: { status: RepStatus }) {
@@ -84,10 +86,58 @@ interface Props {
   crmTracking: boolean;
   now: Date;
   onLeave?: (repId: string, on: boolean) => void;
+  onExcuse?: ExcuseHandlers;
   meetings?: Record<string, MeetingSummary>;
 }
 
-export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now, onLeave, meetings }: Props) {
+export interface ExcuseHandlers {
+  add: (repId: string, start: string, end: string, reason: string) => Promise<string | null>;
+  remove: (id: number) => void;
+}
+
+/** Muaf süreler (eğitim vb.) ve ekleme formu; yalnız yönetici. */
+function ExcusedCell({ card, handlers }: { card: RepCard; handlers: ExcuseHandlers }) {
+  const [open, setOpen] = useState(false);
+  const [start, setStart] = useState("10:00");
+  const [end, setEnd] = useState("11:00");
+  const [reason, setReason] = useState("Eğitim");
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    const err = await handlers.add(card.rep_id, start, end, reason);
+    setError(err);
+    if (!err) setOpen(false);
+  }
+
+  return (
+    <div className="excused">
+      {card.excused.map((x: Excused) => (
+        <div key={x.id} className="sub" title="Bu aralık kayıp ve mola sayılmaz">
+          {clock(x.start)}–{clock(x.end)} {x.reason ?? "muaf"}{" "}
+          <button className="link-btn" aria-label="Muaf süreyi sil" onClick={() => handlers.remove(x.id)}>
+            ×
+          </button>
+        </div>
+      ))}
+      {open ? (
+        <div className="excused-form">
+          <input type="time" value={start} onChange={(e) => setStart(e.target.value)} aria-label="Başlangıç" />
+          <input type="time" value={end} onChange={(e) => setEnd(e.target.value)} aria-label="Bitiş" />
+          <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Neden" aria-label="Neden" maxLength={80} />
+          <button className="link-btn" onClick={save}>kaydet</button>
+          <button className="link-btn" onClick={() => setOpen(false)}>vazgeç</button>
+          {error ? <div className="sub warn-text">{error}</div> : null}
+        </div>
+      ) : (
+        <button className="link-btn" onClick={() => setOpen(true)} title="Eğitim, iç toplantı gibi doluluğa girmeyecek süre">
+          muaf süre ekle
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now, onLeave, onExcuse, meetings }: Props) {
   const rows = useMemo(
     () =>
       [...reps].sort(
@@ -133,6 +183,7 @@ export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now, onLeave, m
                       {r.on_leave ? "izni geri al" : "izinli yap"}
                     </button>
                   ) : null}
+                  {onExcuse && !r.on_leave ? <ExcusedCell card={r} handlers={onExcuse} /> : null}
                 </td>
                 <td>
                   <StatusPill status={r.status} />
@@ -200,7 +251,7 @@ export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now, onLeave, m
       </table>
       <p className="muted" style={{ fontSize: 12, margin: "10px 0 0" }}>
         Hareketsizlik: mesai içinde son arama, toplantı, WhatsApp veya CRM işleminden bu yana
-        geçen süre; süren toplantı hareketsizlik sayılmaz. İzinli gün doluluğa ve ekip beklentisine girmez. Veri tazeliğiyle sınırlıdır. Tempo çizgisi: son 90 günde aynı gün tipinde bu
+        geçen süre; süren toplantı hareketsizlik sayılmaz. İzinli gün doluluğa ve ekip beklentisine girmez; muaf süre (eğitim vb.) kayıp ve mola sayılmaz, o sırada dürtme gitmez. Veri tazeliğiyle sınırlıdır. Tempo çizgisi: son 90 günde aynı gün tipinde bu
         saate kadar yapılan ortalama.
       </p>
     </div>
