@@ -137,13 +137,15 @@ def get_records(
     fields: Sequence[str],
     modified_since: datetime | None = None,
     per_page: int = _PAGE_SIZE,
+    extra_params: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Modül kayıtlarını listeler, tek tek yield eder.
 
     modified_since verilirse If-Modified-Since header'ı ile delta
     çekilir; değişiklik yoksa (304) hiç kayıt üretmez. Sayfalama
     otomatiktir; 2000 kayıt sınırından sonra Zoho'nun verdiği
-    next_page_token kullanılır.
+    next_page_token kullanılır. extra_params her sayfaya eklenir
+    (ör. Leads için converted=both).
     """
     headers: dict[str, str] = {}
     if modified_since is not None:
@@ -152,7 +154,7 @@ def get_records(
     page = 1
     page_token: str | None = None
     while True:
-        params: dict[str, Any] = {"fields": ",".join(fields), "per_page": per_page}
+        params: dict[str, Any] = {"fields": ",".join(fields), "per_page": per_page, **(extra_params or {})}
         if page_token is not None:
             params["page_token"] = page_token
         else:

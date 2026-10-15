@@ -6,6 +6,11 @@ UTM_Source (meta, google, instagram…), UTM_Campaign ve UTM_Content
 
 İlk çalıştırma tüm lead'leri çeker (imleç yok), sonra Modified_Time ile
 yalnız değişenler. İmleç sync_state 'zoho_lead_attribution'.
+
+Created_Time → zoho_created_at (lead oluşma zamanı; Raporlar'da lead ↔ ciro
+korelasyonu). Kişiye dönüştürülen lead'ler de çekilir (converted=both), yoksa
+satışa dönen lead'ler sayımdan düşer. Sütun ilk eklendiğinde imleç yok
+sayılır ve tüm lead'ler bir kez yeniden çekilir.
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ from pusula.zoho.crm import get_records
 logger = logging.getLogger(__name__)
 
 SOURCE = "zoho_lead_attribution"
-FIELDS = ("id", "UTM_Source", "UTM_Campaign", "UTM_Content", "Modified_Time")
+FIELDS = ("id", "UTM_Source", "UTM_Campaign", "UTM_Content", "Created_Time", "Modified_Time")
 OVERLAP = timedelta(minutes=5)
 BATCH = 500
 
@@ -39,6 +44,12 @@ CREATE TABLE IF NOT EXISTS lead_attribution (
     PRIMARY KEY (org_id, lead_id)
 );
 """
+CREATED_COLUMN_SQL = """
+ALTER TABLE lead_attribution ADD COLUMN IF NOT EXISTS zoho_created_at timestamptz;
+CREATE INDEX IF NOT EXISTS idx_lead_attribution_created ON lead_attribution (org_id, zoho_created_at);
+"""
+
+Row = tuple[str, str | None, str | None, str | None, datetime | None]
 
 
 def clean(value: Any) -> str | None:
@@ -49,7 +60,7 @@ def clean(value: Any) -> str | None:
     return text or None
 
 
-def row_from_record(record: dict[str, Any]) -> tuple[str, str | None, str | None, str | None] | None:
+def row_from_record(record: dict[str, Any]) -> Row | None:
     rid = record.get("id")
     if rid is None:
         return None
@@ -58,10 +69,11 @@ def row_from_record(record: dict[str, Any]) -> tuple[str, str | None, str | None
         clean(record.get("UTM_Source")),
         clean(record.get("UTM_Campaign")),
         clean(record.get("UTM_Content")),
+        parse_zoho_time(record.get("Created_Time")),
     )
 
 
-def _write(rows: list[tuple[str, str | None, str | None, str | None]]) -> int:
+def _write(rows: list[Row]) -> int:
     if not rows:
         return 0
     org_id = get_org_id()
@@ -69,12 +81,14 @@ def _write(rows: list[tuple[str, str | None, str | None, str | None]]) -> int:
         with conn.cursor() as cur:
             cur.executemany(
                 """
-                INSERT INTO lead_attribution (org_id, lead_id, utm_source, utm_campaign, utm_content)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO lead_attribution
+                    (org_id, lead_id, utm_source, utm_campaign, utm_content, zoho_created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (org_id, lead_id) DO UPDATE
                 SET utm_source = EXCLUDED.utm_source,
                     utm_campaign = EXCLUDED.utm_campaign,
                     utm_content = EXCLUDED.utm_content,
+                    zoho_created_at = coalesce(EXCLUDED.zoho_created_at, lead_attribution.zoho_created_at),
                     updated_at = now()
                 """,
                 [(org_id, *row) for row in rows],
@@ -83,18 +97,25 @@ def _write(rows: list[tuple[str, str | None, str | None, str | None]]) -> int:
 
 
 def _fetch(since: datetime | None) -> Iterator[dict[str, Any]]:
-    yield from get_records("Leads", FIELDS, modified_since=since)
+    yield from get_records("Leads", FIELDS, modified_since=since, extra_params={"converted": "both"})
 
 
 def sync_lead_attribution(now: datetime) -> dict[str, int]:
     with client.transaction() as conn:
         conn.execute(SCHEMA_SQL)
+        had_created = conn.execute(
+            """
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'lead_attribution' AND column_name = 'zoho_created_at'
+            """
+        ).fetchone()
+        conn.execute(CREATED_COLUMN_SQL)
     state = client.get_sync_state(SOURCE)
-    cursor = state.last_synced_at if state and state.last_synced_at else None
+    cursor = state.last_synced_at if had_created and state and state.last_synced_at else None
     since = cursor - OVERLAP if cursor else None
     fetched = written = 0
     newest = cursor
-    batch: list[tuple[str, str | None, str | None, str | None]] = []
+    batch: list[Row] = []
     for record in _fetch(since):
         fetched += 1
         row = row_from_record(record)
