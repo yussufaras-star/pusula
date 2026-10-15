@@ -242,6 +242,9 @@ export function LeadCiro() {
           : "Korelasyon ilişkiyi gösterir, nedeni değil."}{" "}
         {gran === "gun" ? "Son 90 gün; pazar günleri satış olmadığı için günlük r gürültülüdür." : null}
         {gran === "yil" ? "Veri Ekim 2025'te başlar; yıllıkta korelasyon için yeterli nokta yok." : null}
+        {data.toplu_aktarim?.length
+          ? ` Toplu aktarım sayılmadı: ${data.toplu_aktarim.map((x) => `${d(x.gun)} (${int(x.lead)} lead)`).join(", ")}.`
+          : null}
       </p>
     </>
   );

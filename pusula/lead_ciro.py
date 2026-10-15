@@ -10,6 +10,10 @@ Korelasyon Pearson r: aynı dönem (gecikme 0) ve lead'in satışa dönme süres
 için gecikmeli (bu dönemin lead'i ↔ N dönem sonraki ciro). Süren dönem
 (yarım) seride gösterilir ama hesaba girmez. r ilişkiyi gösterir, nedeni
 değil; az noktayla (< MIN_POINTS) hesaplanmaz.
+
+Toplu aktarım günleri (ör. 1–2 Nisan 2026: ~16,7 bin lead; normal gün ~85)
+gerçek lead akışı değildir: günlük adedi medyanın IMPORT_FACTOR katını ve
+IMPORT_MIN'i aşan günlerin lead'leri sayılmaz, payload'da listelenir.
 """
 
 from __future__ import annotations
@@ -32,6 +36,8 @@ DAYS_BACK = 90
 WEEKS_BACK = 26
 MAX_LAG = {"gun": 14, "hafta": 4, "ay": 2, "yil": 0}
 MIN_POINTS = 5
+IMPORT_FACTOR = 10
+IMPORT_MIN = 500
 
 _WON_DAY = "coalesce(closing_date, (created_at AT TIME ZONE 'Europe/Istanbul')::date)"
 
@@ -98,6 +104,18 @@ def strength(r: float | None) -> str | None:
     return f"{kind} {'pozitif' if r > 0 else 'negatif'}"
 
 
+def split_imports(leads: Daily) -> tuple[Daily, list[dict[str, Any]]]:
+    """Saf: toplu aktarım günlerini ayır (medyanın IMPORT_FACTOR katı ve IMPORT_MIN üstü)."""
+    counts = sorted(v for v in leads.values() if v > 0)
+    if not counts:
+        return leads, []
+    median = counts[len(counts) // 2]
+    limit = max(IMPORT_MIN, IMPORT_FACTOR * median)
+    kept = {d: v for d, v in leads.items() if v <= limit}
+    dropped = [{"gun": d, "lead": int(v)} for d, v in sorted(leads.items()) if v > limit]
+    return kept, dropped
+
+
 def series(leads: Daily, ciro: Daily, sales: Daily, gran: str, today: date) -> list[dict[str, Any]]:
     """Saf: dönem başına lead adedi, ciro, satış; süren dönem işaretli."""
     agg: dict[date, list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0])
@@ -131,7 +149,10 @@ def lags(rows: list[dict[str, Any]], gran: str) -> list[dict[str, Any]]:
     return out
 
 
-def build(leads: Daily, ciro: Daily, sales: Daily, gran: str, today: date) -> dict[str, Any]:
+def build(
+    leads: Daily, ciro: Daily, sales: Daily, gran: str, today: date,
+    imports: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     rows = series(leads, ciro, sales, gran, today)
     by_lag = lags(rows, gran)
     same = by_lag[0]
@@ -150,6 +171,7 @@ def build(leads: Daily, ciro: Daily, sales: Daily, gran: str, today: date) -> di
         "en_iyi": best,
         "lead_basi_ciro": round(total_ciro / total_lead, 2) if total_lead else None,
         "min_nokta": MIN_POINTS,
+        "toplu_aktarim": imports or [],
     }
 
 
@@ -178,6 +200,7 @@ def load_lead_ciro(gran: str, today: date) -> dict[str, Any]:
         ).fetchone()
         if not has:
             return {"available": False, "gran": gran}
+        # Medyan için tüm seri (SERIES_START'tan); pencere sonra kesilir.
         lead_rows = conn.execute(
             """
             SELECT (zoho_created_at AT TIME ZONE 'Europe/Istanbul')::date, count(*), 0
@@ -185,7 +208,7 @@ def load_lead_ciro(gran: str, today: date) -> dict[str, Any]:
             WHERE org_id = %s AND zoho_created_at >= %s AND zoho_created_at < %s
             GROUP BY 1
             """,
-            (org_id, start, end),
+            (org_id, SERIES_START, end),
         ).fetchall()
         # Günlük seride ileri tarihli kapanış bugünden sonraya düşer; ay/yıl
         # toplamı onları sayar (yöneticinin aylık toplam tanımı).
@@ -200,6 +223,9 @@ def load_lead_ciro(gran: str, today: date) -> dict[str, Any]:
             """,
             (org_id, WON_STAGE, RENEWAL_PACKAGE, start, last),
         ).fetchall()
-    leads, _ = _daily(lead_rows)
+    all_leads, _ = _daily(lead_rows)
+    kept, imports = split_imports(all_leads)
+    leads = {d: v for d, v in kept.items() if d >= start}
+    imports = [x for x in imports if x["gun"] >= start]
     ciro, sales = _daily(deal_rows)
-    return {"available": True, **build(leads, ciro, sales, gran, today)}
+    return {"available": True, **build(leads, ciro, sales, gran, today, imports)}

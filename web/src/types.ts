@@ -547,4 +547,6 @@ export interface LeadCiroPayload {
   en_iyi?: LeadCiroLag | null;
   lead_basi_ciro?: number | null;
   min_nokta?: number;
+  /** Toplu aktarım günleri: lead'leri sayılmaz. */
+  toplu_aktarim?: { gun: string; lead: number }[];
 }

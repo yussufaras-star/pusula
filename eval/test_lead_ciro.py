@@ -2,7 +2,7 @@
 
 from datetime import date, timedelta
 
-from pusula.lead_ciro import build, bucket, lags, pearson, series, strength
+from pusula.lead_ciro import build, bucket, lags, pearson, series, split_imports, strength
 
 TODAY = date(2026, 10, 15)  # perşembe
 
@@ -55,3 +55,12 @@ def test_yearly_has_too_few_points() -> None:
     out = build({date(2026, 3, 1): 100}, {date(2026, 3, 2): 5000.0}, {}, "yil", TODAY)
     assert [r["etiket"] for r in out["seri"]] == ["2025", "2026"]
     assert out["r"] is None and out["en_iyi"] is None
+
+
+def test_bulk_import_days_are_dropped() -> None:
+    leads = {date(2026, 3, d): 80 + d for d in range(1, 29)}
+    leads[date(2026, 4, 2)] = 12465
+    leads[date(2026, 4, 3)] = 400  # yüksek ama IMPORT_MIN altı: kalır
+    kept, dropped = split_imports(leads)
+    assert dropped == [{"gun": date(2026, 4, 2), "lead": 12465}]
+    assert date(2026, 4, 3) in kept and date(2026, 4, 2) not in kept
