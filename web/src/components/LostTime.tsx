@@ -9,6 +9,7 @@ const KIND_LABEL: Record<SegmentKind, string> = {
   mola: "Mola",
   kayip: "Kayıp",
   girilmemis: "Sonucu girilmemiş toplantı",
+  muaf: "Muaf (eğitim vb.)",
 };
 
 /** Mesai: hafta içi 09-18, cumartesi 09-15 (pusula.metrics ile aynı). */
@@ -74,7 +75,7 @@ export function LostTime({ reps, day, now }: Props) {
   return (
     <div className="lost">
       <div className="legend" style={{ marginBottom: 10 }}>
-        {(["dolu", "toplanti", "mola", "kayip", "girilmemis"] as SegmentKind[]).map((k) => (
+        {(["dolu", "toplanti", "mola", "kayip", "girilmemis", "muaf"] as SegmentKind[]).map((k) => (
           <span key={k} className="key">
             <span className={`sw tl-${k}`} /> {KIND_LABEL[k]}
           </span>
@@ -132,7 +133,9 @@ export function LostTime({ reps, day, now }: Props) {
                 className="lost-sum"
                 title={`Mola olarak düşülen: ${minutes(r.today.mola_dk)}${
                   r.today.toplanti_dk > 0 ? ` · toplantıda geçen: ${minutes(r.today.toplanti_dk)}` : ""
-                }${r.today.girilmemis_dk > 0 ? ` · sonucu girilmemiş toplantı: ${minutes(r.today.girilmemis_dk)}` : ""}`}
+                }${r.today.girilmemis_dk > 0 ? ` · sonucu girilmemiş toplantı: ${minutes(r.today.girilmemis_dk)}` : ""}${
+                  r.today.muaf_dk > 0 ? ` · muaf (doluluğa girmez): ${minutes(r.today.muaf_dk)}` : ""
+                }`}
               >
                 <b>{minutes(r.today.kayip_dk)}</b>
                 <span className="sub">kayıp zaman</span>

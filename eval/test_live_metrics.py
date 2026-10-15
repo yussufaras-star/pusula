@@ -148,3 +148,30 @@ def test_rep_on_leave_is_excluded_from_team_expectation() -> None:
     assert cards["r2"]["expected"]["arama"] == 0
     assert out["team"]["expected"]["arama"] == pytest.approx(10)
     assert out["team"]["expected"]["n_reps"] == 1
+
+
+def test_excused_window_sets_status_and_restarts_idle() -> None:
+    from pusula.leaves import Excused
+
+    first = at(MONDAY, 9, 0)
+    training = Excused(1, "r1", MONDAY, at(MONDAY, 9, 30), at(MONDAY, 10, 30), "Eğitim")
+    activity = {"r1": {"first_at": first, "last_active_at": at(MONDAY, 9, 20)}}
+
+    during = at(MONDAY, 10, 0)
+    out = build_live(
+        day=MONDAY, now=during, reps=[("r1", "Ayşe")], today_rows=[], history={},
+        activity=activity, as_of=during, excused={"r1": [training]},
+    )
+    card = out["reps"][0]
+    assert card["status"] == "muaf"
+    assert card["idle_min"] is None
+    assert card["excused"][0]["reason"] == "Eğitim"
+
+    after = at(MONDAY, 10, 40)
+    out = build_live(
+        day=MONDAY, now=after, reps=[("r1", "Ayşe")], today_rows=[], history={},
+        activity=activity, as_of=after, excused={"r1": [training]},
+    )
+    card = out["reps"][0]
+    assert card["status"] == "aktif"
+    assert card["idle_min"] == 10

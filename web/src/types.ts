@@ -25,6 +25,7 @@ export interface Kpis {
   kayip_dk: number;
   girilmemis_dk: number;
   toplanti_dk: number;
+  muaf_dk: number;
   mesai_dk: number;
   doluluk: number | null;
   n_reps: number;
@@ -39,9 +40,18 @@ export type RepStatus =
   | "baslamadi"
   | "mesai_disi"
   | "gecmis"
-  | "izinli";
+  | "izinli"
+  | "muaf";
 
-export type SegmentKind = "dolu" | "toplanti" | "mola" | "kayip" | "girilmemis";
+export type SegmentKind = "dolu" | "toplanti" | "mola" | "kayip" | "girilmemis" | "muaf";
+
+/** Panelden girilen muaf süre (eğitim vb.); doluluğa girmez. */
+export interface Excused {
+  id: number;
+  start: string;
+  end: string;
+  reason: string | null;
+}
 
 export interface Segment {
   start: string;
@@ -67,6 +77,7 @@ export interface RepCard {
   idle_min: number | null;
   status: RepStatus;
   on_leave: boolean;
+  excused: Excused[];
   hours: HourRow[];
   timeline: Segment[];
   gaps: Gap[];

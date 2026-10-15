@@ -70,6 +70,7 @@ function kpis(arama: number, avail: number, r: () => number, nReps = 1): Kpis {
     mola_dk: mola,
     kayip_dk: kayip,
     girilmemis_dk: 0,
+    muaf_dk: 0,
     toplanti_dk: Math.round(busy * 0.2),
     mesai_dk: mesai,
     doluluk: mesai ? Math.round((Math.min(busy, mesai) / (Math.min(busy, mesai) + kayip)) * 1000) / 10 : null,
@@ -166,6 +167,7 @@ function live(): LivePayload {
       idle_min: perf === 0 ? ((nowHour - 9) * 60 + minute) : idle,
       status: LEAVES.has(id) ? "izinli" : idx === 2 ? "toplantida" : status,
       on_leave: LEAVES.has(id),
+      excused: EXCUSED.filter((x) => x.rep_id === id).map(({ rep_id: _, ...x }) => x),
       hours: hourRows,
       ...timeline(perf, at, nowHour, minute, r),
     };
@@ -328,6 +330,7 @@ function mockMeetings(repIds: string[], now: Date): Meetings {
 }
 
 const LEAVES = new Set<string>(["r5"]);
+const EXCUSED: { id: number; rep_id: string; start: string; end: string; reason: string | null }[] = [];
 
 const STATUSES: [string, number][] = [
   ["Yeni Müşteri Adayı", 12],
@@ -489,6 +492,16 @@ export function mockApi(method: string, url: string): unknown {
   if (path === "/api/live") return live();
   if (path === "/api/leaves" && method === "POST") {
     LEAVES.has("r5") ? LEAVES.delete("r5") : LEAVES.add("r5");
+    return { ok: true };
+  }
+  if (path === "/api/excused" && method === "POST") {
+    const d = new Date();
+    d.setHours(10, 0, 0, 0);
+    EXCUSED.push({ id: EXCUSED.length + 1, rep_id: "r2", start: d.toISOString(), end: new Date(d.getTime() + 3600000).toISOString(), reason: "Eğitim" });
+    return { id: EXCUSED.length };
+  }
+  if (path.startsWith("/api/excused/") && method === "DELETE") {
+    EXCUSED.splice(0, EXCUSED.length);
     return { ok: true };
   }
   if (path === "/api/sales-report") return mockReport();

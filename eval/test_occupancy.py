@@ -135,3 +135,38 @@ def test_meeting_part_of_busy_time_is_shown_separately_but_counts_as_busy() -> N
     assert rows[0]["dolu_dk"] == pytest.approx(450)
     assert rows[0]["toplanti_dk"] == pytest.approx(40)
     assert all(g["kind"] != "toplanti" for g in gaps_report(t))
+
+
+def test_excused_time_is_neither_lost_nor_break() -> None:
+    # 09-10 dolu, 10-12 boş (eğitim 10-11), 12-18 dolu.
+    busy = [(at(9), at(10)), (at(12), at(18))]
+    t = day_timeline(busy, MONDAY, at(23), excused=[(at(10), at(11))])
+    assert t.total("muaf") == pytest.approx(60)
+    assert t.total("mola") == pytest.approx(60)
+    assert t.total("kayip") == pytest.approx(0)
+    row = finish(aggregate({("r1", MONDAY): t}, "rep")[0])
+    assert row["doluluk"] == 100.0
+    assert row["muaf_dk"] == pytest.approx(60)
+
+
+def test_activity_inside_excused_window_still_counts_as_busy() -> None:
+    busy = [(at(9), at(18))]
+    t = day_timeline(busy, MONDAY, at(23), excused=[(at(10), at(11))])
+    assert t.total("dolu") == pytest.approx(540)
+    assert t.total("muaf") == 0
+
+
+def test_excused_windows_reach_timelines_for() -> None:
+    from pusula.leaves import Excused
+    from pusula.metrics import Span
+    from pusula.occupancy import timelines_for
+
+    worked = {("r1", MONDAY): [(at(9), at(10), "dolu")]}
+    x = Excused(1, "r1", MONDAY, at(10), at(18), "Eğitim")
+    out = timelines_for(
+        Span.day(MONDAY), at(23), rep_ids=["r1"], intervals=worked, leaves=set(),
+        excused={("r1", MONDAY): [x]},
+    )
+    t = out[("r1", MONDAY)]
+    assert t.total("muaf") == pytest.approx(480)
+    assert t.total("kayip") == 0

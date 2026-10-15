@@ -24,7 +24,7 @@ from pusula.metrics import (
     query_kpis,
     shift_bounds,
 )
-from pusula.leaves import load_leaves
+from pusula.leaves import Excused, load_excused, load_leaves
 from pusula.meetings import meetings_payload
 from pusula.occupancy import (
     DayTimeline,
@@ -89,10 +89,13 @@ def rep_status(
     idle_min: float | None,
     in_meeting: bool = False,
     in_call: bool = False,
+    excused: bool = False,
 ) -> str:
     """Süren toplantı veya arama hareketsizlik sayılmaz."""
     if not in_shift(now):
         return "mesai_disi"
+    if excused:
+        return "muaf"
     if in_meeting:
         return "toplantida"
     if in_call:
@@ -176,10 +179,12 @@ def build_live(
     crm_tracking: bool = False,
     timelines: dict[str, DayTimeline] | None = None,
     on_leave: frozenset[str] | set[str] = frozenset(),
+    excused: dict[str, list[Excused]] | None = None,
 ) -> dict[str, Any]:
     """Kokpit yükü. today_rows: query_kpis(group='rep_hour') + doluluk dakikaları."""
     span = Span.day(day)
     timelines = timelines or {}
+    excused = excused or {}
     is_today = now.astimezone(TZ).date() == day
     by_rep_hour: dict[str, dict[int, dict[str, Any]]] = defaultdict(dict)
     for row in today_rows:
@@ -198,9 +203,16 @@ def build_live(
         expected = finish(combine([]) if leave else baseline_until(hist_hours, cutoff))
         act = activity.get(rep_id, {})
         busy_now = bool(act.get("in_meeting") or act.get("in_call"))
+        windows = excused.get(rep_id, [])
+        excused_now = any(x.start <= now < x.end for x in windows)
+        # Muaf süre hareketsizliği sıfırlar: sayaç bitişinden başlar.
+        last_active = max(
+            [t for t in [act.get("last_active_at"), *(x.end for x in windows if x.end <= now)] if t],
+            default=None,
+        )
         idle = (
-            (0.0 if busy_now else idle_minutes(act.get("last_active_at"), now=now, data_as_of=as_of))
-            if is_today and not leave
+            (0.0 if busy_now else idle_minutes(last_active, now=now, data_as_of=as_of))
+            if is_today and not leave and not excused_now
             else None
         )
         timeline = timelines.get(rep_id)
@@ -226,9 +238,13 @@ def build_live(
                     idle_min=idle,
                     in_meeting=bool(act.get("in_meeting")),
                     in_call=bool(act.get("in_call")),
+                    excused=excused_now,
                 )
                 if is_today
                 else "gecmis",
+                "excused": [
+                    {"id": x.id, "start": x.start, "end": x.end, "reason": x.reason} for x in windows
+                ],
                 "timeline": [
                     {"start": seg.start, "end": seg.end, "kind": seg.kind}
                     for seg in (timeline.segments if timeline else [])
@@ -306,7 +322,8 @@ def load_live(
     cutoff = min(now, as_of) if is_today and as_of else (now if is_today else span.end)
     rep_ids = [rep_id for rep_id, _ in reps]
     leaves = load_leaves(span)
-    timelines = timelines_for(span, cutoff, rep_ids=rep_ids, leaves=leaves)
+    excused = load_excused(span)
+    timelines = timelines_for(span, cutoff, rep_ids=rep_ids, leaves=leaves, excused=excused)
     occ = aggregate(timelines, "rep_hour", running_day=day if is_today else None)
     history = history if history is not None else history_by_rep_hour(day, now)
     payload = build_live(
@@ -316,6 +333,7 @@ def load_live(
         today_rows=attach(query_kpis(span, group="rep_hour", now=now), occ),
         timelines={rep_id: t for (rep_id, _), t in timelines.items()},
         on_leave={rep_id for rep_id, leave_day in leaves if leave_day == day},
+        excused={rep_id: items for (rep_id, d), items in excused.items() if d == day},
         history=history,
         activity=last_activity(day, now=now),
         as_of=as_of,

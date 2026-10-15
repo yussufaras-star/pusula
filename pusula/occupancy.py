@@ -24,6 +24,10 @@ zamandır. Doluluk = dolu / (dolu + kayıp).
 Sonucu girilmemiş, bitmiş toplantının süresi kayıptır ve moladan düşülmez;
 şeritte ayrı ("girilmemis") görünür, kayip_dk içinde sayılır.
 
+Panelden girilen muaf süre (eğitim vb.) içindeki boşluk ne mola ne kayıptır;
+şeritte "muaf" görünür, doluluk paydasına girmez. Aralıkta yapılan faaliyet
+yine dolu sayılır.
+
 Panelden izinli işaretlenen temsilci-günü ölçüme girmez. Hiç faaliyeti
 olmayan gün de (işaretlenmemiş izin, rapor) girmez; yalnız süren gün
 (bugün) sayılır, çünkü başlamamış olmak da kayıptır.
@@ -39,7 +43,7 @@ from typing import Any
 
 from pusula.config import get_org_id
 from pusula.ingest.zoho_meeting import busy_interval
-from pusula.leaves import load_leaves
+from pusula.leaves import Excused, load_excused, load_leaves
 from pusula.metrics import TZ, Group, Span, shift_bounds
 from pusula.panel_data import MOLA_SAAT, _meeting_duration_min_sql, connect
 from pusula.temas import (
@@ -67,7 +71,7 @@ Tagged = tuple[datetime, datetime, str]
 class Segment:
     start: datetime
     end: datetime
-    kind: str  # "dolu" | "mola" | "kayip" | "girilmemis"
+    kind: str  # "dolu" | "toplanti" | "mola" | "kayip" | "girilmemis" | "muaf"
 
     @property
     def minutes(self) -> float:
@@ -133,6 +137,7 @@ def day_timeline(
     *,
     pending: Iterable[Interval] = (),
     meetings: Iterable[Interval] = (),
+    excused: Iterable[Interval] = (),
     mola_dk: float = MOLA_DK,
 ) -> DayTimeline:
     """Günün şeridi: [09:00, min(mesai sonu, cut)) içinde dolu / mola / kayıp.
@@ -140,6 +145,7 @@ def day_timeline(
     pending: sonucu girilmemiş toplantılar; dolu değil, kayıptır, mola olmaz.
     meetings: dolu aralıkların toplantı olan kısmı; şeritte "toplanti"
     görünür, toplamda dolu sayılır (intervals içinde de olmalıdır).
+    excused: muaf süreler; kalan boşluğun bu kısmı "muaf", mola olmaz.
     """
     timeline = DayTimeline(day)
     bounds = shift_bounds(day)
@@ -159,6 +165,15 @@ def day_timeline(
     if cursor < hi:
         gaps.append((cursor, hi))
     pieces = [piece for gap in gaps for piece in _subtract(gap, covers)]
+    off = merge((max(a, lo), min(b, hi)) for a, b in excused if b > lo and a < hi)
+    if off:
+        pieces = [
+            part
+            for piece in pieces
+            for part in (
+                _subtract((piece[0], piece[1]), off, covered="muaf") if piece[2] == "bos" else [piece]
+            )
+        ]
 
     # Mola serbest boşlukların en uzunlarından; eşitlikte erken olan. Baştan kesilir.
     remaining = mola_dk
@@ -178,8 +193,8 @@ def day_timeline(
         for a, b, kind in _subtract(span, in_meeting, covered="toplanti", free="dolu")
     ]
     for a, b, kind in pieces:
-        if kind == "girilmemis":
-            segments.append(Segment(a, b, "girilmemis"))
+        if kind in ("girilmemis", "muaf"):
+            segments.append(Segment(a, b, kind))
             continue
         take = mola_of.get(a, 0.0)
         split = a + timedelta(minutes=take)
@@ -206,6 +221,7 @@ _SUM_INTO = {
     "mola": ("mola_dk",),
     "kayip": ("kayip_dk",),
     "girilmemis": ("kayip_dk", "girilmemis_dk"),
+    "muaf": ("muaf_dk",),
 }
 
 
@@ -223,6 +239,7 @@ def aggregate(
     sums: dict[tuple[str | None, str | None], dict[str, float]] = defaultdict(
         lambda: {
             "dolu_dk": 0.0, "toplanti_dk": 0.0, "mola_dk": 0.0, "kayip_dk": 0.0, "girilmemis_dk": 0.0,
+            "muaf_dk": 0.0,
         }
     )
     for (rep_id, day), timeline in timelines.items():
@@ -408,13 +425,17 @@ def timelines_for(
     isodow: Sequence[int] | None = None,
     intervals: dict[tuple[str, date], list[Tagged]] | None = None,
     leaves: set[tuple[str, date]] | None = None,
+    excused: dict[tuple[str, date], list[Excused]] | None = None,
 ) -> dict[tuple[str, date], DayTimeline]:
     """Aralıktaki her mesai günü × temsilci için şerit; izinli günler yok."""
     if intervals is None:
         intervals = fetch_intervals(Span(span.start, min(span.end, cut)), rep_ids=rep_ids, isodow=isodow)
         if leaves is None:
             leaves = load_leaves(span)
+        if excused is None:
+            excused = load_excused(span)
     leaves = leaves or set()
+    excused = excused or {}
     out: dict[tuple[str, date], DayTimeline] = {}
     day = span.start.astimezone(TZ).date()
     last = (min(span.end, cut) - timedelta(microseconds=1)).astimezone(TZ).date()
@@ -431,6 +452,7 @@ def timelines_for(
                     cut,
                     pending=[(a, b) for a, b, kind in rows if kind == "girilmemis"],
                     meetings=[(a, b) for a, b, kind in rows if kind == "toplanti"],
+                    excused=[(x.start, x.end) for x in excused.get((rep_id, day), [])],
                 )
         day += timedelta(days=1)
     return out
@@ -465,7 +487,7 @@ def attach(rows: list[dict[str, Any]], occ: list[dict[str, Any]]) -> list[dict[s
             target = {"rep_id": key[0], "bucket": key[1]}
             index[key] = target
             out.append(target)
-        for name in ("dolu_dk", "toplanti_dk", "mola_dk", "kayip_dk", "girilmemis_dk"):
+        for name in ("dolu_dk", "toplanti_dk", "mola_dk", "kayip_dk", "girilmemis_dk", "muaf_dk"):
             target[name] = item[name]
     return out
 
@@ -475,6 +497,6 @@ def gaps_report(timeline: DayTimeline, *, min_minutes: float = 5.0) -> list[dict
     items = [
         {"start": s.start, "end": s.end, "kind": s.kind, "minutes": round(s.minutes, 1)}
         for s in timeline.segments
-        if s.kind not in ("dolu", "toplanti") and s.minutes >= min_minutes
+        if s.kind not in ("dolu", "toplanti", "muaf") and s.minutes >= min_minutes
     ]
     return sorted(items, key=lambda x: -x["minutes"])

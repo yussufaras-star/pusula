@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +31,7 @@ from pusula.churn import load_churn
 from pusula.config import get_org_id
 from pusula.reco import load_reco
 from pusula.hourly_nudges import run_hourly_nudges
-from pusula.leaves import set_leave
+from pusula.leaves import add_excused, delete_excused, set_leave
 from pusula.live import data_as_of, history_by_rep_hour, load_live
 from pusula.live_ingest import run_live_ingest
 from pusula.metrics import TZ, Span
@@ -81,6 +81,14 @@ class LeaveBody(BaseModel):
     rep_id: str
     day: str
     on: bool
+
+
+class ExcusedBody(BaseModel):
+    rep_id: str
+    day: str
+    start: str  # SS:DD
+    end: str
+    reason: str | None = None
 
 
 class DecisionBody(BaseModel):
@@ -335,6 +343,35 @@ def mark_leave(body: LeaveBody, user: AuthUser = Depends(admin_user)) -> dict[st
     set_leave(body.rep_id, day, body.on, by=user.email)
     cache.clear()
     return {"rep_id": body.rep_id, "day": day, "on": body.on}
+
+
+@app.post("/api/excused")
+def add_excused_time(body: ExcusedBody, user: AuthUser = Depends(admin_user)) -> dict[str, Any]:
+    """Muaf süre ekler (eğitim vb.): o aralık kayıp ve mola sayılmaz."""
+    require_database()
+    try:
+        day = date.fromisoformat(body.day)
+        start = time.fromisoformat(body.start)
+        end = time.fromisoformat(body.end)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Tarih YYYY-AA-GG, saat SS:DD olmalı") from exc
+    if end <= start:
+        raise HTTPException(status_code=400, detail="Bitiş başlangıçtan sonra olmalı")
+    if body.rep_id not in {rep.rep_id for rep in load_reps()}:
+        raise HTTPException(status_code=404, detail="Temsilci bulunamadı")
+    reason = (body.reason or "").strip()[:80] or None
+    row_id = add_excused(body.rep_id, day, start, end, reason, by=user.email)
+    cache.clear()
+    return {"id": row_id}
+
+
+@app.delete("/api/excused/{row_id}")
+def remove_excused_time(row_id: int, user: AuthUser = Depends(admin_user)) -> dict[str, Any]:
+    require_database()
+    if not delete_excused(row_id):
+        raise HTTPException(status_code=404, detail="Kayıt bulunamadı")
+    cache.clear()
+    return {"id": row_id}
 
 
 # --- dürtmeler ------------------------------------------------------------------
