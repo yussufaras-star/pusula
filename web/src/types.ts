@@ -476,4 +476,5 @@ export interface ChurnItem {
   gecen_gun?: number;
   crm_oncesi?: boolean;
   free?: boolean;
+  paket_zoho?: string | null;
 }

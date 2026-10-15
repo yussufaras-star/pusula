@@ -58,7 +58,7 @@ function ItemTable({ items, kind }: { items: ChurnItem[]; kind: "yaklasan" | "ka
               <td className="name">
                 {r.musteri}
                 {r.crm_oncesi ? <span className="sub">CRM öncesi müşteri</span> : null}
-                {r.free ? <span className="sub">Paketi free'ye çekildi</span> : null}
+                {r.free ? <span className="sub">Paketi Premium / Plus değil ({r.paket_zoho ?? "free"})</span> : null}
               </td>
               <td>{r.sahip ?? <span className="muted">—</span>}</td>
               <td>{r.paket ?? "—"}</td>
@@ -169,7 +169,7 @@ export function ChurnBoard() {
         <>
           <p className="muted fn-note">
             Son {int(data.kaybedilen_gun ?? 120)} günde vadesi geçip yenilemeyen ve geri de dönmeyen müşteriler ile Zoho'da
-            paketi free'ye çekilenler (vade = free'ye geçiş günü): geri kazanma listesi, en yeni kayıp önce.
+            paketi Premium / Plus dışına çekilenler (vade = free'ye geçiş günü): geri kazanma listesi, en yeni kayıp önce.
           </p>
           <ItemTable items={lost} kind="kaybedilen" />
         </>
@@ -220,8 +220,10 @@ export function ChurnBoard() {
         yok. Oran yalnız vadesi geçmiş olanlar üzerinden (bekleyenler hariç). Abonelik satışı: {data.packages?.join(", ")}.
         CRM öncesi müşteriler ({int(data.crm_oncesi ?? 0)}) Zoho müşteri kaydındaki abonelik bitişinden kurulur: CRM'de
         satışı yoksa vade abonelik bitişi, Re-Co (veya başka abonelik) satışı varsa o satış kendi ayına "yeniledi" yazılır.
-        Deals'teki her Re-Co satışı yenilemedir: vadeden sonra da gelse "yeniledi" sayılır. Zoho'da paketi free'ye
-        çekilen müşteri yenilememiştir: free'ye geçtiği güne (Re-Co yapmadığı ay) "kaybedildi" yazılır. Tablo Ocak 2026'dan başlar.
+        Deals'teki her Re-Co satışı yenilemedir: vadeden sonra da gelse "yeniledi" sayılır. Zoho'da paketi Premium /
+        Plus olmayan (free, Freemium, Inactive) müşteri yenilememiştir: pakete geçtiği güne (Re-Co yapmadığı ay)
+        "kaybedildi" yazılır. Paketi Premium / Plus / Elite olan, CRM'de yenilemesi görünmese de "yeniledi" sayılır;
+        paketi boş olan satış tarihlerine göre hesaplanır. Tablo Ocak 2026'dan başlar.
       </p>
     </>
   );

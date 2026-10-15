@@ -96,8 +96,8 @@ def test_pre_crm_customers_from_subscription_dates() -> None:
     assert by[date(2026, 3, 1)]["yeniledi"] == 1 and by[date(2026, 5, 1)]["kaybedildi"] == 1
     # Kayıp listesinde CRM öncesi müşteri, paket müşteri kaydından.
     out = action_lists({"x": {"name": "Eski", "owner": None, "sales": [], "pre": date(2025, 8, 1),
-                              "paket": "Premium", "bas": date(2025, 8, 1)}}, today)
-    assert out["kaybedilen"][0]["paket"] == "Premium" and out["kaybedilen"][0]["crm_oncesi"]
+                              "paket": "Inactive", "bas": date(2025, 8, 1)}}, today)
+    assert out["kaybedilen"][0]["paket"] == "Inactive" and out["kaybedilen"][0]["crm_oncesi"]
 
 
 def test_every_reco_sale_is_a_renewal() -> None:
@@ -169,3 +169,19 @@ def test_free_since_from_timeline() -> None:
     ]
     assert free_since_from_timeline(timeline) == date(2026, 2, 26)
     assert free_since_from_timeline([]) is None
+
+
+def test_only_premium_plus_are_active() -> None:
+    from pusula.churn import contact_events, is_active, is_free
+
+    today = date(2026, 10, 15)
+    assert is_active("premium") and is_active("Plus") and is_active("Elite")
+    assert is_free("Inactive") and is_free("Freemium") and not is_free(None) and not is_free("Premium")
+    lapsed = {"sales": [(date(2025, 8, 1), "Rexven-Premium")]}
+    # Zoho'da hâlâ Premium: vadesi geçse de yeniledi.
+    assert contact_events({**lapsed, "paket": "Premium"}, today)[-1]["sonuc"] == "yeniledi"
+    # Paket boş: satış tarihine göre (kaybedildi).
+    assert contact_events({**lapsed, "paket": None}, today)[-1]["sonuc"] == "kaybedildi"
+    # Inactive: geçiş gününe kaybedildi.
+    out = contact_events({**lapsed, "paket": "Inactive", "free_since": date(2026, 9, 1)}, today)
+    assert out[-1] == {"vade": date(2026, 9, 1), "sonuc": "kaybedildi", "geri_kazanildi": False, "free": True}

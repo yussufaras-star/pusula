@@ -28,6 +28,13 @@ aboneliğini yenilememiştir; free'ye geçtiği ay Re-Co yapmadığı aydır. A�
 dönemi "kaybedildi" olur ve free'ye geçiş gününe (Zoho timeline, free_since)
 yazılır. Geçiş günü son abonelik satışından önceyse paket eskimiştir, yok sayılır.
 Geçiş günü henüz okunmadıysa vade ayına yazılır.
+
+Premium / Plus (yönetici, 15 Ekim): paketi Premium veya Plus (Elite de üst
+paket) olmayan herkes churn olmuştur: free, Freemium, Inactive... hepsi yukarıdaki
+free kuralına girer. Paketi Premium / Plus / Elite olan müşteri kaybedilmemiştir:
+CRM'de yenileme satışı görünmese de vadesi geçen dönemi "yeniledi" sayılır.
+Paket alanı boş müşteri (çoğu yeni satış, Zoho'da paket girilmemiş) satış
+tarihlerine göre hesaplanır.
 """
 
 from __future__ import annotations
@@ -47,11 +54,16 @@ TERM_MONTHS = 12
 CRM_START = date(2025, 10, 1)
 CHURN_START = date(2026, 1, 1)
 RENEWAL_PACKAGE = "Re-Co-Premium"
-FREE_PACKAGES = ("free", "freemium")
+ACTIVE_PACKAGES = ("premium", "plus", "elite")
+
+
+def is_active(paket: str | None) -> bool:
+    return (paket or "").strip().lower() in ACTIVE_PACKAGES
 
 
 def is_free(paket: str | None) -> bool:
-    return (paket or "").strip().lower() in FREE_PACKAGES
+    """Paket girilmiş ama Premium / Plus / Elite değil: churn."""
+    return bool((paket or "").strip()) and not is_active(paket)
 
 
 def plus_months(day: date, months: int) -> date:
@@ -163,11 +175,14 @@ def period_churn(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def contact_events(info: dict[str, Any], today: date) -> list[dict[str, Any]]:
     """Saf: müşteri kaydı (sales, pre, paket) → vade olayları; Re-Co satışları
-    yenileme, paketi free'ye çekilmişse açık dönem kaybedildi."""
+    yenileme, paketi free'ye çekilmişse açık dönem kaybedildi, Premium / Plus
+    ise vadesi geçen açık dönem yeniledi."""
     pre = info.get("pre")
     starts = ([pre] if pre else []) + [d for d, _ in info["sales"]]
     renewals = [d for d, pkg in info["sales"] if pkg == RENEWAL_PACKAGE]
     events = due_events(starts, today, renewals) if starts else []
+    if events and is_active(info.get("paket")) and events[-1]["sonuc"] == "kaybedildi":
+        events[-1] = {**events[-1], "sonuc": "yeniledi"}
     if not events or not is_free(info.get("paket")):
         return events
     since = info.get("free_since")
@@ -216,6 +231,7 @@ def action_lists(
             "crm_oncesi": pre is not None,
             "vade": last["vade"],
             "free": bool(last.get("free")),
+            "paket_zoho": info.get("paket"),
         }
         days = (last["vade"] - today).days
         if last["sonuc"] == "bekliyor" and days <= UPCOMING_DAYS:
@@ -259,9 +275,9 @@ def load_churn(today: date, owner: str | None = None) -> dict[str, Any]:
                    (to_jsonb(c) ->> 'free_since')::date
             FROM contact_profiles c
             WHERE c.org_id = %s AND (c.abonelik_bas IS NOT NULL OR c.abonelik_bit IS NOT NULL
-                   OR lower(coalesce(c.paket, '')) = ANY(%s)) {owner_sql}
+                   OR (c.paket IS NOT NULL AND NOT lower(c.paket) = ANY(%s))) {owner_sql}
             """,
-            [org_id, list(FREE_PACKAGES), *([owner] if owner else [])],
+            [org_id, list(ACTIVE_PACKAGES), *([owner] if owner else [])],
         ).fetchall()
         refunds = conn.execute(
             f"""
