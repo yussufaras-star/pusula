@@ -125,3 +125,18 @@ def test_reco_without_subscription_dates_renews_its_month() -> None:
     info = {"sales": [(date(2026, 4, 14), "Re-Co-Premium")]}
     info["pre"] = pre_crm_start(info["sales"], None, None)
     assert contact_events(info, today)[0] == {"vade": date(2026, 4, 14), "sonuc": "yeniledi", "geri_kazanildi": False}
+
+
+def test_free_package_means_not_renewed() -> None:
+    from pusula.churn import action_lists, contact_events
+
+    today = date(2026, 10, 15)
+    # Vade Aralık'ta ama paket free'ye çekilmiş: açık dönem kaybedildi (vade ayına).
+    info = {"name": "F", "owner": None, "sales": [], "pre": date(2025, 12, 5), "paket": "free", "bas": date(2025, 12, 5)}
+    assert contact_events(info, today) == [
+        {"vade": date(2026, 12, 5), "sonuc": "kaybedildi", "geri_kazanildi": False, "free": True}
+    ]
+    out = action_lists({"f": info}, today)
+    assert not out["yaklasan"] and out["kaybedilen"][0]["free"]
+    # Premium kalan aynı müşteri bekliyor.
+    assert contact_events({**info, "paket": "Premium"}, today)[0]["sonuc"] == "bekliyor"

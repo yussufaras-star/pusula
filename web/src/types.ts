@@ -475,4 +475,5 @@ export interface ChurnItem {
   kalan_gun?: number;
   gecen_gun?: number;
   crm_oncesi?: boolean;
+  free?: boolean;
 }
