@@ -319,6 +319,7 @@ CREATE INDEX IF NOT EXISTS idx_leads_pusula_state
     ON leads (org_id, pusula_state, owner_rep_id);
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS status_changed_at timestamptz;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS status_changed_source text;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS zoho_removed_at timestamptz;  -- Zoho'da silinmiş/dönüştürülmüş (lead_sync)
 ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_status_changed_source_check;
 ALTER TABLE leads ADD CONSTRAINT leads_status_changed_source_check
     CHECK (status_changed_source IS NULL OR status_changed_source IN (
