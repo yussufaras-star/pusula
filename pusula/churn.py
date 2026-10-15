@@ -24,9 +24,10 @@ kazanma değil "yeniledi" olur (açık dönemin vade ayına yazılır). Müşter
 kaydında abonelik tarihi olmasa da ilk Re-Co önceki dönemin yenilemesidir.
 
 Free (yönetici, 15 Ekim): Zoho müşteri kaydında paketi free'ye çekilmiş müşteri
-aboneliğini yenilememiştir. Vadesi gelmemiş görünse de açık dönemi "kaybedildi"
-olur (vade ayına yazılır; vade gelmeden oran gösterilmez) ve kaybedilenler
-listesinde 120 gün sınırı olmadan "Free'ye çekildi" diye görünür.
+aboneliğini yenilememiştir; free'ye geçtiği ay Re-Co yapmadığı aydır. Açık
+dönemi "kaybedildi" olur ve free'ye geçiş gününe (Zoho timeline, free_since)
+yazılır. Geçiş günü son abonelik satışından önceyse paket eskimiştir, yok sayılır.
+Geçiş günü henüz okunmadıysa vade ayına yazılır.
 """
 
 from __future__ import annotations
@@ -167,7 +168,15 @@ def contact_events(info: dict[str, Any], today: date) -> list[dict[str, Any]]:
     starts = ([pre] if pre else []) + [d for d, _ in info["sales"]]
     renewals = [d for d, pkg in info["sales"] if pkg == RENEWAL_PACKAGE]
     events = due_events(starts, today, renewals) if starts else []
-    if events and events[-1]["sonuc"] == "bekliyor" and is_free(info.get("paket")):
+    if not events or not is_free(info.get("paket")):
+        return events
+    since = info.get("free_since")
+    last_sale = max((d for d, _ in info["sales"]), default=None)
+    if since and last_sale and since < last_sale:
+        return events
+    if since:
+        events[-1] = {"vade": since, "sonuc": "kaybedildi", "geri_kazanildi": False, "free": True}
+    elif events[-1]["sonuc"] == "bekliyor":
         events[-1] = {**events[-1], "sonuc": "kaybedildi", "free": True}
     return events
 
@@ -183,8 +192,8 @@ def action_lists(
 
     yaklasan: vadesi önümüzdeki 60 günde dolacak, henüz yenilemeyenler (vade sırası).
     kaybedilen: son 120 günde vadesi geçip yenilemeyen, geri de dönmeyenler (geri
-    kazanma listesi; en yeni kayıp önce). Paketi free'ye çekilenler süre sınırı
-    olmadan bu listededir (free=True).
+    kazanma listesi; en yeni kayıp önce). Paketi free'ye çekilenlerde vade =
+    free'ye geçiş günü (free=True); geçiş günü bilinmiyorsa süre sınırı yok.
     contacts: contact_id → {name, owner, sales: [(gün, paket)], pre: CRM öncesi
     varsayılan başlangıç | None, paket/bas: müşteri kaydından}.
     """
@@ -211,7 +220,7 @@ def action_lists(
         days = (last["vade"] - today).days
         if last["sonuc"] == "bekliyor" and days <= UPCOMING_DAYS:
             upcoming.append({**base, "kalan_gun": days})
-        elif last["sonuc"] == "kaybedildi" and (-days <= LOST_DAYS or base["free"]):
+        elif last["sonuc"] == "kaybedildi" and (-days <= LOST_DAYS or (base["free"] and days > 0)):
             lost.append({**base, "gecen_gun": -days})
     upcoming.sort(key=lambda r: (r["vade"], r["musteri"]))
     lost.sort(key=lambda r: (r["gecen_gun"], r["musteri"]))
@@ -246,11 +255,13 @@ def load_churn(today: date, owner: str | None = None) -> dict[str, Any]:
         # CRM öncesi müşteriler: abonelik başlangıç/bitiş müşteri kaydından.
         profiles = conn.execute(
             f"""
-            SELECT c.contact_id, c.full_name, c.owner_name, c.paket, c.abonelik_bas, c.abonelik_bit
+            SELECT c.contact_id, c.full_name, c.owner_name, c.paket, c.abonelik_bas, c.abonelik_bit,
+                   (to_jsonb(c) ->> 'free_since')::date
             FROM contact_profiles c
-            WHERE c.org_id = %s AND (c.abonelik_bas IS NOT NULL OR c.abonelik_bit IS NOT NULL) {owner_sql}
+            WHERE c.org_id = %s AND (c.abonelik_bas IS NOT NULL OR c.abonelik_bit IS NOT NULL
+                   OR lower(coalesce(c.paket, '')) = ANY(%s)) {owner_sql}
             """,
-            [org_id, *([owner] if owner else [])],
+            [org_id, list(FREE_PACKAGES), *([owner] if owner else [])],
         ).fetchall()
         refunds = conn.execute(
             f"""
@@ -269,13 +280,13 @@ def load_churn(today: date, owner: str | None = None) -> dict[str, Any]:
         if day:
             info = contacts.setdefault(str(cid), {"name": name, "owner": owner_name, "sales": []})
             info["sales"].append((day, package))
-    for cid, name, owner_name, paket, bas, bit in profiles:
+    for cid, name, owner_name, paket, bas, bit, free_since in profiles:
         info = contacts.get(str(cid))
         if info is None:
             if bit is None:
                 continue
             info = contacts.setdefault(str(cid), {"name": name, "owner": owner_name, "sales": []})
-        info.update({"paket": paket, "bas": bas})
+        info.update({"paket": paket, "bas": bas, "free_since": free_since})
         info["pre"] = pre_crm_start(info["sales"], bas, bit)
     events = []
     pre_count = 0

@@ -140,3 +140,32 @@ def test_free_package_means_not_renewed() -> None:
     assert not out["yaklasan"] and out["kaybedilen"][0]["free"]
     # Premium kalan aynı müşteri bekliyor.
     assert contact_events({**info, "paket": "Premium"}, today)[0]["sonuc"] == "bekliyor"
+
+
+def test_free_switch_day_is_the_lost_month() -> None:
+    from pusula.churn import action_lists, contact_events
+
+    today = date(2026, 10, 15)
+    # Free'ye geçtiği gün Re-Co yapmadığı gün: kayıp o aya yazılır.
+    info = {"name": "F", "owner": None, "sales": [], "pre": date(2025, 12, 5), "paket": "free",
+            "free_since": date(2026, 9, 2)}
+    assert contact_events(info, today) == [
+        {"vade": date(2026, 9, 2), "sonuc": "kaybedildi", "geri_kazanildi": False, "free": True}
+    ]
+    assert action_lists({"f": info}, today)["kaybedilen"][0]["gecen_gun"] == 43
+    # Free'den sonra abonelik satışı varsa paket eskimiş: yok sayılır.
+    stale = {"sales": [(date(2026, 5, 1), "Rexven-Premium")], "paket": "Free", "free_since": date(2026, 2, 1)}
+    assert contact_events(stale, today)[-1]["sonuc"] == "bekliyor"
+
+
+def test_free_since_from_timeline() -> None:
+    from pusula.ingest.contact_profiles import free_since_from_timeline
+
+    timeline = [
+        {"audited_time": "2026-02-26T15:43:16+03:00", "field_history": [{"api_name": "Paket", "_value": {"new": "free", "old": None}}]},
+        {"audited_time": "2026-02-23T10:33:16+03:00", "field_history": [{"api_name": "Paket", "_value": {"new": None, "old": "premium"}}]},
+        {"audited_time": "2025-05-01T10:00:00+03:00", "field_history": [{"api_name": "Paket", "_value": {"new": "Free", "old": None}}]},
+        {"audited_time": "2026-03-01T10:00:00+03:00", "field_history": [{"api_name": "Owner", "_value": {"new": "x"}}]},
+    ]
+    assert free_since_from_timeline(timeline) == date(2026, 2, 26)
+    assert free_since_from_timeline([]) is None

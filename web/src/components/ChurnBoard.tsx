@@ -169,7 +169,7 @@ export function ChurnBoard() {
         <>
           <p className="muted fn-note">
             Son {int(data.kaybedilen_gun ?? 120)} günde vadesi geçip yenilemeyen ve geri de dönmeyen müşteriler ile Zoho'da
-            paketi free'ye çekilenler: geri kazanma listesi, en yeni kayıp önce.
+            paketi free'ye çekilenler (vade = free'ye geçiş günü): geri kazanma listesi, en yeni kayıp önce.
           </p>
           <ItemTable items={lost} kind="kaybedilen" />
         </>
@@ -221,7 +221,7 @@ export function ChurnBoard() {
         CRM öncesi müşteriler ({int(data.crm_oncesi ?? 0)}) Zoho müşteri kaydındaki abonelik bitişinden kurulur: CRM'de
         satışı yoksa vade abonelik bitişi, Re-Co (veya başka abonelik) satışı varsa o satış kendi ayına "yeniledi" yazılır.
         Deals'teki her Re-Co satışı yenilemedir: vadeden sonra da gelse "yeniledi" sayılır. Zoho'da paketi free'ye
-        çekilen müşteri yenilememiştir: vadesi gelmemiş olsa da vade ayına "kaybedildi" yazılır. Tablo Ocak 2026'dan başlar.
+        çekilen müşteri yenilememiştir: free'ye geçtiği güne (Re-Co yapmadığı ay) "kaybedildi" yazılır. Tablo Ocak 2026'dan başlar.
       </p>
     </>
   );
