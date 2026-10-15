@@ -1,0 +1,47 @@
+# Randevu dürtmeleri — 5 dk'da bir, 08:00-19:55 Europe/Istanbul, Pazar hariç
+# (05-16 UTC; TR UTC+3, DST yok). GitHub zamanlaması 5-15 dk gecikebilir;
+# pencereler buna göre geniş (pusula/meeting_nudges.py). Aynı randevu × tür
+# bir kez gider.
+name: meeting-nudges
+
+on:
+  schedule:
+    - cron: "*/5 5-16 * * 1-6"
+  workflow_dispatch:
+
+concurrency:
+  group: pusula-meeting-nudges
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUNBUFFERED: "1"
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  DATABASE_URL_POOLED: ${{ secrets.DATABASE_URL_POOLED }}
+  ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
+  ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
+  ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
+  ZOHO_ACCOUNTS_DOMAIN: ${{ secrets.ZOHO_ACCOUNTS_DOMAIN }}
+  ZOHO_API_DOMAIN: ${{ secrets.ZOHO_API_DOMAIN }}
+  ZOHO_MEETING_REFRESH_TOKEN: ${{ secrets.ZOHO_MEETING_REFRESH_TOKEN }}
+  CLIQ_WEBHOOK_URL: ${{ secrets.CLIQ_WEBHOOK_URL }}
+  PUSULA_SHADOW_EMAIL: ${{ secrets.PUSULA_SHADOW_EMAIL }}
+  # 1: dürtme temsilciye gider (gölge adresi atlanır). 0/boş: gölge.
+  PUSULA_PACE_NUDGES_LIVE: ${{ vars.PUSULA_PACE_NUDGES_LIVE }}
+
+jobs:
+  meeting-nudges:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Bağımlılıkları kur
+        run: python -m pip install -r requirements.txt
+      - name: Randevu dürtmeleri
+        run: python scripts/meeting_nudges.py
