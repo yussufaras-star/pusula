@@ -29,6 +29,7 @@ from pusula.commentary import commentary
 from pusula.commission import deals_sync_state, load_commission, load_rep_deals
 from pusula.churn import load_churn
 from pusula.config import get_org_id
+from pusula.paket import load_paket
 from pusula.reco import load_reco
 from pusula.hourly_nudges import run_hourly_nudges
 from pusula.leaves import add_excused, delete_excused, set_leave
@@ -553,6 +554,18 @@ def churn(owner: str | None = None, user: AuthUser = Depends(admin_user)) -> Any
         ("churn", owner, today.isoformat(), data_as_of()),
         REPORT_TTL,
         lambda: jsonable_encoder(load_churn(today, owner or None)),
+    )
+
+
+@app.get("/api/paket")
+def paket(owner: str | None = None, user: AuthUser = Depends(admin_user)) -> Any:
+    """Paket bazlı müşteri dağılımı: aktif / pasif (churn) / girilmemiş, aylık çıkışlar."""
+    require_database()
+    today = _now().date()
+    return cache.cached(
+        ("paket", owner, today.isoformat(), data_as_of()),
+        REPORT_TTL,
+        lambda: jsonable_encoder(load_paket(today, owner or None)),
     )
 
 

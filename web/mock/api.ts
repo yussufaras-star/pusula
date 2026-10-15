@@ -505,6 +505,28 @@ export function mockApi(method: string, url: string): unknown {
     return { ok: true };
   }
   if (path === "/api/sales-report") return mockReport();
+  if (path === "/api/paket") {
+    const g = (key: string, ad: string, tur: string, musteri: number, extra: Record<string, number> = {}) => ({
+      key, ad, tur, musteri, pay: Math.round((1000 * musteri) / 1950) / 10,
+      sahip: { "Nihat Kemer": Math.round(musteri * 0.4), "Burcu Özkan": Math.round(musteri * 0.4), Diğer: musteri - 2 * Math.round(musteri * 0.4) },
+      satiyor: Math.round(musteri * 0.5), bitis_gecmis: 0, bitis_yakin: 0, bitis_ileri: 0, bitis_yok: musteri,
+      abonelik_satisi: 0, reco: 0, cikis_30g: 0, cikis_bu_yil: 0, ...extra });
+    return { available: true, toplam: 1950, aktif: 1042, pasif: 518, bos: 390, yakin_gun: 60,
+      gruplar: [
+        g("premium", "Premium", "aktif", 980, { bitis_gecmis: 10, bitis_yakin: 188, bitis_ileri: 753, bitis_yok: 29, abonelik_satisi: 866, reco: 302 }),
+        g("plus", "Plus", "aktif", 40, { bitis_yakin: 6, bitis_ileri: 30, bitis_yok: 4, abonelik_satisi: 35 }),
+        g("elite", "Elite", "aktif", 22, { bitis_yakin: 5, bitis_ileri: 16, bitis_yok: 1, abonelik_satisi: 8, reco: 6 }),
+        g("free", "Free", "pasif", 98, { cikis_bu_yil: 64 }),
+        g("freemium", "Freemium", "pasif", 318, { cikis_bu_yil: 21 }),
+        g("inactive", "Inactive", "pasif", 40, { cikis_bu_yil: 6 }),
+        g("bosaltilmis", "Premium'dan boşaltılmış", "pasif", 62, { cikis_30g: 29, cikis_bu_yil: 62, abonelik_satisi: 24 }),
+        g("bos", "Paket girilmemiş", "bos", 390, { abonelik_satisi: 61 }),
+      ],
+      cikislar: [["2026-01-01", 5, 5, 0, 0], ["2026-02-01", 10, 2, 1, 1], ["2026-03-01", 47, 11, 0, 5], ["2026-04-01", 1, 0, 1, 4],
+        ["2026-09-01", 0, 0, 0, 10], ["2026-10-01", 0, 0, 0, 22]].map(([ay, free, freemium, inactive, bosaltilmis]) => ({
+        ay, free, freemium, inactive, bosaltilmis, diger: 0,
+        toplam: (free as number) + (freemium as number) + (inactive as number) + (bosaltilmis as number) })) };
+  }
   if (path === "/api/churn") {
     const aylar = Array.from({ length: 15 }, (_, i) => {
       const d = new Date(Date.UTC(2025, 10 + i, 1)).toISOString().slice(0, 10);
