@@ -167,8 +167,13 @@ def test_free_since_from_timeline() -> None:
         {"audited_time": "2025-05-01T10:00:00+03:00", "field_history": [{"api_name": "Paket", "_value": {"new": "Free", "old": None}}]},
         {"audited_time": "2026-03-01T10:00:00+03:00", "field_history": [{"api_name": "Owner", "_value": {"new": "x"}}]},
     ]
-    assert free_since_from_timeline(timeline) == date(2026, 2, 26)
+    # Premium'dan çıkış günü (boşa çekildi), sonraki free yazımı değil.
+    assert free_since_from_timeline(timeline) == date(2026, 2, 23)
     assert free_since_from_timeline([]) is None
+    # free → Freemium ara değişikliği çıkış gününü kaydırmaz.
+    moves = [{"audited_time": t, "field_history": [{"api_name": "Paket", "_value": {"old": o, "new": n}}]}
+             for t, o, n in [("2026-03-01T10:00:00+03:00", "Premium", "free"), ("2026-05-01T10:00:00+03:00", "free", "Freemium")]]
+    assert free_since_from_timeline(moves) == date(2026, 3, 1)
 
 
 def test_only_premium_plus_are_active() -> None:
@@ -185,3 +190,23 @@ def test_only_premium_plus_are_active() -> None:
     # Inactive: geçiş gününe kaybedildi.
     out = contact_events({**lapsed, "paket": "Inactive", "free_since": date(2026, 9, 1)}, today)
     assert out[-1] == {"vade": date(2026, 9, 1), "sonuc": "kaybedildi", "geri_kazanildi": False, "free": True}
+
+
+def test_emptied_package_is_free() -> None:
+    from pusula.churn import contact_events
+    from pusula.ingest.contact_profiles import free_since_from_timeline
+
+    today = date(2026, 10, 15)
+    # Premium'dan boşa çekilen paket free: boşaltıldığı gün kaybedildi.
+    timeline = [{"audited_time": "2026-07-16T10:00:00+03:00",
+                 "field_history": [{"api_name": "Paket", "_value": {"new": None, "old": "Premium"}}]},
+                {"audited_time": "2026-02-25T10:00:00+03:00",
+                 "field_history": [{"api_name": "Paket", "_value": {"new": "Premium", "old": None}}]}]
+    since = free_since_from_timeline(timeline)
+    assert since == date(2026, 7, 16)
+    sold = {"sales": [(date(2025, 10, 10), "Rexven-Premium")], "paket": None}
+    assert contact_events({**sold, "free_since": since}, today)[-1] == {
+        "vade": date(2026, 7, 16), "sonuc": "kaybedildi", "geri_kazanildi": False, "free": True}
+    # Hiç paket girilmemiş yeni satış: tarihe göre bekliyor.
+    new = {"sales": [(date(2026, 9, 1), "Rexven-Premium")], "paket": None, "free_since": None}
+    assert contact_events(new, today)[-1]["sonuc"] == "bekliyor"
