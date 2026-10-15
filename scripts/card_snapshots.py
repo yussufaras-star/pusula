@@ -1,9 +1,10 @@
-"""Günlük kart görselleri — prim kartı ve temsilci tablosu ekip Cliq kanalına.
+"""Kart görselleri — prim, temsilci tablosu ve kayıp zaman ekip Cliq kanalına.
 
 Paneli yerelde açar (uvicorn + derlenmiş arayüz), tek seferlik yönetici
 oturumuyla kartların ekran görüntüsünü alır ve kanala gönderir.
 Önce: npm --prefix web run build. Varsayılan gönderir; --out DIR yalnız kaydeder.
---cards prim,temsilciler hangi kartların gideceğini seçer (öğlen yalnız temsilciler).
+--cards prim,temsilciler,kayip hangi kartların gideceğini seçer; --sync önce
+paneldeki "Verileri güncelle" ile aynı senkronu çalıştırır (güncel veri).
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ PORT = 8765
 BASE = f"http://127.0.0.1:{PORT}"
 # Görsele girmeyenler; web/src/components/ShareButton.tsx ile aynı.
 SKIP = "[data-share-skip], .link-btn, .cm-orphans"
-CARDS = [("prim", "Aylık prim hedefi"), ("temsilciler", "Temsilciler")]
+CARDS = [("prim", "Aylık prim hedefi"), ("temsilciler", "Temsilciler"), ("kayip", "Kayıp zaman")]
 
 
 def _wait_up(proc: subprocess.Popen, timeout: float = 60) -> None:
@@ -76,7 +77,7 @@ def capture(out: Path | None, cards: list[tuple[str, str]]) -> None:
             page = context.new_page()
             page.goto(f"{BASE}/#/canli")
             for kart, _ in cards:
-                page.wait_for_selector(f"[data-share='{kart}'] table", timeout=90_000)
+                page.wait_for_selector(f"[data-share='{kart}'] .card-body > :not(.skeleton)", timeout=90_000)
             page.wait_for_load_state("networkidle")
             page.wait_for_function("!document.querySelector('[data-share] .skeleton')", timeout=60_000)
             page.add_style_tag(content=f"{SKIP}{{display:none !important}}")
@@ -95,15 +96,37 @@ def capture(out: Path | None, cards: list[tuple[str, str]]) -> None:
         server.wait(timeout=10)
 
 
+def sync() -> None:
+    """Paneldeki 'Verileri güncelle' ile aynı senkron; hata görseli durdurmaz."""
+    from pusula.db.client import reset_pool
+    from pusula.live_ingest import run_live_ingest
+    from pusula.metrics import TZ
+
+    try:
+        report = run_live_ingest(datetime.now(TZ), force=True, all_steps=True)
+    except Exception as exc:  # noqa: BLE001 — eski veriyle de görsel gitsin
+        print(f"senkron başarısız: {exc}")
+        return
+    finally:
+        # Panel sunucusu kendi havuzunu açar; pooler'ın 15 bağlantı sınırı.
+        reset_pool()
+    failed = [k for k, v in (report.get("steps") or {}).items() if isinstance(v, dict) and v.get("error")]
+    status = report.get("skipped") or f"{report.get('seconds')} sn"
+    print(f"senkron: {status}; hata: {failed or 'yok'}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, help="Göndermeden bu klasöre kaydet")
     parser.add_argument("--cards", default=",".join(k for k, _ in CARDS), help="Virgülle kart adları")
+    parser.add_argument("--sync", action="store_true", help="Önce verileri güncelle")
     args = parser.parse_args()
     wanted = {c.strip() for c in args.cards.split(",") if c.strip()}
     unknown = wanted - {k for k, _ in CARDS}
     if unknown or not wanted:
         parser.error(f"Bilinmeyen kart: {', '.join(sorted(unknown)) or 'boş'}")
+    if args.sync:
+        sync()
     capture(args.out, [c for c in CARDS if c[0] in wanted])
 
 
