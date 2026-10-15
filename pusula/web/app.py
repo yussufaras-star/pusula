@@ -35,6 +35,7 @@ from pusula.config import get_org_id
 from pusula.paket import load_paket
 from pusula.reco import load_reco
 from pusula.hourly_nudges import run_hourly_nudges
+from pusula.lead_ciro import GRANS, load_lead_ciro
 from pusula.leaves import add_excused, delete_excused, set_leave
 from pusula.live import data_as_of, history_by_rep_hour, load_live
 from pusula.live_ingest import run_live_ingest
@@ -495,6 +496,20 @@ def source_yield_api(
     key = ("source-yield", dim, chosen, start, end, today.isoformat(), data_as_of())
     return cache.cached(
         key, REPORT_TTL, lambda: jsonable_encoder(source_yield(dim, rep_id=chosen, span=span))
+    )
+
+
+@app.get("/api/lead-ciro")
+def lead_ciro(gran: str = "hafta", user: AuthUser = Depends(current_user)) -> Any:
+    """Yeni lead adedi ↔ yeni satış cirosu (Re-Co hariç), dönem bazında korelasyon."""
+    if gran not in GRANS:
+        raise HTTPException(status_code=400, detail="gran gun, hafta, ay veya yil olmalı")
+    require_database()
+    today = _now().date()
+    return cache.cached(
+        ("lead-ciro", gran, today.isoformat(), data_as_of()),
+        REPORT_TTL,
+        lambda: jsonable_encoder(load_lead_ciro(gran, today)),
     )
 
 

@@ -2260,3 +2260,68 @@ table.meet-list {
   align-self: center;
   font-size: 12.5px;
 }
+
+/* --- lead ↔ ciro ------------------------------------------------------------ */
+
+.lc-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+  margin-top: 12px;
+}
+
+@media (max-width: 900px) {
+  .lc-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.chart .lc-panel-title {
+  fill: var(--ink-2);
+  font-weight: 600;
+}
+
+.lc-lead {
+  fill: var(--series-2);
+}
+
+.lc-lead.partial {
+  fill: color-mix(in srgb, var(--series-2) 35%, var(--surface));
+}
+
+.lc-lead.on {
+  fill: color-mix(in srgb, var(--series-2) 80%, var(--ink));
+}
+
+.chart .lc-dot {
+  fill: var(--series-1);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.chart .lc-dot.on {
+  fill: var(--heat-4);
+}
+
+.chart .lc-fit {
+  stroke-dasharray: 4 4;
+}
+
+.lc-lags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 10px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lc-lag {
+  color: var(--ink-2);
+}
+
+.lc-lag.best {
+  color: var(--ink);
+  font-weight: 600;
+}

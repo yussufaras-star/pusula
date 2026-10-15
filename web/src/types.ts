@@ -514,3 +514,37 @@ export interface PaketPayload {
   cikislar?: PaketExitMonth[];
   yakin_gun?: number;
 }
+
+// pusula/lead_ciro.py
+export type LeadCiroGran = "gun" | "hafta" | "ay" | "yil";
+
+export interface LeadCiroPoint {
+  bas: string;
+  bit: string;
+  etiket: string;
+  lead: number;
+  ciro: number;
+  satis: number;
+  ciro_per_lead: number | null;
+  suruyor: boolean;
+}
+
+export interface LeadCiroLag {
+  gecikme: number;
+  r: number | null;
+  n: number;
+  yorum: string | null;
+}
+
+export interface LeadCiroPayload {
+  available: boolean;
+  gran: LeadCiroGran;
+  seri?: LeadCiroPoint[];
+  r?: number | null;
+  yorum?: string | null;
+  n?: number;
+  gecikmeler?: LeadCiroLag[];
+  en_iyi?: LeadCiroLag | null;
+  lead_basi_ciro?: number | null;
+  min_nokta?: number;
+}
