@@ -1,10 +1,11 @@
-# Prim kartı ve temsilci tablosunun görseli ekip Cliq kanalına (öğle + akşam).
+# Temsilci tablosu öğle + akşam, prim kartı yalnız akşam (gün sonu) ekip Cliq kanalına.
 name: card-snapshots
 
 on:
   schedule:
     # 12:30 ve 18:30 İstanbul (UTC+3), Pzt–Cmt. GitHub zamanlaması gecikebilir.
-    - cron: "30 9,15 * * 1-6"
+    - cron: "30 9 * * 1-6"
+    - cron: "30 15 * * 1-6"
   workflow_dispatch:
 
 concurrency:
@@ -43,4 +44,5 @@ jobs:
           python -m pip install -r requirements.txt uvicorn==0.32.0 playwright==1.48.0
           python -m playwright install --with-deps chromium
       - name: Kart görsellerini kanala gönder
-        run: python scripts/card_snapshots.py
+        # Öğle tetiği yalnız temsilciler; akşam ve elle çalıştırma ikisi birden.
+        run: python scripts/card_snapshots.py --cards "${{ github.event.schedule == '30 9 * * 1-6' && 'temsilciler' || 'prim,temsilciler' }}"
