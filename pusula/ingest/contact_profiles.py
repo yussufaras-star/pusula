@@ -3,6 +3,10 @@
 Son 1 yıllık satış ve toplam satış: müşterinin kendi mağazasındaki satış
 adedi. Abonelik başlangıç/bitiş, paket, müşteri durumu, sahip ve portföy
 yöneticisi. İlk çalıştırma tüm contact'lar, sonra Modified_Time ile değişenler.
+
+Free'ye geçiş günü (churn): paketi free olan müşterinin Zoho timeline'ında
+Paket alanının free'ye çekildiği en son gün (free_since). Paket free'den
+çıkınca sıfırlanır; free'ye dönünce yeniden okunur.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ from pusula.config import get_org_id
 from pusula.db import client
 from pusula.db.models import SyncState
 from pusula.ingest.crm_actions import parse_zoho_time
-from pusula.zoho.crm import get_records
+from pusula.zoho.crm import _request, get_records
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +30,9 @@ FIELDS = (
 )
 OVERLAP = timedelta(minutes=5)
 BATCH = 500
+FREE_PACKAGES = ("free", "freemium")
+# Saatlik çalışmada en fazla bu kadar timeline isteği (ilk dolum birkaç saate yayılır).
+FREE_LOOKUPS = 150
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS contact_profiles (
@@ -44,6 +51,8 @@ CREATE TABLE IF NOT EXISTS contact_profiles (
     updated_at       timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (org_id, contact_id)
 );
+ALTER TABLE contact_profiles ADD COLUMN IF NOT EXISTS free_since date;
+ALTER TABLE contact_profiles ADD COLUMN IF NOT EXISTS free_checked_at timestamptz;
 """
 
 Row = tuple[Any, ...]
@@ -116,11 +125,59 @@ def _write(rows: list[Row]) -> int:
                     abonelik_bas = EXCLUDED.abonelik_bas, abonelik_bit = EXCLUDED.abonelik_bit,
                     son1_satis = EXCLUDED.son1_satis, toplam_satis = EXCLUDED.toplam_satis,
                     customer_status = EXCLUDED.customer_status, portfoy_yon = EXCLUDED.portfoy_yon,
+                    free_since = CASE WHEN lower(coalesce(EXCLUDED.paket, '')) = ANY(%s)
+                                      AND lower(coalesce(contact_profiles.paket, '')) = ANY(%s)
+                                      THEN contact_profiles.free_since END,
+                    free_checked_at = CASE WHEN lower(coalesce(EXCLUDED.paket, '')) = ANY(%s)
+                                      AND lower(coalesce(contact_profiles.paket, '')) = ANY(%s)
+                                      THEN contact_profiles.free_checked_at END,
                     updated_at = now()
                 """,
-                [(org_id, *row) for row in rows],
+                [(org_id, *row, *([list(FREE_PACKAGES)] * 4)) for row in rows],
             )
     return len(rows)
+
+
+def free_since_from_timeline(timeline: list[dict[str, Any]]) -> date | None:
+    """Saf: Zoho timeline → Paket'in free'ye çekildiği en son gün."""
+    days = []
+    for entry in timeline:
+        for field in entry.get("field_history") or []:
+            new = (field.get("_value") or {}).get("new")
+            if field.get("api_name") == "Paket" and isinstance(new, str) and new.strip().lower() in FREE_PACKAGES:
+                day = _date(entry.get("audited_time"))
+                if day:
+                    days.append(day)
+    return max(days) if days else None
+
+
+def sync_free_dates(limit: int = FREE_LOOKUPS) -> dict[str, int]:
+    """Paketi free olup geçiş günü henüz okunmamış müşteriler için Zoho timeline."""
+    org_id = get_org_id()
+    with client.transaction() as conn:
+        ids = [
+            r[0]
+            for r in conn.execute(
+                """SELECT contact_id FROM contact_profiles
+                   WHERE org_id = %s AND lower(coalesce(paket, '')) = ANY(%s) AND free_checked_at IS NULL
+                     AND (abonelik_bas IS NOT NULL OR abonelik_bit IS NOT NULL
+                          OR contact_id IN (SELECT contact_id::text FROM deal_packages WHERE org_id = %s))
+                   ORDER BY contact_id LIMIT %s""",
+                [org_id, list(FREE_PACKAGES), org_id, limit],
+            ).fetchall()
+        ]
+    found = 0
+    for cid in ids:
+        response = _request("GET", f"/crm/v7/Contacts/{cid}/__timeline", params={"per_page": 200})
+        timeline = response.json().get("__timeline", []) if response.content else []
+        day = free_since_from_timeline(timeline)
+        found += 1 if day else 0
+        with client.transaction() as conn:
+            conn.execute(
+                "UPDATE contact_profiles SET free_since = %s, free_checked_at = now() WHERE org_id = %s AND contact_id = %s",
+                [day, org_id, cid],
+            )
+    return {"free_checked": len(ids), "free_found": found}
 
 
 def sync_contact_profiles(now: datetime) -> dict[str, int]:
@@ -147,4 +204,4 @@ def sync_contact_profiles(now: datetime) -> dict[str, int]:
     client.set_sync_state(
         SyncState(source_name=SOURCE, last_synced_at=newest or now, last_cursor="ok")
     )
-    return {"fetched": fetched, "written": written}
+    return {"fetched": fetched, "written": written, **sync_free_dates()}
