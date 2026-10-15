@@ -1,4 +1,4 @@
-# Randevu dürtmeleri — 5 dk'da bir, 08:00-19:55 Europe/Istanbul, Pazar hariç
+# People izin senkronu + randevu dürtmeleri — 5 dk'da bir, 08:00-19:55 Europe/Istanbul, Pazar hariç
 # (05-16 UTC; TR UTC+3, DST yok). GitHub zamanlaması 5-15 dk gecikebilir;
 # pencereler buna göre geniş (pusula/meeting_nudges.py). Aynı randevu × tür
 # bir kez gider.
@@ -26,6 +26,7 @@ env:
   ZOHO_ACCOUNTS_DOMAIN: ${{ secrets.ZOHO_ACCOUNTS_DOMAIN }}
   ZOHO_API_DOMAIN: ${{ secrets.ZOHO_API_DOMAIN }}
   ZOHO_MEETING_REFRESH_TOKEN: ${{ secrets.ZOHO_MEETING_REFRESH_TOKEN }}
+  ZOHO_PEOPLE_REFRESH_TOKEN: ${{ secrets.ZOHO_PEOPLE_REFRESH_TOKEN }}
   CLIQ_WEBHOOK_URL: ${{ secrets.CLIQ_WEBHOOK_URL }}
   PUSULA_SHADOW_EMAIL: ${{ secrets.PUSULA_SHADOW_EMAIL }}
   # 1: dürtme temsilciye gider (gölge adresi atlanır). 0/boş: gölge.
@@ -43,5 +44,9 @@ jobs:
           cache: pip
       - name: Bağımlılıkları kur
         run: python -m pip install -r requirements.txt
+      # İzinli temsilciye dürtme gitmesin: önce People izinleri (tek istek).
+      - name: Zoho People izinleri
+        continue-on-error: true
+        run: python scripts/people_leaves.py
       - name: Randevu dürtmeleri
         run: python scripts/meeting_nudges.py
