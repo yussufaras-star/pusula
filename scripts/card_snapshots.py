@@ -3,6 +3,7 @@
 Paneli yerelde açar (uvicorn + derlenmiş arayüz), tek seferlik yönetici
 oturumuyla kartların ekran görüntüsünü alır ve kanala gönderir.
 Önce: npm --prefix web run build. Varsayılan gönderir; --out DIR yalnız kaydeder.
+--cards prim,temsilciler hangi kartların gideceğini seçer (öğlen yalnız temsilciler).
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ def _wait_up(proc: subprocess.Popen, timeout: float = 60) -> None:
     raise RuntimeError("Panel sunucusu açılmadı")
 
 
-def capture(out: Path | None) -> None:
+def capture(out: Path | None, cards: list[tuple[str, str]]) -> None:
     from playwright.sync_api import sync_playwright
 
     from pusula.card_share import post_channel_image
@@ -74,12 +75,12 @@ def capture(out: Path | None) -> None:
             context.add_cookies([{"name": COOKIE_NAME, "value": cookie, "url": BASE}])
             page = context.new_page()
             page.goto(f"{BASE}/#/canli")
-            for kart, _ in CARDS:
+            for kart, _ in cards:
                 page.wait_for_selector(f"[data-share='{kart}'] table", timeout=90_000)
             page.wait_for_load_state("networkidle")
             page.wait_for_function("!document.querySelector('[data-share] .skeleton')", timeout=60_000)
             page.add_style_tag(content=f"{SKIP}{{display:none !important}}")
-            for kart, baslik in CARDS:
+            for kart, baslik in cards:
                 png = page.locator(f"[data-share='{kart}']").screenshot()
                 if out:
                     out.mkdir(parents=True, exist_ok=True)
@@ -97,8 +98,13 @@ def capture(out: Path | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, help="Göndermeden bu klasöre kaydet")
+    parser.add_argument("--cards", default=",".join(k for k, _ in CARDS), help="Virgülle kart adları")
     args = parser.parse_args()
-    capture(args.out)
+    wanted = {c.strip() for c in args.cards.split(",") if c.strip()}
+    unknown = wanted - {k for k, _ in CARDS}
+    if unknown or not wanted:
+        parser.error(f"Bilinmeyen kart: {', '.join(sorted(unknown)) or 'boş'}")
+    capture(args.out, [c for c in CARDS if c[0] in wanted])
 
 
 if __name__ == "__main__":
