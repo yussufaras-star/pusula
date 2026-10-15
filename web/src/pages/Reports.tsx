@@ -1,13 +1,14 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 
 import { usePolling } from "../api";
 import { Funnel } from "../components/Funnel";
 import { StatTile } from "../components/StatTile";
 import { ChurnBoard } from "../components/ChurnBoard";
 import { RecoBoard } from "../components/RecoBoard";
+import { SyncButton } from "../components/SyncButton";
 import { SourceYield } from "../components/SourceYield";
 import { CiroTrendCard, RepCiroChange } from "../components/CiroTrend";
-import { duration, int, num, pct, tl, tlShort } from "../format";
+import { ago, duration, int, num, pct, tl, tlShort } from "../format";
 import type { CiroMonth, Me, ReportRow, SalesReport } from "../types";
 
 type Preset = "bu_ay" | "gecen_ay" | "son_30" | "son_90";
@@ -45,8 +46,20 @@ const dayLabel = new Intl.DateTimeFormat("tr-TR", { day: "numeric", month: "long
 export function ReportsPage({ me }: { me: Me }) {
   const [preset, setPreset] = useState<Preset>("bu_ay");
   const [start, end] = range(preset);
-  const { data, error, loading } = usePolling<SalesReport>(`/api/sales-report?start=${start}&end=${end}`, 0);
+  const { data, error, loading, refresh, fetchedAt } = usePolling<SalesReport>(
+    `/api/sales-report?start=${start}&end=${end}`,
+    0,
+  );
   const isAdmin = me.role === "admin";
+  // Artınca alt kartlar (kaynak verimi, churn, Re-Co) yeniden yüklenir.
+  const [reloadTick, setReloadTick] = useState(0);
+  const reload = () => {
+    refresh();
+    setReloadTick((n) => n + 1);
+  };
+  const period = data
+    ? `${dayLabel.format(new Date(`${data.start}T00:00:00Z`))} – ${dayLabel.format(new Date(`${data.end}T00:00:00Z`))}`
+    : "";
   const [sideA, setSideA] = useState<string | null>(null);
   const [sideB, setSideB] = useState<string>(AVG);
 
@@ -66,10 +79,8 @@ export function ReportsPage({ me }: { me: Me }) {
         <div>
           <h1>Raporlar</h1>
           <div className="sub">
-            {data
-              ? `${dayLabel.format(new Date(`${data.start}T00:00:00Z`))} – ${dayLabel.format(new Date(`${data.end}T00:00:00Z`))} · ${data.work_days} iş günü`
-              : "…"}
-            {loading ? " · yükleniyor…" : ""}
+            {data ? `${period} · ${data.work_days} iş günü` : "…"}
+            {loading ? " · yükleniyor…" : data?.data_as_of ? ` · veri ${ago(data.data_as_of, fetchedAt ?? new Date())}` : ""}
           </div>
         </div>
         <div className="controls">
@@ -85,6 +96,13 @@ export function ReportsPage({ me }: { me: Me }) {
               </button>
             ))}
           </div>
+          {isAdmin ? (
+            <SyncButton onDone={reload} />
+          ) : (
+            <button className="btn" onClick={reload} disabled={loading}>
+              Yenile
+            </button>
+          )}
         </div>
       </div>
 
@@ -102,7 +120,7 @@ export function ReportsPage({ me }: { me: Me }) {
           ))}
         </div>
       ) : (
-        <>
+        <Fragment key={reloadTick}>
           <div className="tiles">
             <StatTile label="Ekip cirosu" value={tlShort(data.team.ciro)} expected={`${int(data.team.satis)} satış`} />
             <StatTile label="Ortalama satış" value={tlShort(data.team.ort_satis)} expected="satış başına ciro" />
@@ -166,7 +184,7 @@ export function ReportsPage({ me }: { me: Me }) {
           <section className="card">
             <div className="card-head">
               <h2>Kaynak verimi</h2>
-              <span className="hint">dönemde atanan lead'ler: hangi kaynak satışa dönüyor</span>
+              <span className="hint">{period} · dönemde atanan lead'ler: hangi kaynak satışa dönüyor</span>
             </div>
             <div className="card-body">
               <SourceYield start={data.start} end={data.end} reps={data.reps} isAdmin={isAdmin} />
@@ -200,13 +218,15 @@ export function ReportsPage({ me }: { me: Me }) {
           <section className="card">
             <div className="card-head">
               <h2>{isAdmin ? "Ekip sıralaması ve metrikler" : "Metriklerim"}</h2>
-              <span className="hint">{isAdmin ? "sütun başlığına tıkla: sırala" : "ekip ortalamasıyla"}</span>
+              <span className="hint">
+                {period} · {isAdmin ? "sütun başlığına tıkla: sırala" : "ekip ortalamasıyla"}
+              </span>
             </div>
             <div className="card-body">
               <RankTable data={data} ranked={isAdmin} />
             </div>
           </section>
-        </>
+        </Fragment>
       )}
     </>
   );

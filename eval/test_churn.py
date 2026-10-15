@@ -98,3 +98,30 @@ def test_pre_crm_customers_from_subscription_dates() -> None:
     out = action_lists({"x": {"name": "Eski", "owner": None, "sales": [], "pre": date(2025, 8, 1),
                               "paket": "Premium", "bas": date(2025, 8, 1)}}, today)
     assert out["kaybedilen"][0]["paket"] == "Premium" and out["kaybedilen"][0]["crm_oncesi"]
+
+
+def test_every_reco_sale_is_a_renewal() -> None:
+    from pusula.churn import contact_events
+
+    today = date(2026, 10, 15)
+    # Vadeden 3 gün sonra Re-Co: kayıp / geri kazanma değil, vade ayına yeniledi.
+    late = {"sales": [(date(2025, 10, 3), "Rexven-Premium"), (date(2026, 10, 6), "Re-Co-Premium")]}
+    assert contact_events(late, today)[0] == {"vade": date(2026, 10, 3), "sonuc": "yeniledi", "geri_kazanildi": False}
+    # Aynı gecikmede Premium alırsa eski kural: kaybedildi, geri kazanıldı.
+    back = {"sales": [(date(2025, 10, 3), "Rexven-Premium"), (date(2026, 10, 6), "Rexven-Premium")]}
+    assert contact_events(back, today)[0]["sonuc"] == "kaybedildi"
+    # Dönem başında Re-Co da yenileme: dönemi kapatır, yeni dönem Re-Co'dan 12 ay.
+    early = {"sales": [(date(2025, 11, 12), "Rexven-Plus"), (date(2026, 3, 31), "Re-Co-Premium")]}
+    assert contact_events(early, today) == [
+        {"vade": date(2026, 11, 12), "sonuc": "yeniledi", "geri_kazanildi": False},
+        {"vade": date(2027, 3, 31), "sonuc": "bekliyor", "geri_kazanildi": False},
+    ]
+
+
+def test_reco_without_subscription_dates_renews_its_month() -> None:
+    from pusula.churn import contact_events, pre_crm_start
+
+    today = date(2026, 10, 15)
+    info = {"sales": [(date(2026, 4, 14), "Re-Co-Premium")]}
+    info["pre"] = pre_crm_start(info["sales"], None, None)
+    assert contact_events(info, today)[0] == {"vade": date(2026, 4, 14), "sonuc": "yeniledi", "geri_kazanildi": False}

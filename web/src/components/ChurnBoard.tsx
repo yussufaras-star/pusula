@@ -217,7 +217,7 @@ export function ChurnBoard() {
         yok. Oran yalnız vadesi geçmiş olanlar üzerinden (bekleyenler hariç). Abonelik satışı: {data.packages?.join(", ")}.
         CRM öncesi müşteriler ({int(data.crm_oncesi ?? 0)}) Zoho müşteri kaydındaki abonelik bitişinden kurulur: CRM'de
         satışı yoksa vade abonelik bitişi, Re-Co (veya başka abonelik) satışı varsa o satış kendi ayına "yeniledi" yazılır.
-        Tablo Ocak 2026'dan başlar.
+        Deals'teki her Re-Co satışı yenilemedir: vadeden sonra da gelse "yeniledi" sayılır. Tablo Ocak 2026'dan başlar.
       </p>
     </>
   );
