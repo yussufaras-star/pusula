@@ -17,6 +17,11 @@ satışı CRM'de olmayan abonelik müşteri kaydındaki abonelik bitişinden kur
   satışın günü (Re-Co satışı kendi ayına "yeniledi" yazılır).
 - CRM'de satış yoksa vade = Zoho "Abonelik Bitiş"; geçtiyse kaybedildi.
 Tablo Ocak 2026'dan başlar (öncesinde yenilemeler CRM'de görünmez).
+
+Re-Co (yönetici, 15 Ekim): Deals'teki her kazanılmış Re-Co satışı yenilemedir.
+Dönem başında da olsa yok sayılmaz, vadeden sonra gelse de kayıp / geri
+kazanma değil "yeniledi" olur (açık dönemin vade ayına yazılır). Müşteri
+kaydında abonelik tarihi olmasa da ilk Re-Co önceki dönemin yenilemesidir.
 """
 
 from __future__ import annotations
@@ -49,26 +54,30 @@ def plus_months(day: date, months: int) -> date:
 RENEWAL_WINDOW = timedelta(days=183)
 
 
-def due_events(purchases: Iterable[date], today: date) -> list[dict[str, Any]]:
+def due_events(
+    purchases: Iterable[date], today: date, renewals: Iterable[date] = ()
+) -> list[dict[str, Any]]:
     """Saf: bir müşterinin abonelik satış tarihleri → vade olayları.
 
     Sonuç: yeniledi (vadeye kadar yeni satış) | kaybedildi (vade geçti,
     yenileme yok; sonradan satın aldıysa geri_kazanildi) | bekliyor (vade gelmedi).
+    renewals: Re-Co satış günleri; her biri açık dönemi "yeniledi" kapatır.
     """
-    dates = sorted(set(purchases))
+    renewal = set(renewals)
+    dates = sorted(set(purchases) | renewal)
     if not dates:
         return []
     events: list[dict[str, Any]] = []
     end = plus_months(dates[0], TERM_MONTHS)
     rest = dates[1:]
     while True:
-        rest = [d for d in rest if d > end - RENEWAL_WINDOW]
+        rest = [d for d in rest if d in renewal or d > end - RENEWAL_WINDOW]
         if not rest:
             sonuc = "bekliyor" if end >= today else "kaybedildi"
             events.append({"vade": end, "sonuc": sonuc, "geri_kazanildi": False})
             return events
         nxt, rest = rest[0], rest[1:]
-        if nxt <= end:
+        if nxt <= end or nxt in renewal:
             events.append({"vade": end, "sonuc": "yeniledi", "geri_kazanildi": False})
         elif end >= today:
             events.append({"vade": end, "sonuc": "bekliyor", "geri_kazanildi": False})
@@ -141,6 +150,14 @@ def period_churn(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def contact_events(info: dict[str, Any], today: date) -> list[dict[str, Any]]:
+    """Saf: müşteri kaydı (sales, pre) → vade olayları; Re-Co satışları yenileme."""
+    pre = info.get("pre")
+    starts = ([pre] if pre else []) + [d for d, _ in info["sales"]]
+    renewals = [d for d, pkg in info["sales"] if pkg == RENEWAL_PACKAGE]
+    return due_events(starts, today, renewals) if starts else []
+
+
 UPCOMING_DAYS = 60
 LOST_DAYS = 120
 
@@ -161,10 +178,10 @@ def action_lists(
     for cid, info in contacts.items():
         sales = sorted(info["sales"])
         pre = info.get("pre")
-        starts = ([pre] if pre else []) + [d for d, _ in sales]
-        if not starts:
+        events = contact_events(info, today)
+        if not events:
             continue
-        last = due_events(starts, today)[-1]
+        last = events[-1]
         base = {
             "contact_id": cid,
             "musteri": info.get("name") or "—",
@@ -247,9 +264,11 @@ def load_churn(today: date, owner: str | None = None) -> dict[str, Any]:
     events = []
     pre_count = 0
     for info in contacts.values():
-        starts = ([info["pre"]] if info.get("pre") else []) + [d for d, _ in info["sales"]]
+        if "pre" not in info:
+            # Müşteri kaydında abonelik tarihi yok: ilk satış Re-Co ise yine yenileme.
+            info["pre"] = pre_crm_start(info["sales"], None, None)
         pre_count += 1 if info.get("pre") else 0
-        events += due_events(starts, today)
+        events += contact_events(info, today)
     months = monthly_churn(events, today)
     refund = {m: (iade, satis) for m, iade, satis in refunds}
     for r in months:

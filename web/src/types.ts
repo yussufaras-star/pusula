@@ -266,6 +266,8 @@ export interface SalesReport {
   avg: ReportRow;
   ciro_monthly: CiroMonth[];
   ciro_trend?: CiroTrend;
+  /** Son başarılı Zoho senkronu. */
+  data_as_of?: string | null;
 }
 
 // pusula/ciro_trend.py build_trend.

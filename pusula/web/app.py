@@ -401,12 +401,15 @@ def sales_report(
     last = parse_day(end, today)
     if last < first:
         raise HTTPException(status_code=400, detail="Bitiş başlangıçtan önce olamaz")
+    # Anahtar son senkrona bağlı: "Verileri güncelle" ya da saatlik çekimden sonra
+    # her Vercel örneğinde rapor yeniden kurulur (cache.clear yalnız kendi örneğini siler).
+    as_of = data_as_of()
     payload = cache.cached(
-        ("sales-report", first.isoformat(), last.isoformat(), today.isoformat()),
+        ("sales-report", first.isoformat(), last.isoformat(), today.isoformat(), as_of),
         REPORT_TTL if last >= today else HISTORY_TTL,
         lambda: jsonable_encoder(build_sales_report(first, last, now)),
     )
-    return scope_report(payload, user)
+    return {**scope_report(payload, user), "data_as_of": as_of}
 
 
 @app.get("/api/source-yield")
@@ -424,7 +427,7 @@ def source_yield_api(
     chosen = selected_rep(user, rep_id)
     today = _now().date()
     span = Span.days(parse_day(start, today), parse_day(end, today))
-    key = ("source-yield", dim, chosen, start, end, today.isoformat())
+    key = ("source-yield", dim, chosen, start, end, today.isoformat(), data_as_of())
     return cache.cached(
         key, REPORT_TTL, lambda: jsonable_encoder(source_yield(dim, rep_id=chosen, span=span))
     )
@@ -498,7 +501,7 @@ def reco(owner: str | None = None, user: AuthUser = Depends(admin_user)) -> Any:
     require_database()
     today = _now().date()
     return cache.cached(
-        ("reco", owner, today.isoformat(), _now().strftime("%H")),
+        ("reco", owner, today.isoformat(), data_as_of()),
         REPORT_TTL,
         lambda: jsonable_encoder(load_reco(today, owner or None)),
     )
@@ -510,7 +513,7 @@ def churn(owner: str | None = None, user: AuthUser = Depends(admin_user)) -> Any
     require_database()
     today = _now().date()
     return cache.cached(
-        ("churn", owner, today.isoformat(), _now().strftime("%H")),
+        ("churn", owner, today.isoformat(), data_as_of()),
         REPORT_TTL,
         lambda: jsonable_encoder(load_churn(today, owner or None)),
     )
