@@ -536,7 +536,7 @@ CREATE TABLE IF NOT EXISTS fin_accounts (
     currency             text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
     -- 'csv' ekstre yüklemesi, 'manual' elle bakiye; diğerleri API senkronu.
     provider             text NOT NULL DEFAULT 'manual'
-        CHECK (provider IN ('mercury', 'wise', 'stripe', 'revolut', 'csv', 'manual')),
+        CHECK (provider IN ('mercury', 'wise', 'stripe', 'revolut', 'kuveytturk', 'garanti', 'csv', 'manual')),
     -- Sağlayıcıdaki hesap kimliği. Wise: '<profileId>:<balanceId>'.
     provider_account_id  text,
     -- Ortam değişkeni son eki (ör. LLC → MERCURY_TOKEN_LLC). Değer değil, ad.
@@ -551,6 +551,11 @@ CREATE TABLE IF NOT EXISTS fin_accounts (
     created_at           timestamptz NOT NULL DEFAULT now(),
     CHECK (provider IN ('csv', 'manual') OR credential_key IS NOT NULL)
 );
+
+-- Geçiş: yeni API sağlayıcıları (Kuveyt Türk, Garanti) için kısıt güncellenir.
+ALTER TABLE fin_accounts DROP CONSTRAINT IF EXISTS fin_accounts_provider_check;
+ALTER TABLE fin_accounts ADD CONSTRAINT fin_accounts_provider_check
+    CHECK (provider IN ('mercury', 'wise', 'stripe', 'revolut', 'kuveytturk', 'garanti', 'csv', 'manual'));
 
 CREATE TABLE IF NOT EXISTS fin_categories (
     id    text PRIMARY KEY,

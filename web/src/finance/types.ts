@@ -30,7 +30,7 @@ export interface Meta extends FxMeta {
   categories: Category[];
 }
 
-export type Provider = "mercury" | "wise" | "stripe" | "revolut" | "csv" | "manual";
+export type Provider = "mercury" | "wise" | "stripe" | "revolut" | "kuveytturk" | "garanti" | "csv" | "manual";
 export type AccountType = "bank" | "fintech" | "payment" | "card" | "shipping" | "other";
 
 export interface Account {

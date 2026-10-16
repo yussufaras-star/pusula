@@ -135,7 +135,7 @@ Currency = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
 CredentialKey = Annotated[str, Field(pattern=r"^[A-Z0-9_]+$")]
 Money = Annotated[Decimal, Field(max_digits=18, decimal_places=2)]
 AccountType = Literal["bank", "fintech", "payment", "card", "shipping", "other"]
-Provider = Literal["mercury", "wise", "stripe", "revolut", "csv", "manual"]
+Provider = Literal["mercury", "wise", "stripe", "revolut", "kuveytturk", "garanti", "csv", "manual"]
 CategoryKind = Literal["in", "out", "transfer"]
 TxSource = Literal["api", "csv", "manual"]
 FlowDirection = Literal["in", "out"]
@@ -151,7 +151,7 @@ DecisionStatus = Literal["acik", "aksiyon", "devam", "tamam", "iptal"]
 DecisionPriority = Literal["yuksek", "orta", "dusuk"]
 
 # API ile senkronize edilen sağlayıcılar; credential_key zorunlu.
-API_PROVIDERS: frozenset[str] = frozenset({"mercury", "wise", "stripe", "revolut"})
+API_PROVIDERS: frozenset[str] = frozenset({"mercury", "wise", "stripe", "revolut", "kuveytturk", "garanti"})
 
 
 class FinCompany(BaseModel):
