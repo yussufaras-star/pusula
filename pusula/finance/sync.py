@@ -228,6 +228,14 @@ def run_finance_sync(
                 budget_sec,
                 started,
             )
+        own = 0
+        try:
+            # Yeni gelenler eski hareketlerle de eşleşebilir: ilk senkron penceresi + pay
+            since = now.date() - timedelta(days=(days or FIRST_DAYS)) - OVERLAP
+            with connect() as conn:
+                own = store.apply_own_transfers(conn, since)
+        except Exception as exc:
+            logger.warning("hesap arasi eslestirme basarisiz (%s)", type(exc).__name__)
         with connect() as conn:
             store.stamp_sync_run(conn, now)
     return {
@@ -235,4 +243,5 @@ def run_finance_sync(
         "seconds": round(time.monotonic() - started, 1),
         "fx": fx_report,
         "accounts": results,
+        "own_transfers": own,
     }

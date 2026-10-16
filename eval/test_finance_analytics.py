@@ -321,3 +321,60 @@ def test_overview_alerts() -> None:
     assert [a.id for a in alerts.stale] == [3, 5]
     assert len(alerts.overdue) == 1 and alerts.overdue_usd == D("50")
     assert alerts.cash_gap is not None and alerts.cash_gap.week == date(2026, 10, 26)
+
+
+# --- kendi hesapları arası -------------------------------------------------------
+
+
+def test_own_transfers_direct_and_paired() -> None:
+    from pusula.finance.analytics import own_transfers
+
+    accounts = [
+        _account(id=1, name="Mercury ••4259"),
+        _account(id=2, name="Mercury ••6808"),
+        _account(id=3, name="Wise USD", provider="wise", credential_key="LLC"),
+        _account(id=4, company_id="gmbh", name="Wise EUR", currency="EUR", provider="wise", credential_key="LLC"),
+    ]
+    direct_out = _tx("llc", date(2026, 9, 3), "-500", account_id=2, description="Mercury Checking ••4259")
+    direct_in = _tx("llc", date(2026, 9, 3), "500", account_id=1, description="Mercury Checking ••6808")
+    own_digits = _tx("llc", date(2026, 9, 3), "-20", account_id=1, description="Fee ••4259")  # kendi hesabı, aktarım değil
+    big_out = _tx("llc", date(2026, 9, 10), "-550000", account_id=1, counterparty="Neshe LLC")
+    big_in = _tx("llc", date(2026, 9, 11), "549000", account_id=3, counterparty="REXVEN LLC")  # %0,18 ücret
+    # tesadüfi aynı tutar: kanıt yok → eşleşmez
+    cust_in = _tx("llc", date(2026, 9, 15), "1000", account_id=1, counterparty="Müşteri A")
+    supp_out = _tx("llc", date(2026, 9, 15), "-1000", account_id=3, counterparty="Tedarikçi B")
+    # başka şirket, ic işaretli, kullanıcı düzeltmesi → aday değil
+    other_co = _tx("gmbh", date(2026, 9, 11), "549000", "EUR", account_id=4, counterparty="REXVEN LLC")
+    ic = _tx("llc", date(2026, 9, 12), "-300", account_id=3, counterparty="Rexven GmbH", counterparty_company_id="gmbh")
+    edited = _tx("llc", date(2026, 9, 3), "-1", account_id=2, description="Mercury Checking ••4259",
+                 user_edited_at=datetime(2026, 9, 4, tzinfo=TZ))
+    marked = own_transfers(
+        [direct_out, direct_in, own_digits, big_out, big_in, cust_in, supp_out, other_co, ic, edited],
+        accounts,
+        COMPANIES,
+    )
+    assert marked == {direct_out.id, direct_in.id, big_out.id, big_in.id}
+
+
+def test_own_transfer_window_and_tolerance() -> None:
+    from pusula.finance.analytics import own_transfers
+
+    accounts = [_account(id=1, name="Mercury ••4259"), _account(id=3, name="Wise USD", provider="wise", credential_key="LLC")]
+    late_out = _tx("llc", date(2026, 9, 1), "-1000", account_id=1)
+    late_in = _tx("llc", date(2026, 9, 5), "1000", account_id=3, counterparty="REXVEN LLC")  # 4 gün
+    far_out = _tx("llc", date(2026, 9, 10), "-1000", account_id=1)
+    far_in = _tx("llc", date(2026, 9, 10), "980", account_id=3, counterparty="REXVEN LLC")  # %2 fark
+    assert own_transfers([late_out, late_in, far_out, far_in], accounts, COMPANIES) == set()
+
+
+def test_own_transfers_leave_monthly_flow() -> None:
+    from pusula.finance.analytics import own_transfers
+
+    accounts = [_account(id=1, name="Mercury ••4259"), _account(id=3, name="Wise USD", provider="wise", credential_key="LLC")]
+    out = _tx("llc", date(2026, 9, 10), "-5000", account_id=1)
+    inc = _tx("llc", date(2026, 9, 10), "5000", account_id=3, counterparty="REXVEN LLC")
+    sale = _tx("llc", date(2026, 9, 10), "700", account_id=3, counterparty="Müşteri")
+    ids = own_transfers([out, inc, sale], accounts, COMPANIES)
+    tagged = [t.model_copy(update={"category_id": "hesap_arasi"}) if t.id in ids else t for t in (out, inc, sale)]
+    [month] = monthly_flows(tagged, _fx(), KINDS)
+    assert (month.inflow, month.outflow) == (D("700"), D("0"))
