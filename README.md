@@ -206,7 +206,8 @@ bilanço ve stratejik kararlar. Üst barda "Finans operasyonu" geçişiyle açı
 - **Kurlar:** ECB (Frankfurter), `fin_fx_rates` (1 birim = usd_rate USD).
   Hareketler işlem tarihindeki, bakiyeler son kurla çevrilir. Kur yoksa
   tutar toplama girmez, ekranda "kur verisi yetersiz" yazar.
-- **API hesapları:** Mercury, Wise, Stripe, Revolut Business. Anahtarlar
+- **API hesapları:** Mercury, Wise, Stripe, Revolut Business, Kuveyt Türk
+  (`KUVEYT_TURK_*`, imzalı istek), Garanti BBVA (`GARANTI_*`, onaya bağlı). Anahtarlar
   yalnız ortam değişkeninden okunur; kodda, veritabanında veya tarayıcıda
   yer almaz: `MERCURY_API_TOKEN`, `WISE_API_TOKEN`, `STRIPE_RESTRICTED_KEY`.
   Bir şirketin ayrı token'ı olursa şirkete özel ad önceliklidir

@@ -3,7 +3,8 @@
 # Panelde "Hesapları güncelle" butonu (POST /api/finance/sync) anlık yoldur.
 #
 # Sağlayıcı anahtarları yalnız repo secrets'tan, tek tek verilir:
-# MERCURY_API_TOKEN, WISE_API_TOKEN, STRIPE_RESTRICTED_KEY. Bir şirketin
+# MERCURY_API_TOKEN, WISE_API_TOKEN, STRIPE_RESTRICTED_KEY, KUVEYT_TURK_*,
+# GARANTI_*. Bir şirketin
 # ayrı token'ı olursa (ör. WISE_TOKEN_GMBH) buraya bir satır eklenir.
 # Tanımsız secret boş gelir; o hesap "Eksik ortam değişkeni" hatası verir.
 name: finance-sync
@@ -45,5 +46,18 @@ jobs:
           MERCURY_API_TOKEN: ${{ secrets.MERCURY_API_TOKEN }}
           WISE_API_TOKEN: ${{ secrets.WISE_API_TOKEN }}
           STRIPE_RESTRICTED_KEY: ${{ secrets.STRIPE_RESTRICTED_KEY }}
+          KUVEYT_TURK_IDENTITY_URL: ${{ secrets.KUVEYT_TURK_IDENTITY_URL }}
+          KUVEYT_TURK_GATEWAY_URL: ${{ secrets.KUVEYT_TURK_GATEWAY_URL }}
+          KUVEYT_TURK_CLIENT_ID: ${{ secrets.KUVEYT_TURK_CLIENT_ID }}
+          KUVEYT_TURK_CLIENT_SECRET: ${{ secrets.KUVEYT_TURK_CLIENT_SECRET }}
+          KUVEYT_TURK_PRIVATE_KEY: ${{ secrets.KUVEYT_TURK_PRIVATE_KEY }}
+          GARANTI_API_URL: ${{ secrets.GARANTI_API_URL }}
+          GARANTI_CLIENT_ID: ${{ secrets.GARANTI_CLIENT_ID }}
+          GARANTI_CLIENT_SECRET: ${{ secrets.GARANTI_CLIENT_SECRET }}
+          GARANTI_CALLBACK_URL: ${{ secrets.GARANTI_CALLBACK_URL }}
+          GARANTI_CONSENT_ID: ${{ secrets.GARANTI_CONSENT_ID }}
+          GARANTI_UNIT_NUMBER: ${{ secrets.GARANTI_UNIT_NUMBER }}
+          GARANTI_ACCOUNT_NUMBER: ${{ secrets.GARANTI_ACCOUNT_NUMBER }}
+          GARANTI_IBAN: ${{ secrets.GARANTI_IBAN }}
           DAYS: ${{ inputs.days }}
         run: python scripts/finance_sync.py ${DAYS:+--days "$DAYS"}
