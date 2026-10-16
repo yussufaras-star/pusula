@@ -112,6 +112,8 @@ export interface Me {
   role: "admin" | "rep";
   rep_id: string | null;
   full_name: string | null;
+  // Finans operasyonu bölümünü görebilir mi (sunucu karar verir).
+  finance?: boolean;
 }
 
 // pusula/compare.py build_side çıktısı.

@@ -16,6 +16,7 @@ import type {
   RepStatus,
   Segment,
 } from "../src/types";
+import { mockFinance } from "./finance";
 
 const REPS: [string, string, number][] = [
   ["r1", "Ayşe Yılmaz", 1.15],
@@ -484,11 +485,18 @@ ${REPS[3][1].split(" ")[0]}, bugün şu başlıklarda temponun gerisindesin:
 for (const n of NUDGES) n.text = n.ai_text ? `${n.body}\n💡 ${n.ai_text}` : n.body;
 
 
-const ME: Me = { email: "yusuf.aras@rexven.com", role: "admin", rep_id: null, full_name: "Yusuf Aras" };
+const ME: Me = {
+  email: "yusuf.aras@rexven.com",
+  role: "admin",
+  rep_id: null,
+  full_name: "Yusuf Aras",
+  finance: true,
+};
 
 export function mockApi(method: string, url: string): unknown {
   const path = url.split("?")[0];
   if (path === "/api/me") return ME;
+  if (path.startsWith("/api/finance/")) return mockFinance(method, url);
   if (path === "/api/live") return live();
   if (path === "/api/leaves" && method === "POST") {
     LEAVES.has("r5") ? LEAVES.delete("r5") : LEAVES.add("r5");

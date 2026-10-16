@@ -1,0 +1,46 @@
+# Finans senkronu: ECB kurları + API'li banka hesapları (Mercury, Wise,
+# Stripe, Revolut). Günde 2 kez, 08:00 ve 17:00 İstanbul (UTC+3).
+# Panelde "Hesapları güncelle" butonu (POST /api/finance/sync) anlık yoldur.
+#
+# Sağlayıcı anahtarları repo secrets'a <SAĞLAYICI>_<KEY> adıyla eklenir
+# (ör. MERCURY_TOKEN_LLC); workflow'a ayrıca yazmak gerekmez. Betik
+# FIN_SECRETS_JSON içinden yalnız bu kalıba uyan adları ortama alır.
+name: finance-sync
+
+on:
+  schedule:
+    - cron: "0 5,14 * * *"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Geriye bakış (gün); boşsa son senkrondan"
+        required: false
+
+concurrency:
+  group: pusula-finance-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUNBUFFERED: "1"
+  DATABASE_URL_POOLED: ${{ secrets.DATABASE_URL_POOLED }}
+
+jobs:
+  finance-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Bağımlılıkları kur
+        run: python -m pip install -r requirements.txt
+      - name: Finans senkronu
+        env:
+          FIN_SECRETS_JSON: ${{ toJSON(secrets) }}
+          DAYS: ${{ inputs.days }}
+        run: python scripts/finance_sync.py ${DAYS:+--days "$DAYS"}

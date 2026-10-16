@@ -6,3 +6,7 @@ httpx==0.28.1
 python-dotenv==1.2.2
 fastapi==0.116.1
 anthropic==1.13.0
+# Finans: banka ekstresi XLSX okuma
+openpyxl==3.1.5
+# Finans: Revolut RS256 istemci doğrulaması
+cryptography==46.0.7
