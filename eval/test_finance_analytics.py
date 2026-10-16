@@ -482,3 +482,12 @@ def test_institution_evidence_needs_different_institution() -> None:
     out = _tx("llc", date(2026, 9, 1), "-900", account_id=1, counterparty="Mercury Bank customer")
     inc = _tx("llc", date(2026, 9, 1), "900", account_id=2, counterparty="Mercury payout")
     assert own_transfers([out, inc], accounts, COMPANIES) == set()
+
+
+def test_statement_account_stale_by_statement_date_not_upload_time() -> None:
+    now = datetime(2026, 10, 16, 9, 0, tzinfo=TZ)
+    old_statement = _account(id=7, provider="csv", last_synced_at=now - timedelta(minutes=5),
+                             balance_at=datetime(2026, 6, 25, 23, 59, tzinfo=TZ))
+    fresh = _account(id=8, provider="csv", last_synced_at=now, balance_at=now - timedelta(days=2))
+    alerts = overview_alerts([old_statement, fresh], [], [], _fx(), now)
+    assert [a.id for a in alerts.stale] == [7]
