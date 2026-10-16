@@ -123,7 +123,7 @@ export function AccountsTab({ scope, meta, tick, reload }: TabProps) {
             <div className="empty">Henüz hesap yok.</div>
           )}
           <p className="muted fin-note">
-            API anahtarları tarayıcıya ve veritabanına gelmez; Vercel ve GitHub ortam değişkenlerinde durur (ör. MERCURY_TOKEN_LLC). Burada yalnız
+            API anahtarları tarayıcıya ve veritabanına gelmez; Vercel ve GitHub ortam değişkenlerinde durur (MERCURY_API_TOKEN, WISE_API_TOKEN, STRIPE_RESTRICTED_KEY). Burada yalnız
             değişken adının son eki yazılır. Garanti, KuveytTürk, Vakıf gibi bankalar için bağlantı türü "Ekstre yükleme" seçilir.
           </p>
         </div>
@@ -260,7 +260,14 @@ function AccountForm({
             <Field label="Sağlayıcı hesap kimliği" hint={ID_HINT[f.provider as Provider]}>
               <input className="f-input" value={f.provider_account_id} onChange={(e) => set("provider_account_id", e.target.value)} />
             </Field>
-            <Field label="Anahtar eki" hint={`ortam değişkeni: ${f.provider === "stripe" ? "STRIPE_KEY" : f.provider === "revolut" ? "REVOLUT_*" : `${f.provider.toUpperCase()}_TOKEN`}_${f.credential_key.toUpperCase() || "<EK>"}`}>
+            <Field
+              label="Anahtar eki"
+              hint={
+                f.provider === "revolut"
+                  ? `ortam değişkeni: REVOLUT_*_${f.credential_key.toUpperCase() || "<EK>"}`
+                  : `ortak: ${f.provider === "stripe" ? "STRIPE_RESTRICTED_KEY" : `${f.provider.toUpperCase()}_API_TOKEN`} · şirkete özel varsa ${f.provider === "stripe" ? "STRIPE_KEY" : `${f.provider.toUpperCase()}_TOKEN`}_${f.credential_key.toUpperCase() || "<EK>"}`
+              }
+            >
               <input className="f-input" value={f.credential_key} onChange={(e) => set("credential_key", e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))} placeholder="ör. LLC" />
             </Field>
           </>

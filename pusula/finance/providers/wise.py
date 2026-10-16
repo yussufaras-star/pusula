@@ -1,4 +1,7 @@
-"""Wise: provider_account_id = '<profileId>:<balanceId>' (WISE_TOKEN_<KEY>).
+"""Wise: provider_account_id = '<profileId>:<balanceId>'.
+
+Token ortam değişkeninden: WISE_API_TOKEN (şirkete özel WISE_TOKEN_<KEY>
+önceliklidir).
 
 AB/UK profillerinde bakiye ekstresi Güçlü Müşteri Doğrulaması (SCA) ister:
 API 403 + 'x-2fa-approval' başlığı döner. Bu durumda hesap düşmez; bakiye
@@ -18,12 +21,11 @@ from pusula.finance.providers.base import (
     NormTx,
     ProviderError,
     ProviderHttpError,
-    cred_key,
     local_day,
     num,
     provider_id,
+    provider_secret,
     request_json,
-    require_env,
 )
 
 BASE = "https://api.wise.com"
@@ -31,7 +33,7 @@ SCA_WARNING = "Wise: hareketler için SCA gerekli, yalnız bakiye güncellendi"
 
 
 def fetch(account: FinAccount, since: datetime, client: httpx.Client) -> AdapterResult:
-    token = require_env(f"WISE_TOKEN_{cred_key(account)}")
+    token = provider_secret(account, "WISE_TOKEN", "WISE_API_TOKEN")
     profile_id, _, balance_id = provider_id(account).partition(":")
     if not profile_id or not balance_id:
         raise ProviderError("Wise: provider_account_id '<profileId>:<balanceId>' olmalı")

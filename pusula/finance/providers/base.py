@@ -104,6 +104,18 @@ def require_env(name: str) -> str:
     return value
 
 
+def provider_secret(account: FinAccount, scoped_prefix: str, global_name: str) -> str:
+    """Sağlayıcı anahtarı yalnız ortam değişkeninden: önce şirkete özel
+    <scoped_prefix>_<KEY> (ör. ikinci bir şirketin ayrı token'ı), yoksa
+    ortak ad (ör. MERCURY_API_TOKEN). Değer koda veya DB'ye yazılmaz."""
+    scoped = f"{scoped_prefix}_{cred_key(account)}"
+    for name in (scoped, global_name):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    raise ProviderError(f"Eksik ortam değişkeni: {global_name}")
+
+
 def cred_key(account: FinAccount) -> str:
     if not account.credential_key:
         raise ProviderError("credential_key tanımlı değil")
