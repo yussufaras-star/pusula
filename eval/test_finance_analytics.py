@@ -449,3 +449,36 @@ def test_top_uncategorized_groups_by_counterparty_and_direction() -> None:
         ("murat", "in", 1, D("300")),
         ("murat", "out", 1, D("200")),
     ]
+
+
+def test_stripe_payout_pairs_with_bank_deposit_even_if_rule_categorized() -> None:
+    from pusula.finance.analytics import own_transfers
+
+    accounts = [
+        _account(id=3, name="Wise USD", institution="Wise", provider="wise", credential_key="LLC"),
+        _account(id=11, name="Stripe", institution="Stripe", type="payment", provider="stripe", credential_key="LLC"),
+    ]
+    payout = _tx("llc", date(2026, 9, 10), "-7000", account_id=11, description="STRIPE PAYOUT", counterparty="Stripe")
+    # Wise girişi sistem kuralıyla 'satis' yapılmıştı; aktarım çıkınca değişebilir
+    deposit = _tx("llc", date(2026, 9, 12), "7000", account_id=3, counterparty="STRIPE",
+                  category_id="satis", category_rule_id=1)
+    # Stripe'taki satış ve iade asla aktarım değildir, şirket adı geçen bir çıkışla eşleşse bile
+    charge = _tx("llc", date(2026, 9, 10), "250", account_id=11, description="charge", counterparty="Stripe")
+    wise_out = _tx("llc", date(2026, 9, 10), "-250", account_id=3, counterparty="REXVEN LLC")
+    edited = _tx("llc", date(2026, 9, 12), "7000", account_id=3, counterparty="STRIPE", category_id="satis",
+                 user_edited_at=datetime(2026, 9, 13, tzinfo=TZ))
+    marked = own_transfers([payout, deposit, charge, wise_out, edited], accounts, COMPANIES)
+    assert marked == {payout.id, deposit.id}
+
+
+def test_institution_evidence_needs_different_institution() -> None:
+    from pusula.finance.analytics import own_transfers
+
+    accounts = [
+        _account(id=1, name="Mercury Ops", institution="Mercury"),
+        _account(id=2, name="Mercury Reserve", institution="Mercury"),
+    ]
+    # aynı kurum adı ('mercury') kanıt sayılmaz; son 4 hane yoksa eşleşmez
+    out = _tx("llc", date(2026, 9, 1), "-900", account_id=1, counterparty="Mercury Bank customer")
+    inc = _tx("llc", date(2026, 9, 1), "900", account_id=2, counterparty="Mercury payout")
+    assert own_transfers([out, inc], accounts, COMPANIES) == set()

@@ -791,6 +791,7 @@ FROM (VALUES
     ('in', 'amazon', 'satis'), ('in', 'shopify', 'satis'), ('in', 'etsy', 'satis'),
     ('in', 'trendyol', 'satis'), ('in', 'hepsiburada', 'satis'), ('in', 'iyzico', 'satis'),
     ('in', 'gumroad', 'satis'), ('in', 'paddle', 'satis'),
+    ('out', 'refund for', 'satis'), ('out', 'chargeback', 'satis'),
     ('out', 'internal revenue service', 'vergi'), ('out', 'irs usataxpymt', 'vergi'),
     ('out', 'franchise tax', 'vergi'), ('out', 'sales tax', 'vergi'), ('out', 'finanzamt', 'vergi'),
     ('out', 'vergi', 'vergi'), ('out', 'kdv', 'vergi'), ('out', 'gib ', 'vergi'),
