@@ -15,7 +15,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
@@ -27,6 +27,7 @@ from pusula.db.models import (
     CompanyId,
     Currency,
     FinAccount,
+    FinCategoryRule,
     FinCompany,
     FinDecision,
     FinPlannedItem,
@@ -187,7 +188,9 @@ def statement_import(account_id: int, body: StatementBody) -> Any:
         )
         span = parsed.date_range
         if span:
-            store.apply_own_transfers(conn, span[0] - timedelta(days=analytics.OWN_MATCH_DAYS))
+            since = span[0] - timedelta(days=analytics.OWN_MATCH_DAYS)
+            store.apply_own_transfers(conn, since)
+            store.apply_category_rules(conn, since)
     return jsonable_encoder(
         {
             "inserted": result.inserted,
@@ -461,12 +464,27 @@ def decisions(company: str = views.ALL) -> Any:
 class TxPatch(BaseModel):
     category_id: str | None = None
     counterparty_company_id: CompanyId | None = None
+    # Kategori seçilince aynı karşı taraf için kural oluştur ve benzerlerine uygula
+    learn: bool = True
+
+
+# Kural öğrenilmeyen kategoriler: şirketler arası karşı şirketle işaretlenir.
+NO_LEARN = frozenset({analytics.IC_CATEGORY})
+
+
+def _category_kinds(conn: Any) -> dict[str, str]:
+    return analytics.category_kinds(store.load_categories(conn))
 
 
 @router.patch("/transactions/{tx_id}")
 def patch_transaction(tx_id: int, body: TxPatch) -> Any:
-    """Kategori / şirketler arası düzeltmesi. Senkron bu satırı bir daha değiştirmez."""
-    changes = body.model_dump(include=body.model_fields_set)
+    """Kategori / şirketler arası düzeltmesi. Senkron bu satırı bir daha değiştirmez.
+
+    learn: seçilen kategori aynı karşı taraf (ve yön) için kullanıcı kuralı
+    olur; o karşı tarafın diğer kategorisiz hareketleri de hemen kategorilenir.
+    """
+    changes = body.model_dump(include=body.model_fields_set - {"learn"})
+    similar = 0
     with connect() as conn, db_errors():
         tx = store.load_transaction(conn, tx_id)
         if tx is None:
@@ -480,9 +498,110 @@ def patch_transaction(tx_id: int, body: TxPatch) -> Any:
             elif tx.category_id == analytics.IC_CATEGORY:
                 changes["category_id"] = None
         changes["user_edited_at"] = _now()
+        changes["category_rule_id"] = None
         store.update_row(conn, "fin_transactions", tx_id, changes)
+
+        category = changes.get("category_id")
+        key = analytics.tx_rule_key(tx)
+        if body.learn and "category_id" in body.model_fields_set and category and category not in NO_LEARN and len(key) >= 2:
+            direction = "in" if tx.amount > 0 else "out"
+            if analytics.rule_direction_ok(direction, _category_kinds(conn).get(category, "")):
+                store.upsert_rule(
+                    conn,
+                    FinCategoryRule(
+                        company_id=tx.company_id,
+                        direction=direction,
+                        match_type="exact",
+                        pattern=key,
+                        category_id=category,
+                        source="user",
+                        label=(tx.counterparty or tx.description).strip()[:120],
+                    ),
+                )
+                similar = store.apply_category_rules(conn)
         updated = store.load_transaction(conn, tx_id)
-    return jsonable_encoder(updated)
+    return jsonable_encoder({**(updated.model_dump() if updated else {}), "similar": similar})
+
+
+# --- kategori kuralları -----------------------------------------------------------------
+
+
+class RuleBody(BaseModel):
+    pattern: str
+    match_type: Literal["exact", "contains"] = "contains"
+    direction: Literal["in", "out", "any"] = "any"
+    company_id: CompanyId | None = None
+    category_id: str
+    label: str | None = None  # gösterilecek özgün yazım (boşsa kalıp)
+
+
+@router.get("/rules")
+def rules() -> Any:
+    with connect() as conn:
+        items = store.load_rules(conn)
+        usage = dict(
+            conn.execute(
+                "SELECT category_rule_id, count(*) FROM fin_transactions"
+                " WHERE category_rule_id IS NOT NULL GROUP BY 1"
+            ).fetchall()
+        )
+    return jsonable_encoder(
+        {"rules": [{**r.model_dump(), "matched": int(usage.get(r.id, 0))} for r in items]}
+    )
+
+
+@router.post("/rules")
+def create_rule(body: RuleBody) -> Any:
+    """Kullanıcı kuralı; kayıtlı kategorisiz hareketlere hemen uygulanır."""
+    pattern = analytics.rule_key(body.pattern)
+    if len(pattern) < 2:
+        raise HTTPException(status_code=400, detail="Kalıp en az 2 karakter olmalı")
+    with connect() as conn, db_errors():
+        kind = _category_kinds(conn).get(body.category_id)
+        if kind is None:
+            raise HTTPException(status_code=400, detail="Bilinmeyen kategori")
+        if body.category_id in NO_LEARN:
+            raise HTTPException(status_code=400, detail="Şirketler arası, karşı şirket seçilerek işaretlenir")
+        if not analytics.rule_direction_ok(body.direction, kind):
+            raise HTTPException(status_code=400, detail="Kategori, giriş / çıkış yönüyle uyuşmuyor")
+        rule_id = store.upsert_rule(
+            conn,
+            FinCategoryRule(
+                company_id=body.company_id,
+                direction=body.direction,
+                match_type=body.match_type,
+                pattern=pattern + (" " if body.pattern.endswith(" ") and body.match_type == "contains" else ""),
+                category_id=body.category_id,
+                source="user",
+                label=(body.label or body.pattern).strip()[:120],
+            ),
+        )
+        applied = store.apply_category_rules(conn)
+    return {"id": rule_id, "applied": applied}
+
+
+@router.delete("/rules/{rule_id}")
+def remove_rule(rule_id: int) -> Any:
+    """Kuralı siler, verdiği kategorileri geri alır; kalanlara diğer kurallar uygulanır."""
+    with connect() as conn, db_errors():
+        reverted = store.delete_rule(conn, rule_id)
+        if reverted is None:
+            raise HTTPException(status_code=404, detail="Kural bulunamadı")
+        reapplied = store.apply_category_rules(conn)
+    return {"id": rule_id, "reverted": reverted, "reapplied": reapplied}
+
+
+@router.get("/uncategorized")
+def uncategorized(company: str = views.ALL, limit: int = 20) -> Any:
+    """Kategorisiz karşı taraflar, USD hacmine göre."""
+    with connect() as conn:
+        companies = store.load_companies(conn)
+        txs = store.load_uncategorized(conn)
+        table = load_fx(conn, min((t.booked_at for t in txs), default=_now().date()))
+    scope = set(_scope(company, companies))
+    rows = analytics.top_uncategorized((t for t in txs if t.company_id in scope), table, max(1, min(limit, 100)))
+    total = sum(1 for t in txs if t.company_id in scope)
+    return jsonable_encoder({"items": rows, "total": total, "missing_fx": sorted(table.missing)})
 
 
 # --- yazma: hesap --------------------------------------------------------------------

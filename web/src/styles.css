@@ -2846,3 +2846,15 @@ textarea.f-input {
 .fin-checks-col {
   flex-direction: column;
 }
+
+.banner.fin-note-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 0;
+}
+
+.card-head.solo {
+  padding-bottom: 14px;
+}

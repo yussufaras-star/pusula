@@ -283,3 +283,30 @@ export interface SyncReport {
   fx?: { ok: boolean; rows?: number; error?: string };
   accounts?: { account_id: number; name: string; ok: boolean; inserted?: number; warning?: string; error?: string; skipped?: string }[];
 }
+
+export interface CategoryRule {
+  id: number;
+  company_id: CompanyId | null;
+  direction: "in" | "out" | "any";
+  match_type: "exact" | "contains";
+  pattern: string;
+  category_id: string;
+  source: "system" | "user";
+  label: string | null;
+  matched: number;
+}
+
+export interface UncategorizedRow {
+  company_id: CompanyId;
+  direction: "in" | "out";
+  pattern: string;
+  label: string;
+  count: number;
+  usd: number;
+}
+
+export interface Uncategorized {
+  items: UncategorizedRow[];
+  total: number;
+  missing_fx: string[];
+}

@@ -23,6 +23,7 @@ class FakeStore:
     def __init__(self) -> None:
         self.updates: list = []
         self.inserts: list = []
+        self.rules: list = []
         self.tx = FinTransaction(
             id=7, account_id=1, company_id="llc", booked_at=date(2026, 10, 1), amount=Decimal("-100"),
             currency="USD", external_id="x", source="api", category_id="ic_transfer", counterparty_company_id="tr",
@@ -46,6 +47,25 @@ class FakeStore:
     def load_row(self, conn, table, row_id):
         return self.account if (table, row_id) == ("fin_accounts", 1) else None
 
+    def load_categories(self, conn):
+        from pusula.db.models import FinCategory
+
+        return [
+            FinCategory(id="maas", name="Maaş", kind="out"),
+            FinCategory(id="satis", name="Satış", kind="in"),
+            FinCategory(id="ic_transfer", name="Şirketler arası", kind="transfer"),
+        ]
+
+    def upsert_rule(self, conn, rule):
+        self.rules.append(rule)
+        return 77
+
+    def apply_category_rules(self, conn, since=None):
+        return 5 if self.rules else 0
+
+    def delete_rule(self, conn, rule_id):
+        return 3 if rule_id == 77 else None
+
 
 @pytest.fixture
 def env(monkeypatch):
@@ -54,7 +74,8 @@ def env(monkeypatch):
     monkeypatch.delenv("PUSULA_FINANCE_EMAILS", raising=False)
     monkeypatch.setattr(web_finance, "connect", lambda: nullcontext(object()))
     fake = FakeStore()
-    for name in ("load_transaction", "update_row", "insert_row", "load_row"):
+    for name in ("load_transaction", "update_row", "insert_row", "load_row", "load_categories",
+                 "upsert_rule", "apply_category_rules", "delete_rule"):
         monkeypatch.setattr(web_finance.store, name, getattr(fake, name))
     client = TestClient(app)
     client.cookies.set("pusula_session", encode_session(ADMIN))
@@ -89,7 +110,7 @@ def test_marking_intercompany_sets_category(env) -> None:
     fake.updates.clear()
     # yalnız kategori değişince şirketler arası alanına dokunulmaz
     client.patch("/api/finance/transactions/7", json={"category_id": "maas"})
-    assert set(fake.updates[0][2]) == {"category_id", "user_edited_at"}
+    assert set(fake.updates[0][2]) == {"category_id", "user_edited_at", "category_rule_id"}
 
 
 def test_transaction_rules(env) -> None:
@@ -168,3 +189,31 @@ def test_add_line_takes_side_from_section(env, monkeypatch) -> None:
     # haftaya kilitlenmemiş kur ve bilinmeyen bölüm reddedilir
     assert client.post("/api/finance/snapshots/5/lines", json={**body, "currency": "EUR"}).status_code == 400
     assert client.post("/api/finance/snapshots/5/lines", json={**body, "section": "assets"}).status_code == 422
+
+
+def test_category_choice_learns_rule_for_counterparty(env) -> None:
+    client, fake = env
+    fake.tx = fake.tx.model_copy(update={"category_id": None, "counterparty_company_id": None, "counterparty": "Gusto Payroll"})
+    data = client.patch("/api/finance/transactions/7", json={"category_id": "maas"}).json()
+    assert data["similar"] == 5
+    [rule] = fake.rules
+    assert (rule.pattern, rule.match_type, rule.direction, rule.company_id, rule.source) == (
+        "gusto payroll", "exact", "out", "llc", "user")
+    assert fake.updates[0][2]["category_rule_id"] is None and fake.updates[0][2]["user_edited_at"]
+    fake.rules.clear()
+    # yönle uyuşmayan kategori ve learn=false kural üretmez
+    client.patch("/api/finance/transactions/7", json={"category_id": "satis"})
+    client.patch("/api/finance/transactions/7", json={"category_id": "maas", "learn": False})
+    assert fake.rules == []
+
+
+def test_rule_endpoints_validate(env) -> None:
+    client, fake = env
+    ok = client.post("/api/finance/rules", json={"pattern": " Aspol Print ", "direction": "out", "category_id": "maas"})
+    assert ok.json() == {"id": 77, "applied": 5} and fake.rules[0].pattern == "aspol print "
+    assert client.post("/api/finance/rules", json={"pattern": "x", "category_id": "maas"}).status_code == 400
+    assert client.post("/api/finance/rules", json={"pattern": "abc", "direction": "in", "category_id": "maas"}).status_code == 400
+    assert client.post("/api/finance/rules", json={"pattern": "abc", "category_id": "ic_transfer"}).status_code == 400
+    assert client.post("/api/finance/rules", json={"pattern": "abc", "category_id": "yok"}).status_code == 400
+    assert client.delete("/api/finance/rules/77").json() == {"id": 77, "reverted": 3, "reapplied": 5}
+    assert client.delete("/api/finance/rules/9").status_code == 404

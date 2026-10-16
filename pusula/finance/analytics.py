@@ -19,6 +19,7 @@ from pusula.db.models import (
     API_PROVIDERS,
     FinAccount,
     FinCategory,
+    FinCategoryRule,
     FinCompany,
     FinPlannedItem,
     FinTransaction,
@@ -201,6 +202,107 @@ def own_transfers(
             marked.add(out.id)  # type: ignore[arg-type]
             marked.add(best[1].id)  # type: ignore[arg-type]
     return marked
+
+
+# --- otomatik kategori ---------------------------------------------------------------
+
+_RULE_ASCII = str.maketrans("çğıİIöşüÇĞÖŞÜâîû", "cgiiiosucgosuaiu")
+
+
+def rule_key(text: str | None) -> str:
+    """Kural metni: küçük harf, Türkçe harfler ASCII, tek boşluk.
+
+    Kurallar bu biçimle saklanır; değişirse kayıtlı kurallar eşleşmez.
+    """
+    if not text:
+        return ""
+    return " ".join(text.translate(_RULE_ASCII).lower().split())
+
+
+def tx_rule_key(tx: FinTransaction) -> str:
+    """'exact' kuralın anahtarı: karşı taraf, yoksa açıklama."""
+    return rule_key(tx.counterparty) or rule_key(tx.description)
+
+
+def _contains_regex(pattern: str) -> re.Pattern[str]:
+    # Başta kelime sınırı; kalıp boşlukla bitiyorsa sonda da (ör. 'ups ' ≠ 'groups')
+    core = re.escape(rule_key(pattern))
+    tail = r"(?![a-z0-9])" if pattern.endswith(" ") else ""
+    return re.compile(r"(?<![a-z0-9])" + core + tail)
+
+
+def _rule_rank(rule: FinCategoryRule) -> tuple[int, int, int]:
+    """Küçük olan önce: kullanıcı > sistem, exact > contains, şirkete özel > genel."""
+    return (
+        0 if rule.source == "user" else 1,
+        0 if rule.match_type == "exact" else 1,
+        0 if rule.company_id else 1,
+    )
+
+
+def categorize(
+    txs: Iterable[FinTransaction], rules: Sequence[FinCategoryRule]
+) -> dict[int, FinCategoryRule]:
+    """Kategorisiz hareket → ilk uyan kural (öncelik sırasıyla).
+
+    Aday: kategorisi boş, şirketler arası işaretsiz, kullanıcının
+    düzeltmediği hareket. Yön kuralı: giriş 'in', çıkış 'out' kuralına uyar.
+    """
+    ordered = sorted(rules, key=_rule_rank)
+    compiled = [(r, _contains_regex(r.pattern) if r.match_type == "contains" else None) for r in ordered]
+    out: dict[int, FinCategoryRule] = {}
+    for tx in txs:
+        if tx.id is None or tx.category_id or tx.counterparty_company_id or tx.user_edited_at:
+            continue
+        direction = "in" if tx.amount > 0 else "out"
+        exact = tx_rule_key(tx)
+        text = rule_key(f"{tx.description} {tx.counterparty or ''}")
+        for rule, rx in compiled:
+            if rule.direction not in ("any", direction):
+                continue
+            if rule.company_id and rule.company_id != tx.company_id:
+                continue
+            hit = rule.pattern == exact if rx is None else bool(rx.search(text))
+            if hit:
+                out[tx.id] = rule
+                break
+    return out
+
+
+def rule_direction_ok(direction: str, category_kind: str) -> bool:
+    """Giriş kuralı gider kategorisi veremez (transfer her yöne uyar)."""
+    if category_kind == "transfer" or direction == "any":
+        return True
+    return category_kind == direction
+
+
+def top_uncategorized(
+    txs: Iterable[FinTransaction], fx: FxTable, limit: int = 20
+) -> list[dict[str, object]]:
+    """Kategorisiz karşı taraflar, USD hacmine göre (tek seçimle kural için)."""
+    groups: dict[tuple[str, str, str], dict[str, object]] = {}
+    for tx in txs:
+        if tx.category_id or tx.counterparty_company_id or tx.user_edited_at:
+            continue
+        key = tx_rule_key(tx)
+        if len(key) < 2:
+            continue
+        direction = "in" if tx.amount > 0 else "out"
+        row = groups.setdefault(
+            (tx.company_id, direction, key),
+            {
+                "company_id": tx.company_id,
+                "direction": direction,
+                "pattern": key,
+                "label": (tx.counterparty or tx.description).strip(),
+                "count": 0,
+                "usd": Decimal("0"),
+            },
+        )
+        row["count"] = int(row["count"]) + 1  # type: ignore[call-overload]
+        row["usd"] = row["usd"] + abs(fx.to_usd(tx.amount, tx.currency, tx.booked_at))  # type: ignore[operator]
+    rows = sorted(groups.values(), key=lambda r: r["usd"], reverse=True)  # type: ignore[arg-type,return-value]
+    return rows[:limit]
 
 
 # --- nakit ve bakiye seyri -------------------------------------------------------

@@ -757,6 +757,67 @@ CREATE TRIGGER fin_decisions_touch
     BEFORE UPDATE ON fin_decisions
     FOR EACH ROW EXECUTE FUNCTION fin_touch_updated_at();
 
+-- Otomatik kategori kuralları. pattern sadeleştirilmiş metindir (küçük harf,
+-- Türkçe harfler ASCII, tek boşluk). exact: karşı taraf (yoksa açıklama)
+-- birebir; contains: açıklama + karşı tarafta geçer. Öncelik: kullanıcı
+-- kuralı > sistem kuralı; aynı kaynakta exact > contains. Kullanıcının
+-- elle düzelttiği hareket kurallardan etkilenmez.
+CREATE TABLE IF NOT EXISTS fin_category_rules (
+    id           bigserial PRIMARY KEY,
+    company_id   text REFERENCES fin_companies (id),  -- NULL = tüm şirketler
+    direction    text NOT NULL DEFAULT 'any' CHECK (direction IN ('in', 'out', 'any')),
+    match_type   text NOT NULL CHECK (match_type IN ('exact', 'contains')),
+    pattern      text NOT NULL CHECK (length(pattern) >= 2),
+    category_id  text NOT NULL REFERENCES fin_categories (id),
+    source       text NOT NULL DEFAULT 'user' CHECK (source IN ('system', 'user')),
+    label        text,  -- kullanıcıya gösterilen özgün yazım
+    created_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fin_category_rules
+    ON fin_category_rules (coalesce(company_id, ''), direction, match_type, pattern);
+
+-- Hangi kuralın kategori verdiği; kural silinince bu satırlar geri alınır.
+ALTER TABLE fin_transactions ADD COLUMN IF NOT EXISTS category_rule_id bigint;
+
+-- Geçiş: kelime ortasında eşleşmesin diye tam kelimeye çevrilen sistem kalıpları; eklemeden önce
+-- (ör. 'canva' → 'Odd Canvas Llc' yanlış eşleşmesi).
+UPDATE fin_category_rules SET pattern = pattern || ' '
+WHERE source = 'system' AND match_type = 'contains' AND pattern IN ('canva', 'notion', 'deel');
+
+INSERT INTO fin_category_rules (direction, match_type, pattern, category_id, source)
+SELECT v.direction, 'contains', v.pattern, v.category_id, 'system'
+FROM (VALUES
+    ('in', 'stripe', 'satis'), ('in', 'payoneer', 'satis'), ('in', 'paypal', 'satis'),
+    ('in', 'amazon', 'satis'), ('in', 'shopify', 'satis'), ('in', 'etsy', 'satis'),
+    ('in', 'trendyol', 'satis'), ('in', 'hepsiburada', 'satis'), ('in', 'iyzico', 'satis'),
+    ('in', 'gumroad', 'satis'), ('in', 'paddle', 'satis'),
+    ('out', 'internal revenue service', 'vergi'), ('out', 'irs usataxpymt', 'vergi'),
+    ('out', 'franchise tax', 'vergi'), ('out', 'sales tax', 'vergi'), ('out', 'finanzamt', 'vergi'),
+    ('out', 'vergi', 'vergi'), ('out', 'kdv', 'vergi'), ('out', 'gib ', 'vergi'),
+    ('out', 'sgk', 'maas'), ('out', 'gusto', 'maas'), ('out', 'payroll', 'maas'), ('out', 'deel ', 'maas'),
+    ('out', 'rippling', 'maas'), ('out', 'maas', 'maas'), ('out', 'gehalt', 'maas'), ('out', 'lohn', 'maas'),
+    ('out', 'facebk', 'reklam'), ('out', 'facebook', 'reklam'), ('out', 'meta ads', 'reklam'),
+    ('out', 'google ads', 'reklam'), ('out', 'tiktok', 'reklam'), ('out', 'linkedin', 'reklam'),
+    ('out', 'amazon web services', 'yazilim'), ('out', 'aws ', 'yazilim'), ('out', 'google workspace', 'yazilim'),
+    ('out', 'gsuite', 'yazilim'), ('out', 'microsoft', 'yazilim'), ('out', 'adobe', 'yazilim'),
+    ('out', 'slack', 'yazilim'), ('out', 'notion ', 'yazilim'), ('out', 'zoom.us', 'yazilim'),
+    ('out', 'atlassian', 'yazilim'), ('out', 'github', 'yazilim'), ('out', 'openai', 'yazilim'),
+    ('out', 'anthropic', 'yazilim'), ('out', 'canva ', 'yazilim'), ('out', 'figma', 'yazilim'),
+    ('out', 'hubspot', 'yazilim'), ('out', 'zoho', 'yazilim'), ('out', 'godaddy', 'yazilim'),
+    ('out', 'namecheap', 'yazilim'), ('out', 'cloudflare', 'yazilim'), ('out', 'vercel', 'yazilim'),
+    ('out', 'supabase', 'yazilim'), ('out', 'shopify', 'yazilim'),
+    ('out', 'dhl', 'kargo'), ('out', 'ups ', 'kargo'), ('out', 'fedex', 'kargo'), ('out', 'usps', 'kargo'),
+    ('out', 'aras kargo', 'kargo'), ('out', 'yurtici', 'kargo'), ('out', 'mng kargo', 'kargo'),
+    ('out', 'ptt', 'kargo'), ('out', 'shipentegra', 'kargo'), ('out', 'easyship', 'kargo'),
+    ('out', 'shipbob', 'kargo'), ('out', 'shippo', 'kargo'),
+    ('out', 'transfer fee', 'banka'), ('out', 'wire fee', 'banka'), ('out', 'service fee', 'banka'),
+    ('out', 'bank fee', 'banka'), ('out', 'komisyon', 'banka'), ('out', 'commission', 'banka'),
+    ('out', 'law ', 'danismanlik'), ('out', 'legal', 'danismanlik'), ('out', 'hukuk', 'danismanlik'),
+    ('out', 'avukat', 'danismanlik'), ('out', 'consult', 'danismanlik'), ('out', 'muhasebe', 'danismanlik'),
+    ('out', 'accounting', 'danismanlik'), ('out', 'cpa ', 'danismanlik'), ('out', 'noter', 'danismanlik')
+) AS v(direction, pattern, category_id)
+ON CONFLICT DO NOTHING;
+
 -- RLS açık, politika yok: Supabase anon/authenticated rolleri finans
 -- tablolarını okuyamaz; uygulama tablo sahibi olarak bağlanır.
 DO $$
@@ -764,7 +825,8 @@ DECLARE t text;
 BEGIN
     FOREACH t IN ARRAY ARRAY[
         'fin_companies', 'fin_accounts', 'fin_categories', 'fin_transactions', 'fin_fx_rates',
-        'fin_planned_items', 'fin_snapshots', 'fin_snapshot_lines', 'fin_decisions'
+        'fin_planned_items', 'fin_snapshots', 'fin_snapshot_lines', 'fin_decisions',
+        'fin_category_rules'
     ]
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);

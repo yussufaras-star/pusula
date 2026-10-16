@@ -111,6 +111,7 @@ def test_schema_has_finance_tables_and_lock_guards() -> None:
         "fin_snapshots",
         "fin_snapshot_lines",
         "fin_decisions",
+        "fin_category_rules",
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table} (" in sql
     assert "UNIQUE (account_id, external_id)" in sql

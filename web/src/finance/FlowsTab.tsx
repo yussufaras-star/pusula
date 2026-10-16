@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { api, ApiError } from "../api";
 import { StatTile } from "../components/StatTile";
+import { RulesCard, UncategorizedCard } from "./CategoryRules";
 import { MonthlyFlowChart } from "./charts";
 import { COMPANY_SHORT, day, money, short, usd } from "./format";
 import type { CompanyId, Flows, Meta, Tx } from "./types";
@@ -24,6 +25,12 @@ export function FlowsTab({ scope, start, end, meta, tick }: TabProps) {
   const [q, setQ] = useState("");
   const [limit, setLimit] = useState(PAGE);
   const [local, setLocal] = useState(0);
+  const [note, setNote] = useState<string | null>(null);
+  // Kategori değişikliği sonrası tüm kartlar yeniden çekilir; kısa bilgi notu gösterilir
+  const changed = (text?: string) => {
+    setLocal((n) => n + 1);
+    if (text) setNote(text);
+  };
 
   // Arama kutusu yazarken her tuşta istek atmasın
   useEffect(() => {
@@ -95,6 +102,18 @@ export function FlowsTab({ scope, start, end, meta, tick }: TabProps) {
         </section>
       </div>
 
+      {note ? (
+        <div className="banner fin-ok fin-note-bar">
+          <span>{note}</span>
+          <button className="btn sm link-x" onClick={() => setNote(null)} aria-label="Kapat">
+            ×
+          </button>
+        </div>
+      ) : null}
+
+      <UncategorizedCard scope={scope} meta={meta} tick={tick + local} onChanged={changed} />
+      <RulesCard meta={meta} tick={tick + local} onChanged={changed} />
+
       <section className="card">
         <div className="card-head">
           <h2>Hareketler</h2>
@@ -115,7 +134,7 @@ export function FlowsTab({ scope, start, end, meta, tick }: TabProps) {
           </div>
         </div>
         <div className="card-body">
-          <TxTable rows={data.transactions} meta={meta} editable onChanged={() => setLocal((n) => n + 1)} />
+          <TxTable rows={data.transactions} meta={meta} editable onChanged={changed} />
           {data.total > data.transactions.length ? (
             <div className="fin-more">
               <button className="btn" onClick={() => setLimit(limit + PAGE)}>
@@ -130,7 +149,7 @@ export function FlowsTab({ scope, start, end, meta, tick }: TabProps) {
 }
 
 /** Hareket tablosu. editable: kategori ve şirketler arası işareti düzeltilebilir. */
-export function TxTable({ rows, meta, editable, onChanged }: { rows: Tx[]; meta: Meta; editable?: boolean; onChanged?: () => void }) {
+export function TxTable({ rows, meta, editable, onChanged }: { rows: Tx[]; meta: Meta; editable?: boolean; onChanged?: (note?: string) => void }) {
   if (!rows.length) return <div className="empty">Hareket yok.</div>;
   return (
     <div className="table-wrap">
@@ -157,7 +176,7 @@ export function TxTable({ rows, meta, editable, onChanged }: { rows: Tx[]; meta:
   );
 }
 
-function TxRow({ t, meta, editable, onChanged }: { t: Tx; meta: Meta; editable?: boolean; onChanged?: () => void }) {
+function TxRow({ t, meta, editable, onChanged }: { t: Tx; meta: Meta; editable?: boolean; onChanged?: (note?: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const others = meta.companies.filter((c) => c.id !== t.company_id);
@@ -166,8 +185,9 @@ function TxRow({ t, meta, editable, onChanged }: { t: Tx; meta: Meta; editable?:
     setBusy(true);
     setErr(null);
     try {
-      await api(`/api/finance/transactions/${t.id}`, { method: "PATCH", body: JSON.stringify(body) });
-      onChanged?.();
+      const r = await api<{ similar?: number }>(`/api/finance/transactions/${t.id}`, { method: "PATCH", body: JSON.stringify(body) });
+      const who = t.counterparty || t.description;
+      onChanged?.(r.similar ? `${who}: aynı karşı taraftan ${r.similar} hareket daha kategorilendi, sonrakiler de otomatik.` : undefined);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "Kaydedilemedi");
     } finally {
