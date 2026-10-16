@@ -1,0 +1,93 @@
+"""Wise: provider_account_id = '<profileId>:<balanceId>' (WISE_TOKEN_<KEY>).
+
+AB/UK profillerinde bakiye ekstresi Güçlü Müşteri Doğrulaması (SCA) ister:
+API 403 + 'x-2fa-approval' başlığı döner. Bu durumda hesap düşmez; bakiye
+güncellenir, hareket alınmaz ve uyarı yazılır. Hareketler için ekstre
+yükleme (CSV) kullanılabilir.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+import httpx
+
+from pusula.db.models import FinAccount
+from pusula.finance.providers.base import (
+    AdapterResult,
+    NormTx,
+    ProviderError,
+    ProviderHttpError,
+    cred_key,
+    local_day,
+    num,
+    provider_id,
+    request_json,
+    require_env,
+)
+
+BASE = "https://api.wise.com"
+SCA_WARNING = "Wise: hareketler için SCA gerekli, yalnız bakiye güncellendi"
+
+
+def fetch(account: FinAccount, since: datetime, client: httpx.Client) -> AdapterResult:
+    token = require_env(f"WISE_TOKEN_{cred_key(account)}")
+    profile_id, _, balance_id = provider_id(account).partition(":")
+    if not profile_id or not balance_id:
+        raise ProviderError("Wise: provider_account_id '<profileId>:<balanceId>' olmalı")
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+    balances = request_json(
+        client,
+        "Wise",
+        "GET",
+        f"{BASE}/v4/profiles/{profile_id}/balances",
+        headers=headers,
+        params={"types": "STANDARD"},
+    )
+    found = next((b for b in balances or [] if str(b.get("id")) == balance_id), None)
+    if found is None:
+        raise ProviderError("Wise: balance bulunamadı")
+    balance = num((found.get("amount") or {}).get("value"))
+
+    try:
+        statement = request_json(
+            client,
+            "Wise",
+            "GET",
+            f"{BASE}/v1/profiles/{profile_id}/balance-statements/{balance_id}/statement.json",
+            headers=headers,
+            params={
+                "currency": account.currency,
+                "intervalStart": since.isoformat(),
+                "intervalEnd": datetime.now(since.tzinfo).isoformat(),
+                "type": "COMPACT",
+            },
+        )
+    except ProviderHttpError as exc:
+        if exc.status == 403 and "x-2fa-approval" in exc.headers:
+            return AdapterResult(balance=balance, transactions=[], warning=SCA_WARNING)
+        raise
+
+    txs: list[NormTx] = []
+    for row in statement.get("transactions") or []:
+        amount = row.get("amount") or {}
+        if not row.get("referenceNumber") or not row.get("date") or amount.get("value") is None:
+            continue
+        details = row.get("details") or {}
+        counterparty = (
+            details.get("senderName")
+            or (details.get("recipient") or {}).get("name")
+            or (details.get("merchant") or {}).get("name")
+        )
+        txs.append(
+            NormTx(
+                external_id=str(row["referenceNumber"]),
+                booked_at=local_day(row["date"]),
+                amount=num(amount["value"]),  # işaretli
+                description=details.get("description") or counterparty or details.get("type") or "",
+                counterparty=counterparty,
+                currency=amount.get("currency"),
+            )
+        )
+    return AdapterResult(balance=balance, transactions=txs)

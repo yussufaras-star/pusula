@@ -14,6 +14,7 @@ from typing import Any, Literal
 from pusula.panel_data import Rep
 
 ADMIN_EMAIL = "yusuf.aras@rexven.com"
+FINANCE_EMAILS_ENV = "PUSULA_FINANCE_EMAILS"
 LOGIN_ERROR = "kullanici adi veya sifre hatali"
 
 AuthRole = Literal["admin", "rep"]
@@ -86,3 +87,22 @@ def resolve_user(
         rep_id=rep.rep_id,
         full_name=rep.full_name,
     )
+
+
+def parse_finance_emails(raw: str | None) -> frozenset[str] | None:
+    """PUSULA_FINANCE_EMAILS: virgüllü liste. Boş veya tanımsızsa None (kısıt yok)."""
+    if raw is None:
+        return None
+    emails = frozenset(
+        normalize_login_email(part) for part in raw.split(",") if part.strip()
+    )
+    return emails or None
+
+
+def can_view_finance(user: AuthUser, allowed: frozenset[str] | None) -> bool:
+    """Finans yalnız yönetici içindir; liste tanımlıysa yalnız listedeki yönetici."""
+    if user.role != "admin":
+        return False
+    if allowed is None:
+        return True
+    return normalize_login_email(user.email) in allowed

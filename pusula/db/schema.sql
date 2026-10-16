@@ -500,3 +500,273 @@ CREATE TABLE IF NOT EXISTS crm_actions (
 );
 CREATE INDEX IF NOT EXISTS idx_crm_actions_actor_time
     ON crm_actions (org_id, actor_rep_id, acted_at);
+
+-- ===========================================================================
+-- Finans modülü (fin_*): Rexven LLC (USD), GmbH (EUR), TR (TRY).
+-- Yalnız yönetici okur/yazar; erişim API'de (pusula/web/auth.finance_user)
+-- zorlanır. Tutarlar kendi para biriminde numeric(18,2), işaretli
+-- (+ giriş, − çıkış). USD çevirisi fin_fx_rates ile yapılır.
+-- Banka kimlik bilgileri hiçbir tabloda tutulmaz: fin_accounts.credential_key
+-- yalnız ortam değişkeni adının son ekidir (MERCURY_TOKEN_<KEY> vb.).
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS fin_companies (
+    id              text PRIMARY KEY,  -- 'llc' | 'gmbh' | 'tr'
+    name            text NOT NULL,
+    country         text NOT NULL,
+    base_currency   text NOT NULL CHECK (base_currency ~ '^[A-Z]{3}$'),
+    -- Açıklama veya karşı tarafta geçince şirketler arası sayılan kalıplar (ILIKE).
+    match_patterns  text[] NOT NULL DEFAULT '{}',
+    sort            int NOT NULL DEFAULT 0
+);
+
+INSERT INTO fin_companies (id, name, country, base_currency, match_patterns, sort) VALUES
+    ('llc',  'Rexven LLC',  'US', 'USD', ARRAY['%rexven llc%'], 1),
+    ('gmbh', 'Rexven GmbH', 'DE', 'EUR', ARRAY['%rexven gmbh%'], 2),
+    ('tr',   'Rexven TR',   'TR', 'TRY', ARRAY['%rexven%teknoloji%', '%rexven%a.ş%', '%rexven%ltd%'], 3)
+ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS fin_accounts (
+    id                   bigserial PRIMARY KEY,
+    company_id           text NOT NULL REFERENCES fin_companies (id),
+    name                 text NOT NULL,
+    institution          text NOT NULL,
+    type                 text NOT NULL DEFAULT 'bank'
+        CHECK (type IN ('bank', 'fintech', 'payment', 'card', 'shipping', 'other')),
+    currency             text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    -- 'csv' ekstre yüklemesi, 'manual' elle bakiye; diğerleri API senkronu.
+    provider             text NOT NULL DEFAULT 'manual'
+        CHECK (provider IN ('mercury', 'wise', 'stripe', 'revolut', 'csv', 'manual')),
+    -- Sağlayıcıdaki hesap kimliği. Wise: '<profileId>:<balanceId>'.
+    provider_account_id  text,
+    -- Ortam değişkeni son eki (ör. LLC → MERCURY_TOKEN_LLC). Değer değil, ad.
+    credential_key       text CHECK (credential_key ~ '^[A-Z0-9_]+$'),
+    current_balance      numeric(18, 2) NOT NULL DEFAULT 0,
+    balance_at           timestamptz,
+    last_synced_at       timestamptz,
+    sync_error           text,  -- son senkron hatası; başarılı senkron temizler
+    sync_warning         text,  -- ör. Wise SCA: yalnız bakiye güncellendi
+    active               boolean NOT NULL DEFAULT true,
+    sort                 int NOT NULL DEFAULT 0,
+    created_at           timestamptz NOT NULL DEFAULT now(),
+    CHECK (provider IN ('csv', 'manual') OR credential_key IS NOT NULL)
+);
+
+CREATE TABLE IF NOT EXISTS fin_categories (
+    id    text PRIMARY KEY,
+    name  text NOT NULL,
+    kind  text NOT NULL CHECK (kind IN ('in', 'out', 'transfer')),
+    sort  int NOT NULL DEFAULT 0
+);
+
+INSERT INTO fin_categories (id, name, kind, sort) VALUES
+    ('satis',       'Satış / Platform geliri',  'in',        1),
+    ('proje',       'Proje geliri',             'in',        2),
+    ('diger_gir',   'Diğer giriş',              'in',        3),
+    ('tedarikci',   'Tedarikçi',                'out',      10),
+    ('kargo',       'Kargo / Lojistik',         'out',      11),
+    ('maas',        'Maaş + SGK + Vergi',       'out',      12),
+    ('vergi',       'Vergi / KDV',              'out',      13),
+    ('reklam',      'Reklam / Pazarlama',       'out',      14),
+    ('yazilim',     'Yazılım / Abonelik',       'out',      15),
+    ('danismanlik', 'Danışmanlık / Hukuk',      'out',      16),
+    ('banka',       'Banka / Komisyon',         'out',      17),
+    ('diger_cik',   'Diğer çıkış',              'out',      18),
+    ('ic_transfer', 'Şirketler arası transfer', 'transfer', 20),
+    ('hesap_arasi', 'Kendi hesapları arası',    'transfer', 21)
+ON CONFLICT (id) DO NOTHING;
+
+-- Hareketler. (account_id, external_id) tekil: senkron ve ekstre yüklemesi
+-- ON CONFLICT DO NOTHING ile yazar, tekrar yükleme çift kayıt üretmez.
+-- user_edited_at doluysa kategori / şirketler arası alanları kullanıcı
+-- düzeltmiştir; otomatik eşleştirme bu satıra dokunmaz.
+CREATE TABLE IF NOT EXISTS fin_transactions (
+    id                       bigserial PRIMARY KEY,
+    account_id               bigint NOT NULL REFERENCES fin_accounts (id) ON DELETE CASCADE,
+    company_id               text NOT NULL REFERENCES fin_companies (id),
+    booked_at                date NOT NULL,
+    amount                   numeric(18, 2) NOT NULL,  -- işaretli: + giriş, − çıkış
+    currency                 text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    description              text NOT NULL DEFAULT '',
+    counterparty             text,
+    category_id              text REFERENCES fin_categories (id),
+    counterparty_company_id  text REFERENCES fin_companies (id),  -- doluysa şirketler arası
+    external_id              text NOT NULL,  -- sağlayıcı id veya ekstre satır hash'i
+    source                   text NOT NULL CHECK (source IN ('api', 'csv', 'manual')),
+    user_edited_at           timestamptz,
+    created_at               timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (account_id, external_id),
+    CHECK (counterparty_company_id IS NULL OR counterparty_company_id <> company_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fin_transactions_company_date
+    ON fin_transactions (company_id, booked_at);
+CREATE INDEX IF NOT EXISTS idx_fin_transactions_ic
+    ON fin_transactions (counterparty_company_id) WHERE counterparty_company_id IS NOT NULL;
+
+-- Kurlar: 1 birim para = usd_rate USD. USD her zaman 1, tabloda tutulmaz.
+CREATE TABLE IF NOT EXISTS fin_fx_rates (
+    date      date NOT NULL,
+    currency  text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    usd_rate  numeric(18, 8) NOT NULL CHECK (usd_rate > 0),
+    source    text NOT NULL DEFAULT 'ecb',
+    PRIMARY KEY (date, currency)
+);
+
+-- Planlı nakit (projeksiyon): vadeli alacak/borç ve tekrarlayan kalemler.
+-- amount yönsüz pozitif; işaret direction'dan gelir.
+CREATE TABLE IF NOT EXISTS fin_planned_items (
+    id            bigserial PRIMARY KEY,
+    company_id    text NOT NULL REFERENCES fin_companies (id),
+    direction     text NOT NULL CHECK (direction IN ('in', 'out')),
+    title         text NOT NULL,
+    counterparty  text,
+    amount        numeric(18, 2) NOT NULL CHECK (amount >= 0),
+    currency      text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    due_date      date NOT NULL,
+    recurrence    text NOT NULL DEFAULT 'none' CHECK (recurrence IN ('none', 'weekly', 'monthly')),
+    recur_until   date,
+    probability   numeric(3, 2) NOT NULL DEFAULT 1 CHECK (probability BETWEEN 0 AND 1),
+    status        text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'done', 'cancelled')),
+    category_id   text REFERENCES fin_categories (id),
+    notes         text,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    CHECK (recur_until IS NULL OR recur_until >= due_date)
+);
+CREATE INDEX IF NOT EXISTS idx_fin_planned_items_open
+    ON fin_planned_items (company_id, due_date) WHERE status = 'open';
+
+-- Haftalık bilanço: şirket × hafta (pazartesi). fx, kesinleştirmede
+-- kilitlenen kurlardır ({"TRY": 0.0291, "EUR": 1.08} → usd_rate).
+CREATE TABLE IF NOT EXISTS fin_snapshots (
+    id          bigserial PRIMARY KEY,
+    company_id  text NOT NULL REFERENCES fin_companies (id),
+    week_date   date NOT NULL,
+    locked      boolean NOT NULL DEFAULT false,
+    locked_at   timestamptz,
+    fx          jsonb NOT NULL DEFAULT '{}',
+    notes       text NOT NULL DEFAULT '',
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (company_id, week_date),
+    CHECK (extract(isodow FROM week_date) = 1)
+);
+
+CREATE TABLE IF NOT EXISTS fin_snapshot_lines (
+    id           bigserial PRIMARY KEY,
+    snapshot_id  bigint NOT NULL REFERENCES fin_snapshots (id) ON DELETE CASCADE,
+    side         text NOT NULL CHECK (side IN ('asset', 'liability')),
+    group_name   text NOT NULL,
+    label        text NOT NULL,
+    amount       numeric(18, 2) NOT NULL DEFAULT 0,
+    currency     text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    -- Satırın kaynağı: hesap bakiyesi, açık planlı kalem, şirketler arası
+    -- net transfer veya elle giriş. Yeni haftaya yalnız 'manual' kopyalanır.
+    origin       text NOT NULL DEFAULT 'manual',
+    -- Bilanço bölümü; side ile tutarlı (aktif: dönen/duran, pasif: KV/UV/özkaynak).
+    section      text,
+    sort         int NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_fin_snapshot_lines_snapshot ON fin_snapshot_lines (snapshot_id);
+
+-- Geçiş: bölüm kolonu ve genişleyen kaynak listesi (eski kurulumlar için).
+ALTER TABLE fin_snapshot_lines ADD COLUMN IF NOT EXISTS section text;
+ALTER TABLE fin_snapshot_lines DROP CONSTRAINT IF EXISTS fin_snapshot_lines_origin_check;
+ALTER TABLE fin_snapshot_lines ADD CONSTRAINT fin_snapshot_lines_origin_check
+    CHECK (origin IN ('account', 'planned', 'intercompany', 'manual'));
+ALTER TABLE fin_snapshot_lines DROP CONSTRAINT IF EXISTS fin_snapshot_lines_section_check;
+ALTER TABLE fin_snapshot_lines ADD CONSTRAINT fin_snapshot_lines_section_check
+    CHECK (
+        section IS NULL
+        OR (side = 'asset' AND section IN ('current_assets', 'noncurrent_assets'))
+        OR (side = 'liability' AND section IN ('current_liabilities', 'longterm_liabilities', 'equity'))
+    );
+
+-- Kilitli haftanın satırları değiştirilemez. UPDATE'te satır başka haftaya
+-- taşınıyorsa hem eski hem yeni hafta kontrol edilir.
+CREATE OR REPLACE FUNCTION fin_snapshot_lines_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM fin_snapshots
+        WHERE locked
+          AND id IN (
+              CASE WHEN TG_OP <> 'DELETE' THEN NEW.snapshot_id END,
+              CASE WHEN TG_OP <> 'INSERT' THEN OLD.snapshot_id END
+          )
+    ) THEN
+        RAISE EXCEPTION 'Bu hafta kesinleştirildi, satırlar değiştirilemez';
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS fin_snapshot_lines_guard ON fin_snapshot_lines;
+CREATE TRIGGER fin_snapshot_lines_guard
+    BEFORE INSERT OR UPDATE OR DELETE ON fin_snapshot_lines
+    FOR EACH ROW EXECUTE FUNCTION fin_snapshot_lines_guard();
+
+-- Kilitli hafta güncellenemez, silinemez, kilidi açılamaz.
+-- Kilitlenirken locked_at damgalanır.
+CREATE OR REPLACE FUNCTION fin_snapshots_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public AS $$
+BEGIN
+    IF OLD.locked THEN
+        RAISE EXCEPTION 'Bu hafta kesinleştirildi, değiştirilemez';
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    IF NEW.locked THEN
+        NEW.locked_at := now();
+    END IF;
+    RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS fin_snapshots_guard ON fin_snapshots;
+CREATE TRIGGER fin_snapshots_guard
+    BEFORE UPDATE OR DELETE ON fin_snapshots
+    FOR EACH ROW EXECUTE FUNCTION fin_snapshots_guard();
+
+-- Stratejik kararlar. company_id NULL = grup geneli.
+CREATE TABLE IF NOT EXISTS fin_decisions (
+    id            bigserial PRIMARY KEY,
+    company_id    text REFERENCES fin_companies (id),
+    title         text NOT NULL,
+    description   text NOT NULL DEFAULT '',
+    owner         text,
+    status        text NOT NULL DEFAULT 'acik'
+        CHECK (status IN ('acik', 'aksiyon', 'devam', 'tamam', 'iptal')),
+    priority      text NOT NULL DEFAULT 'orta' CHECK (priority IN ('yuksek', 'orta', 'dusuk')),
+    due_date      date,
+    impact_usd    numeric(18, 2),  -- tahmini yıllık nakit etkisi, + / −
+    meeting_date  date,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    updated_at    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION fin_touch_updated_at() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public AS $$
+BEGIN
+    NEW.updated_at := now();
+    RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS fin_decisions_touch ON fin_decisions;
+CREATE TRIGGER fin_decisions_touch
+    BEFORE UPDATE ON fin_decisions
+    FOR EACH ROW EXECUTE FUNCTION fin_touch_updated_at();
+
+-- RLS açık, politika yok: Supabase anon/authenticated rolleri finans
+-- tablolarını okuyamaz; uygulama tablo sahibi olarak bağlanır.
+DO $$
+DECLARE t text;
+BEGIN
+    FOREACH t IN ARRAY ARRAY[
+        'fin_companies', 'fin_accounts', 'fin_categories', 'fin_transactions', 'fin_fx_rates',
+        'fin_planned_items', 'fin_snapshots', 'fin_snapshot_lines', 'fin_decisions'
+    ]
+    LOOP
+        EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    END LOOP;
+END $$;

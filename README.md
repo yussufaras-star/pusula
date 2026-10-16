@@ -190,6 +190,38 @@ aynı saat için bir kez gönderilir. `PUSULA_SHADOW_EMAIL` tanımlanırsa gerç
 alıcılar yerine gölge alıcıya gönderilir. Gönderim kaydı
 `kpi_nudge_sends` tablosundadır.
 
+## Finans operasyonu
+
+Pusula'nın ikinci bölümü: Rexven LLC (USD), GmbH (EUR) ve TR (TRY) için
+konsolide nakit, akış, projeksiyon, şirketler arası transferler, haftalık
+bilanço ve stratejik kararlar. Üst barda "Finans operasyonu" geçişiyle açılır.
+
+- **Erişim:** yalnız yönetici. `PUSULA_FINANCE_EMAILS` (virgüllü e-posta
+  listesi) tanımlıysa yalnız o yöneticiler. Tüm `/api/finance/*` uçları
+  sunucuda `finance_user` ile korunur; `/api/me` `finance` alanını döner.
+- **Kod:** `pusula/finance/` (kur, hesaplar, ekstre ayrıştırma, banka
+  adaptörleri, senkron), `pusula/web/finance.py` (API), `web/src/finance/`
+  (arayüz). Tablolar `schema.sql` içinde `fin_` önekli; kilitli haftanın
+  satırları DB trigger'ıyla korunur.
+- **Kurlar:** ECB (Frankfurter), `fin_fx_rates` (1 birim = usd_rate USD).
+  Hareketler işlem tarihindeki, bakiyeler son kurla çevrilir. Kur yoksa
+  tutar toplama girmez, ekranda "kur verisi yetersiz" yazar.
+- **API hesapları:** Mercury, Wise, Stripe, Revolut Business. Anahtarlar
+  yalnız ortam değişkeninde: `MERCURY_TOKEN_<EK>`, `WISE_TOKEN_<EK>`,
+  `STRIPE_KEY_<EK>`, `REVOLUT_CLIENT_ID_<EK>` / `REVOLUT_PRIVATE_KEY_<EK>`
+  (PKCS8 PEM) / `REVOLUT_REFRESH_TOKEN_<EK>` / `REVOLUT_ISS_<EK>`. `<EK>`
+  hesabın "anahtar eki"dir (`fin_accounts.credential_key`, ör. `LLC`).
+  Vercel'e ve GitHub Actions secrets'a aynı adla eklenir.
+- **Ekstre:** Garanti, KuveytTürk, Vakıf vb. internet şubesinden CSV/XLSX
+  indirilir, Hesaplar sekmesinden önizlemeyle yüklenir. Aynı dosya tekrar
+  yüklenince çift kayıt oluşmaz.
+- **Senkron:** paneldeki "Hesapları güncelle" (`POST /api/finance/sync`,
+  dakikada bir), `GET /api/cron/finance-sync` (`CRON_SECRET`) ve
+  `.github/workflows/finance-sync.yml` (her gün 08:00 ve 17:00 İstanbul).
+  Hata veren hesap `sync_error`'a yazılır, diğerleri sürer. Kullanıcının
+  kategori / şirketler arası düzeltmeleri hiçbir senkronda ezilmez.
+- **Yerel deneme:** `npm --prefix web run dev:mock` → `#/finans/genel`.
+
 ## Vercel deploy
 
 1. GitHub deposunu Vercel projesi olarak içe aktarın; kök dizin repo kökü,

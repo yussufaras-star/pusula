@@ -58,10 +58,13 @@ from pusula.web.auth import (
     admin_user,
     current_user,
     encode_session,
+    finance_allowed,
     passwords,
     require_cron,
 )
 from pusula.sales_report import REPORT_START, SOURCE_DIMS, build_sales_report, source_yield
+from pusula.web.finance import cron_router as finance_cron_router
+from pusula.web.finance import router as finance_router
 from pusula.web.reports import build_reports, selected_rep
 
 load_dotenv()
@@ -75,6 +78,8 @@ MANUAL_INGEST_MIN_GAP = 60
 PUBLIC_DIR = Path(__file__).resolve().parents[2] / "public"
 
 app = FastAPI(title="Pusula", docs_url=None, redoc_url=None)
+app.include_router(finance_router)
+app.include_router(finance_cron_router)
 
 
 class LoginBody(BaseModel):
@@ -210,6 +215,7 @@ def me(user: AuthUser = Depends(current_user)) -> dict[str, Any]:
         "rep_id": user.rep_id,
         "full_name": user.full_name,
         "org_id": get_org_id(),
+        "finance": finance_allowed(user),
     }
 
 

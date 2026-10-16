@@ -12,7 +12,12 @@ import time
 
 from fastapi import Depends, Header, HTTPException, Request
 
-from pusula.panel_auth import AuthUser
+from pusula.panel_auth import (
+    FINANCE_EMAILS_ENV,
+    AuthUser,
+    can_view_finance,
+    parse_finance_emails,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +100,17 @@ def current_user(request: Request) -> AuthUser:
 def admin_user(user: AuthUser = Depends(current_user)) -> AuthUser:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Yönetici yetkisi gerekli")
+    return user
+
+
+def finance_allowed(user: AuthUser) -> bool:
+    return can_view_finance(user, parse_finance_emails(os.environ.get(FINANCE_EMAILS_ENV)))
+
+
+def finance_user(user: AuthUser = Depends(current_user)) -> AuthUser:
+    """Tüm /api/finance uçlarının sunucu tarafı kapısı."""
+    if not finance_allowed(user):
+        raise HTTPException(status_code=403, detail="Finans yetkisi gerekli")
     return user
 
 
