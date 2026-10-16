@@ -207,11 +207,14 @@ bilanço ve stratejik kararlar. Üst barda "Finans operasyonu" geçişiyle açı
   Hareketler işlem tarihindeki, bakiyeler son kurla çevrilir. Kur yoksa
   tutar toplama girmez, ekranda "kur verisi yetersiz" yazar.
 - **API hesapları:** Mercury, Wise, Stripe, Revolut Business. Anahtarlar
-  yalnız ortam değişkeninde: `MERCURY_TOKEN_<EK>`, `WISE_TOKEN_<EK>`,
-  `STRIPE_KEY_<EK>`, `REVOLUT_CLIENT_ID_<EK>` / `REVOLUT_PRIVATE_KEY_<EK>`
-  (PKCS8 PEM) / `REVOLUT_REFRESH_TOKEN_<EK>` / `REVOLUT_ISS_<EK>`. `<EK>`
-  hesabın "anahtar eki"dir (`fin_accounts.credential_key`, ör. `LLC`).
-  Vercel'e ve GitHub Actions secrets'a aynı adla eklenir.
+  yalnız ortam değişkeninden okunur; kodda, veritabanında veya tarayıcıda
+  yer almaz: `MERCURY_API_TOKEN`, `WISE_API_TOKEN`, `STRIPE_RESTRICTED_KEY`.
+  Bir şirketin ayrı token'ı olursa şirkete özel ad önceliklidir
+  (`MERCURY_TOKEN_<EK>`, `WISE_TOKEN_<EK>`, `STRIPE_KEY_<EK>`; `<EK>` hesabın
+  "anahtar eki", `fin_accounts.credential_key`). Revolut:
+  `REVOLUT_CLIENT_ID_<EK>` / `REVOLUT_PRIVATE_KEY_<EK>` (PKCS8 PEM) /
+  `REVOLUT_REFRESH_TOKEN_<EK>` / `REVOLUT_ISS_<EK>`. Vercel'e ve GitHub
+  Actions secrets'a aynı adla eklenir.
 - **Ekstre:** Garanti, KuveytTürk, Vakıf vb. internet şubesinden CSV/XLSX
   indirilir, Hesaplar sekmesinden önizlemeyle yüklenir. Aynı dosya tekrar
   yüklenince çift kayıt oluşmaz.

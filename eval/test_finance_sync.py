@@ -97,6 +97,7 @@ def test_provider_secrets_bundle_only_loads_provider_names() -> None:
     raw = json.dumps(
         {
             "MERCURY_TOKEN_LLC": "m",
+            "WISE_API_TOKEN": "w",
             "STRIPE_KEY_LLC": "new",
             "REVOLUT_PRIVATE_KEY_GMBH": "pem",
             "DATABASE_URL": "postgres://x",
@@ -106,8 +107,13 @@ def test_provider_secrets_bundle_only_loads_provider_names() -> None:
         }
     )
     loaded = sync.load_provider_secrets(raw, environ)
-    assert loaded == ["MERCURY_TOKEN_LLC", "REVOLUT_PRIVATE_KEY_GMBH"]
-    assert environ == {"STRIPE_KEY_LLC": "already", "MERCURY_TOKEN_LLC": "m", "REVOLUT_PRIVATE_KEY_GMBH": "pem"}
+    assert loaded == ["MERCURY_TOKEN_LLC", "REVOLUT_PRIVATE_KEY_GMBH", "WISE_API_TOKEN"]
+    assert environ == {
+        "STRIPE_KEY_LLC": "already",
+        "MERCURY_TOKEN_LLC": "m",
+        "REVOLUT_PRIVATE_KEY_GMBH": "pem",
+        "WISE_API_TOKEN": "w",
+    }
     assert sync.load_provider_secrets(None, environ) == []
     assert sync.load_provider_secrets("not json", environ) == []
 

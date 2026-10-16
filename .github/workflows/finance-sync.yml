@@ -2,10 +2,10 @@
 # Stripe, Revolut). Günde 2 kez, 08:00 ve 17:00 İstanbul (UTC+3).
 # Panelde "Hesapları güncelle" butonu (POST /api/finance/sync) anlık yoldur.
 #
-# Sağlayıcı anahtarları repo secrets'ta <SAĞLAYICI>_<KEY> adıyla durur
-# (ör. MERCURY_TOKEN_LLC) ve aşağıda tek tek verilir. Yeni bir hesap eki
-# (ör. WISE_TOKEN_GMBH) eklenince buraya da bir satır eklenmeli; tanımsız
-# secret boş gelir ve o hesap "Eksik ortam değişkeni" hatası verir.
+# Sağlayıcı anahtarları yalnız repo secrets'tan, tek tek verilir:
+# MERCURY_API_TOKEN, WISE_API_TOKEN, STRIPE_RESTRICTED_KEY. Bir şirketin
+# ayrı token'ı olursa (ör. WISE_TOKEN_GMBH) buraya bir satır eklenir.
+# Tanımsız secret boş gelir; o hesap "Eksik ortam değişkeni" hatası verir.
 name: finance-sync
 
 on:
@@ -42,7 +42,8 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Finans senkronu
         env:
-          MERCURY_TOKEN_LLC: ${{ secrets.MERCURY_TOKEN_LLC }}
-          WISE_TOKEN_LLC: ${{ secrets.WISE_TOKEN_LLC }}
+          MERCURY_API_TOKEN: ${{ secrets.MERCURY_API_TOKEN }}
+          WISE_API_TOKEN: ${{ secrets.WISE_API_TOKEN }}
+          STRIPE_RESTRICTED_KEY: ${{ secrets.STRIPE_RESTRICTED_KEY }}
           DAYS: ${{ inputs.days }}
         run: python scripts/finance_sync.py ${DAYS:+--days "$DAYS"}

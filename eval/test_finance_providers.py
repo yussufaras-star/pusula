@@ -52,8 +52,38 @@ def test_local_day_uses_istanbul() -> None:
 
 def test_missing_token_names_variable_only(monkeypatch) -> None:
     monkeypatch.delenv("MERCURY_TOKEN_LLC", raising=False)
-    with pytest.raises(ProviderError, match="MERCURY_TOKEN_LLC"):
+    monkeypatch.delenv("MERCURY_API_TOKEN", raising=False)
+    with pytest.raises(ProviderError, match="MERCURY_API_TOKEN"):
         mercury(_account("mercury"), SINCE, _client(lambda r: httpx.Response(500)))
+
+
+@pytest.mark.parametrize(
+    ("provider", "global_name", "scoped_name"),
+    [
+        ("mercury", "MERCURY_API_TOKEN", "MERCURY_TOKEN_LLC"),
+        ("wise", "WISE_API_TOKEN", "WISE_TOKEN_LLC"),
+        ("stripe", "STRIPE_RESTRICTED_KEY", "STRIPE_KEY_LLC"),
+    ],
+)
+def test_keys_come_from_env_global_or_company_scoped(monkeypatch, provider, global_name, scoped_name) -> None:
+    from pusula.finance.providers.base import provider_secret
+
+    account = _account(provider)
+    monkeypatch.delenv(scoped_name, raising=False)
+    monkeypatch.setenv(global_name, "ortak")
+    assert provider_secret(account, scoped_name.rsplit("_", 1)[0], global_name) == "ortak"
+    monkeypatch.setenv(scoped_name, "sirkete-ozel")
+    assert provider_secret(account, scoped_name.rsplit("_", 1)[0], global_name) == "sirkete-ozel"
+
+
+def test_no_key_literals_in_provider_code() -> None:
+    from pathlib import Path
+    import re
+
+    root = Path(__file__).resolve().parents[1] / "pusula" / "finance" / "providers"
+    for path in root.glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        assert not re.search(r"secret-token:mercury|sk_live_|rk_live_|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", text), path.name
 
 
 def test_mercury_balance_pages_and_skips_pending(monkeypatch) -> None:

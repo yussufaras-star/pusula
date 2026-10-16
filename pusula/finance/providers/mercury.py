@@ -1,4 +1,7 @@
-"""Mercury: bakiye + hareketler (read-only API token, MERCURY_TOKEN_<KEY>).
+"""Mercury: bakiye + hareketler (read-only API token).
+
+Token ortam değişkeninden: MERCURY_API_TOKEN (şirkete özel ayrı token
+gerekirse MERCURY_TOKEN_<KEY> önceliklidir).
 
 provider_account_id = Mercury hesap id'si (GET /api/v1/accounts).
 Yalnız kesinleşmiş (postedAt dolu) hareketler alınır; bekleyen hareket
@@ -16,12 +19,11 @@ from pusula.db.models import FinAccount
 from pusula.finance.providers.base import (
     AdapterResult,
     NormTx,
-    cred_key,
     local_day,
     num,
     provider_id,
+    provider_secret,
     request_json,
-    require_env,
 )
 
 BASE = "https://api.mercury.com/api/v1"
@@ -31,7 +33,7 @@ SKIP_STATUSES = {"failed", "cancelled", "pending"}
 
 
 def fetch(account: FinAccount, since: datetime, client: httpx.Client) -> AdapterResult:
-    token = require_env(f"MERCURY_TOKEN_{cred_key(account)}")
+    token = provider_secret(account, "MERCURY_TOKEN", "MERCURY_API_TOKEN")
     account_id = quote(provider_id(account), safe="")
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 

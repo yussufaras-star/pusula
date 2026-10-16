@@ -1,4 +1,7 @@
-"""Stripe: bakiye + balance_transactions (STRIPE_KEY_<KEY>).
+"""Stripe: bakiye + balance_transactions.
+
+Anahtar ortam değişkeninden: STRIPE_RESTRICTED_KEY (şirkete özel
+STRIPE_KEY_<KEY> önceliklidir).
 
 Restricted key önerilir: Balance ve Balance transactions okuma. Hesap
 anahtardan belirlenir; provider_account_id serbest (ör. 'default').
@@ -17,11 +20,10 @@ from pusula.db.models import FinAccount
 from pusula.finance.providers.base import (
     AdapterResult,
     NormTx,
-    cred_key,
     local_day,
     num,
+    provider_secret,
     request_json,
-    require_env,
 )
 
 BASE = "https://api.stripe.com/v1"
@@ -37,7 +39,7 @@ def to_major(minor: Decimal, currency: str) -> Decimal:
 
 
 def fetch(account: FinAccount, since: datetime, client: httpx.Client) -> AdapterResult:
-    key = require_env(f"STRIPE_KEY_{cred_key(account)}")
+    key = provider_secret(account, "STRIPE_KEY", "STRIPE_RESTRICTED_KEY")
     headers = {"Authorization": f"Bearer {key}"}
     currency = account.currency.lower()
 
