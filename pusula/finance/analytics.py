@@ -111,6 +111,98 @@ def auto_intercompany(
     return other, IC_CATEGORY
 
 
+# --- kendi hesapları arası -----------------------------------------------------------
+
+OWN_CATEGORY = "hesap_arasi"
+OWN_MATCH_DAYS = 3
+OWN_MATCH_TOLERANCE = Decimal("0.005")  # aktarım ücreti payı
+_LAST4 = re.compile(r"(\d{4})\s*$")
+_MASKED_LAST4 = re.compile(r"(?:••|\*{2,}|x{2,}|\.{2,})\s?(\d{4})", re.I)
+
+
+def _account_last4(account: FinAccount) -> str | None:
+    """Hesap adının sonundaki 4 hane (ör. 'Mercury ••4259')."""
+    match = _LAST4.search(account.name)
+    return match.group(1) if match else None
+
+
+def own_transfers(
+    txs: Sequence[FinTransaction],
+    accounts: Sequence[FinAccount],
+    companies: Sequence[FinCompany],
+    days: int = OWN_MATCH_DAYS,
+    tolerance: Decimal = OWN_MATCH_TOLERANCE,
+) -> set[int]:
+    """Aynı şirketin kendi hesapları arasındaki aktarımların hareket kimlikleri.
+
+    Doğrudan: açıklama/karşı tarafta aynı şirketin başka bir hesabının son 4
+    hanesi geçiyor (ör. 'Mercury Checking ••4259').
+    Eşleştirme: farklı iki hesapta aynı para birimi, ters işaret, ±gün ve
+    ±oran içinde tutar; tesadüfi eşleşmeyi önlemek için en az bir tarafın
+    metninde şirketin kendi adı/kalıbı ya da hesap numarası geçmeli.
+    Şirketler arası işaretli veya kullanıcının düzelttiği hareket aday değildir.
+    """
+    own_patterns: dict[str, list[re.Pattern[str]]] = {
+        c.id: [like_to_regex(p) for p in c.match_patterns] + [like_to_regex(f"%{c.name}%")]
+        for c in companies
+    }
+    last4: dict[str, dict[str, int]] = {}  # şirket → son 4 hane → hesap id
+    for account in accounts:
+        digits = _account_last4(account)
+        if digits and account.id is not None:
+            last4.setdefault(account.company_id, {})[digits] = account.id
+
+    def candidate(tx: FinTransaction) -> bool:
+        return (
+            tx.id is not None
+            and tx.user_edited_at is None
+            and not tx.counterparty_company_id
+            and tx.category_id in (None, OWN_CATEGORY)
+        )
+
+    def mentions_own_account(tx: FinTransaction, text: str) -> bool:
+        numbers = last4.get(tx.company_id, {})
+        return any(
+            numbers.get(m.group(1)) not in (None, tx.account_id) for m in _MASKED_LAST4.finditer(text)
+        )
+
+    marked: set[int] = set()
+    evidence: dict[int, bool] = {}
+    pool = [t for t in txs if candidate(t)]
+    for tx in pool:
+        raw = f"{tx.description} {tx.counterparty or ''}"
+        folded = fold_text(raw)
+        direct = mentions_own_account(tx, raw)
+        if direct:
+            marked.add(tx.id)  # type: ignore[arg-type]
+        evidence[tx.id] = direct or any(  # type: ignore[index]
+            rx.match(folded) for rx in own_patterns.get(tx.company_id, [])
+        )
+
+    outs = sorted((t for t in pool if t.amount < 0), key=lambda t: t.booked_at)
+    ins = [t for t in pool if t.amount > 0]
+    used: set[int] = set()
+    for out in outs:
+        best: tuple[int, FinTransaction] | None = None
+        for inc in ins:
+            if inc.id in used or inc.account_id == out.account_id:
+                continue
+            if inc.company_id != out.company_id or inc.currency != out.currency:
+                continue
+            gap = abs((inc.booked_at - out.booked_at).days)
+            if gap > days or abs(inc.amount + out.amount) > -out.amount * tolerance:
+                continue
+            if not (evidence.get(out.id) or evidence.get(inc.id)):  # type: ignore[arg-type]
+                continue
+            if best is None or gap < best[0]:
+                best = (gap, inc)
+        if best is not None:
+            used.add(best[1].id)  # type: ignore[arg-type]
+            marked.add(out.id)  # type: ignore[arg-type]
+            marked.add(best[1].id)  # type: ignore[arg-type]
+    return marked
+
+
 # --- nakit ve bakiye seyri -------------------------------------------------------
 
 

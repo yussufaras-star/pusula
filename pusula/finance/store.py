@@ -28,7 +28,7 @@ from pusula.db.models import (
     FinSnapshotLine,
     FinTransaction,
 )
-from pusula.finance.analytics import auto_intercompany
+from pusula.finance.analytics import OWN_CATEGORY, auto_intercompany, own_transfers
 from pusula.finance.statement import Parsed
 
 ACCOUNT_COLUMNS = (
@@ -263,6 +263,24 @@ def stamp_sync_run(conn: psycopg.Connection, now: datetime) -> None:
         """,
         (get_org_id(), SYNC_SOURCE, now, now),
     )
+
+
+def apply_own_transfers(conn: psycopg.Connection, since: date) -> int:
+    """Kendi hesapları arası aktarımları 'hesap_arasi' yapar; güncellenen sayı.
+
+    Yalnız kategorisi boş, şirketler arası işaretsiz ve kullanıcının
+    düzeltmediği satırlar değişir (SQL koşulu da bunu tekrar zorlar).
+    """
+    ids = own_transfers(load_transactions(conn, since), load_accounts(conn), load_companies(conn))
+    if not ids:
+        return 0
+    rows = conn.execute(
+        "UPDATE fin_transactions SET category_id = %s"
+        " WHERE id = ANY(%s) AND category_id IS NULL AND user_edited_at IS NULL"
+        " AND counterparty_company_id IS NULL RETURNING id",
+        (OWN_CATEGORY, sorted(ids)),
+    ).fetchall()
+    return len(rows)
 
 
 def last_fx_date(conn: psycopg.Connection) -> date | None:

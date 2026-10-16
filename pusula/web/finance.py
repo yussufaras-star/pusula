@@ -185,6 +185,9 @@ def statement_import(account_id: int, body: StatementBody) -> Any:
             body.update_balance,
             datetime.now(TZ),
         )
+        span = parsed.date_range
+        if span:
+            store.apply_own_transfers(conn, span[0] - timedelta(days=analytics.OWN_MATCH_DAYS))
     return jsonable_encoder(
         {
             "inserted": result.inserted,
