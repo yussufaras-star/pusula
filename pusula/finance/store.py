@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 
 import psycopg
@@ -208,12 +208,22 @@ def import_statement(
     ]
     inserted = insert_transactions(conn, account, rows, "csv")
     balance = parsed.last_balance if update_balance else None
-    if balance is not None:
-        conn.execute(
+    span = parsed.date_range
+    if balance is not None and span is not None:
+        # Bakiye ekstrenin son günü itibarıyla; eski ekstre yeni bakiyeyi ezmez
+        as_of = datetime.combine(span[1], time(23, 59), now.tzinfo)
+        updated = conn.execute(
             "UPDATE fin_accounts SET current_balance = %s, balance_at = %s,"
-            " last_synced_at = %s, sync_error = NULL WHERE id = %s",
-            (balance, now, now, account.id),
-        )
+            " last_synced_at = %s, sync_error = NULL"
+            " WHERE id = %s AND (balance_at IS NULL OR balance_at <= %s) RETURNING id",
+            (balance, as_of, now, account.id, as_of),
+        ).fetchone()
+        if updated is None:
+            balance = None
+            conn.execute(
+                "UPDATE fin_accounts SET last_synced_at = %s, sync_error = NULL WHERE id = %s",
+                (now, account.id),
+            )
     else:
         conn.execute(
             "UPDATE fin_accounts SET last_synced_at = %s, sync_error = NULL WHERE id = %s",

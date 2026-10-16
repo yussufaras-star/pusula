@@ -680,8 +680,11 @@ class Alerts:
 def _is_stale(account: FinAccount, now: datetime) -> bool:
     if account.provider == "manual":
         return False
-    limit = API_STALE_DAYS if account.provider in API_PROVIDERS else STATEMENT_STALE_DAYS
-    last = account.last_synced_at
+    if account.provider in API_PROVIDERS:
+        limit, last = API_STALE_DAYS, account.last_synced_at
+    else:
+        # Ekstre hesabı: yükleme anı değil, ekstrenin kapsadığı son gün önemli
+        limit, last = STATEMENT_STALE_DAYS, account.balance_at or account.last_synced_at
     return last is None or now - last > timedelta(days=limit)
 
 
