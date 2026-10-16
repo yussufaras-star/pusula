@@ -4,9 +4,9 @@ Kullanım:
     python scripts/finance_sync.py
     python scripts/finance_sync.py --account 3 --days 30
 
-GitHub Actions'ta sağlayıcı anahtarları FIN_SECRETS_JSON (toJSON(secrets))
-içinden okunur; yalnız MERCURY_TOKEN_*, WISE_TOKEN_*, STRIPE_KEY_*,
-REVOLUT_*_* adları ortama alınır.
+Sağlayıcı anahtarları ortam değişkeninden okunur (finance-sync.yml tek tek
+verir). İsteğe bağlı FIN_SECRETS_JSON (JSON nesnesi) verilirse yalnız
+MERCURY_TOKEN_*, WISE_TOKEN_*, STRIPE_KEY_*, REVOLUT_*_* adları ortama alınır.
 """
 
 from __future__ import annotations
