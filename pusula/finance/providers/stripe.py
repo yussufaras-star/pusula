@@ -69,6 +69,8 @@ def fetch(account: FinAccount, since: datetime, client: httpx.Client) -> Adapter
                     booked_at=local_day(int(row["created"])),
                     amount=to_major(num(row.get("net")), row_currency),
                     description=row.get("description") or row.get("type") or "",
+                    # Karşı taraf hep Stripe: satış kuralı yakalar, payout aktarım eşleşir
+                    counterparty="Stripe",
                     currency=row_currency.upper(),
                 )
             )

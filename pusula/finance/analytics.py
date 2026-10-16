@@ -139,10 +139,15 @@ def own_transfers(
     Doğrudan: açıklama/karşı tarafta aynı şirketin başka bir hesabının son 4
     hanesi geçiyor (ör. 'Mercury Checking ••4259').
     Eşleştirme: farklı iki hesapta aynı para birimi, ters işaret, ±gün ve
-    ±oran içinde tutar; tesadüfi eşleşmeyi önlemek için en az bir tarafın
-    metninde şirketin kendi adı/kalıbı ya da hesap numarası geçmeli.
-    Şirketler arası işaretli veya kullanıcının düzelttiği hareket aday değildir.
+    ±oran içinde tutar; ayrıca kanıt gerekir: bir taraf diğer hesabı gösterir
+    (son 4 hane ya da farklı kurumsa kurum adı, ör. Wise'ta 'STRIPE') veya
+    metinde şirketin kendi adı geçer.
+    Ödeme altyapısı hesabında (Stripe vb.) yalnız 'payout' aktarım olabilir;
+    satış, iade, chargeback asla. Şirketler arası işaretli veya kullanıcının
+    düzelttiği hareket aday değildir; kuralla verilmiş kategori ise aktarım
+    çıkarsa değişebilir.
     """
+    by_id = {a.id: a for a in accounts if a.id is not None}
     own_patterns: dict[str, list[re.Pattern[str]]] = {
         c.id: [like_to_regex(p) for p in c.match_patterns] + [like_to_regex(f"%{c.name}%")]
         for c in companies
@@ -153,32 +158,45 @@ def own_transfers(
         if digits and account.id is not None:
             last4.setdefault(account.company_id, {})[digits] = account.id
 
+    def text_of(tx: FinTransaction) -> str:
+        return f"{tx.description} {tx.counterparty or ''}"
+
     def candidate(tx: FinTransaction) -> bool:
-        return (
-            tx.id is not None
-            and tx.user_edited_at is None
-            and not tx.counterparty_company_id
-            and tx.category_id in (None, OWN_CATEGORY)
-        )
+        if tx.id is None or tx.user_edited_at is not None or tx.counterparty_company_id:
+            return False
+        if tx.category_id not in (None, OWN_CATEGORY) and tx.category_rule_id is None:
+            return False
+        account = by_id.get(tx.account_id)
+        if account is not None and account.type == "payment":
+            return "payout" in rule_key(text_of(tx))
+        return True
 
-    def mentions_own_account(tx: FinTransaction, text: str) -> bool:
+    def mentions_last4(tx: FinTransaction, target: int | None = None) -> bool:
         numbers = last4.get(tx.company_id, {})
-        return any(
-            numbers.get(m.group(1)) not in (None, tx.account_id) for m in _MASKED_LAST4.finditer(text)
-        )
+        for m in _MASKED_LAST4.finditer(text_of(tx)):
+            hit = numbers.get(m.group(1))
+            if hit is not None and hit != tx.account_id and (target is None or hit == target):
+                return True
+        return False
 
-    marked: set[int] = set()
-    evidence: dict[int, bool] = {}
+    def points_to(tx: FinTransaction, other: FinAccount | None) -> bool:
+        """tx'in metni diğer kendi hesabını gösteriyor mu?"""
+        if other is None or other.id is None:
+            return False
+        if mentions_last4(tx, other.id):
+            return True
+        mine = by_id.get(tx.account_id)
+        institution = rule_key(other.institution)
+        if not institution or (mine is not None and rule_key(mine.institution) == institution):
+            return False
+        return re.search(r"(?<![a-z0-9])" + re.escape(institution) + r"(?![a-z0-9])", rule_key(text_of(tx))) is not None
+
+    def own_name(tx: FinTransaction) -> bool:
+        folded = fold_text(text_of(tx))
+        return any(rx.match(folded) for rx in own_patterns.get(tx.company_id, []))
+
     pool = [t for t in txs if candidate(t)]
-    for tx in pool:
-        raw = f"{tx.description} {tx.counterparty or ''}"
-        folded = fold_text(raw)
-        direct = mentions_own_account(tx, raw)
-        if direct:
-            marked.add(tx.id)  # type: ignore[arg-type]
-        evidence[tx.id] = direct or any(  # type: ignore[index]
-            rx.match(folded) for rx in own_patterns.get(tx.company_id, [])
-        )
+    marked: set[int] = {t.id for t in pool if t.id is not None and mentions_last4(t)}
 
     outs = sorted((t for t in pool if t.amount < 0), key=lambda t: t.booked_at)
     ins = [t for t in pool if t.amount > 0]
@@ -193,14 +211,20 @@ def own_transfers(
             gap = abs((inc.booked_at - out.booked_at).days)
             if gap > days or abs(inc.amount + out.amount) > -out.amount * tolerance:
                 continue
-            if not (evidence.get(out.id) or evidence.get(inc.id)):  # type: ignore[arg-type]
+            evidence = (
+                points_to(out, by_id.get(inc.account_id))
+                or points_to(inc, by_id.get(out.account_id))
+                or own_name(out)
+                or own_name(inc)
+            )
+            if not evidence:
                 continue
             if best is None or gap < best[0]:
                 best = (gap, inc)
-        if best is not None:
-            used.add(best[1].id)  # type: ignore[arg-type]
-            marked.add(out.id)  # type: ignore[arg-type]
-            marked.add(best[1].id)  # type: ignore[arg-type]
+        if best is not None and out.id is not None and best[1].id is not None:
+            used.add(best[1].id)
+            marked.add(out.id)
+            marked.add(best[1].id)
     return marked
 
 

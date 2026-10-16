@@ -211,6 +211,7 @@ def test_stripe_minor_units_pagination_and_currency(monkeypatch) -> None:
         ("txn_1", D("97.1"), "charge"),
         ("txn_3", D("-1500"), "Payout"),
     ]
+    assert {t.counterparty for t in result.transactions} == {"Stripe"}
     assert calls[0]["created[gte]"] == str(int(SINCE.timestamp()))
     assert calls[1]["starting_after"] == "txn_2"
 
