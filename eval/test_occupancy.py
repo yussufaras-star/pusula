@@ -170,3 +170,18 @@ def test_excused_windows_reach_timelines_for() -> None:
     t = out[("r1", MONDAY)]
     assert t.total("muaf") == pytest.approx(480)
     assert t.total("kayip") == 0
+
+
+def test_short_gaps_between_activities_count_as_busy() -> None:
+    # 09:00-10:00 dolu, 3 dk boşluk, 10:03-11:00 dolu, 20 dk boşluk, 11:20-12:00.
+    busy = [(at(9), at(10)), (at(10, 3), at(11)), (at(11, 20), at(12))]
+    t = day_timeline(busy, MONDAY, at(12))
+    assert t.total("dolu") == pytest.approx(160)
+    assert t.total("mola") == pytest.approx(20)
+    assert t.total("kayip") == pytest.approx(0)
+
+
+def test_short_gap_at_day_start_is_not_busy() -> None:
+    t = day_timeline([(at(9, 3), at(10))], MONDAY, at(10))
+    assert t.total("dolu") == pytest.approx(57)
+    assert t.total("mola") == pytest.approx(3)
