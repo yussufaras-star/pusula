@@ -25,7 +25,7 @@ from pusula.db.models import (
 )
 from pusula.finance import analytics
 from pusula.finance.fx import FxTable
-from pusula.finance.snapshot import group_totals, snapshot_totals
+from pusula.finance.snapshot import SECTIONS, BalanceSheet, balance_sheet, section_of
 
 ALL = "all"
 TX_PAGE = 100
@@ -378,13 +378,70 @@ def intercompany_view(bundle: Bundle, scope: Sequence[str], start: date, end: da
 # --- haftalık bilanço ------------------------------------------------------------
 
 
+def _ratio_out(value: Decimal | None) -> float | None:
+    return None if value is None else float(value.quantize(Decimal("0.01")))
+
+
+def sheet_out(sheet: BalanceSheet) -> dict[str, Any]:
+    """Bilanço yanıtı: bölüm → grup toplamları, denklik, eliminasyon, oranlar."""
+    r = sheet.ratios
+    return {
+        "assets_usd": money(sheet.assets),
+        "debts_usd": money(sheet.debts),
+        "equity_usd": money(sheet.equity),
+        "equity_entered_usd": money(sheet.equity_entered),
+        "computed_equity_usd": money(sheet.computed_equity),
+        "has_equity": sheet.has_equity,
+        "liabilities_and_equity_usd": money(sheet.liabilities_and_equity),
+        "difference_usd": money(sheet.difference),
+        "balanced": sheet.balanced,
+        "eliminated_receivables_usd": money(sheet.eliminated_receivables),
+        "eliminated_payables_usd": money(sheet.eliminated_payables),
+        "elimination_gap_usd": money(sheet.elimination_gap),
+        "sections": [
+            {
+                "key": sec.key,
+                "title": sec.title,
+                "side": sec.side,
+                "usd": money(sheet.sections[sec.key].usd),
+                "groups": [
+                    {"name": g.name, "usd": money(g.usd)} for g in sheet.sections[sec.key].groups
+                ],
+            }
+            for sec in SECTIONS
+        ],
+        "ratios": {
+            "current": _ratio_out(r.current),
+            "acid_test": _ratio_out(r.acid_test),
+            "cash": _ratio_out(r.cash),
+            "working_capital_usd": money(r.working_capital),
+            "debt_to_equity": _ratio_out(r.debt_to_equity),
+            "equity_ratio": _ratio_out(r.equity_ratio),
+        },
+        "missing_fx": sorted(sheet.missing_fx),
+    }
+
+
+def _brief(sheet: BalanceSheet) -> dict[str, Any]:
+    return {
+        "assets_usd": money(sheet.assets),
+        "debts_usd": money(sheet.debts),
+        "equity_usd": money(sheet.equity),
+    }
+
+
 def snapshots_view(
     snapshots: Sequence[FinSnapshot],
     lines: Iterable[FinSnapshotLine],
     scope: Sequence[str],
     week: date | None,
 ) -> dict[str, Any]:
-    """Hafta listesi + seçili haftanın şirket bilançoları (kilitli kurla)."""
+    """Hafta listesi + seçili haftanın şirket bilançoları (kilitli kurla).
+
+    Birden çok şirket kapsamda ise konsolide bilanço da döner; şirketler
+    arası alacak ve borçlar elimine edilir. Her bilanço, aynı şirketin
+    önceki haftasıyla kıyaslanır.
+    """
     in_scope = [s for s in snapshots if s.company_id in scope]
     weeks = sorted({s.week_date for s in in_scope}, reverse=True)
     chosen = week or (weeks[0] if weeks else None)
@@ -392,15 +449,19 @@ def snapshots_view(
     for line in lines:
         by_snapshot.setdefault(line.snapshot_id, []).append(line)
 
+    def pairs(snaps: Iterable[FinSnapshot]) -> list[tuple[FinSnapshotLine, dict[str, Decimal]]]:
+        return [(line, snap.fx) for snap in snaps for line in by_snapshot.get(snap.id or 0, [])]
+
+    current = sorted((s for s in in_scope if s.week_date == chosen), key=lambda s: scope.index(s.company_id))
     cards = []
-    assets = liabilities = Decimal("0")
-    missing: set[str] = set()
-    for snap in sorted((s for s in in_scope if s.week_date == chosen), key=lambda s: scope.index(s.company_id)):
+    for snap in current:
         snap_lines = sorted(by_snapshot.get(snap.id or 0, []), key=lambda l: l.sort)
-        totals = snapshot_totals(snap_lines, snap.fx)
-        assets += totals.assets
-        liabilities += totals.liabilities
-        missing |= totals.missing_fx
+        sheet = balance_sheet(pairs([snap]))
+        prev = max(
+            (s for s in in_scope if s.company_id == snap.company_id and s.week_date < snap.week_date),
+            key=lambda s: s.week_date,
+            default=None,
+        )
         cards.append(
             {
                 "id": snap.id,
@@ -410,28 +471,37 @@ def snapshots_view(
                 "locked_at": snap.locked_at,
                 "notes": snap.notes,
                 "fx": {k: float(v) for k, v in snap.fx.items()},
-                "assets_usd": money(totals.assets),
-                "liabilities_usd": money(totals.liabilities),
-                "net_usd": money(totals.net),
-                "missing_fx": sorted(totals.missing_fx),
-                "groups": [
-                    {"side": g.side, "name": g.name, "usd": money(g.usd)} for g in group_totals(snap_lines, snap.fx)
-                ],
+                "sheet": sheet_out(sheet),
+                "previous": {"week": prev.week_date, **_brief(balance_sheet(pairs([prev])))} if prev else None,
                 "lines": [
-                    {**l.model_dump(), "amount": money(l.amount)} for l in snap_lines
+                    {**l.model_dump(), "section": section_of(l), "amount": money(l.amount)} for l in snap_lines
                 ],
             }
         )
+
+    consolidated = None
+    previous_consolidated = None
+    if len(scope) > 1 and current:
+        consolidated = sheet_out(balance_sheet(pairs(current), eliminate_intercompany=True))
+        earlier = [w for w in weeks if chosen and w < chosen]
+        if earlier:
+            prev_snaps = [s for s in in_scope if s.week_date == earlier[0]]
+            previous_consolidated = {
+                "week": earlier[0],
+                **_brief(balance_sheet(pairs(prev_snaps), eliminate_intercompany=True)),
+            }
+    totals_sheet = balance_sheet(pairs(current), eliminate_intercompany=len(scope) > 1)
     return {
         "weeks": weeks,
         "week": chosen,
         "snapshots": cards,
-        "totals": {
-            "assets_usd": money(assets),
-            "liabilities_usd": money(liabilities),
-            "net_usd": money(assets - liabilities),
-        },
-        "missing_fx": sorted(missing),
+        "consolidated": consolidated,
+        "previous_consolidated": previous_consolidated,
+        "totals": _brief(totals_sheet),
+        "missing_fx": sorted(totals_sheet.missing_fx),
+        "catalog": [
+            {"key": sec.key, "title": sec.title, "side": sec.side, "groups": list(sec.groups)} for sec in SECTIONS
+        ],
     }
 
 

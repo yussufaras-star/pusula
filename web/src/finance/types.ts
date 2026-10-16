@@ -159,16 +159,51 @@ export interface Intercompany extends FxMeta {
   transactions: Tx[];
 }
 
+export type SectionKey = "current_assets" | "noncurrent_assets" | "current_liabilities" | "longterm_liabilities" | "equity";
+
 export interface SnapshotLine {
   id: number;
   snapshot_id: number;
   side: "asset" | "liability";
+  section: SectionKey;
   group_name: string;
   label: string;
   amount: number;
   currency: string;
-  origin: "account" | "planned" | "manual";
+  origin: "account" | "planned" | "intercompany" | "manual";
   sort: number;
+}
+
+export interface Sheet {
+  assets_usd: number;
+  debts_usd: number;
+  equity_usd: number;
+  equity_entered_usd: number;
+  computed_equity_usd: number;
+  has_equity: boolean;
+  liabilities_and_equity_usd: number;
+  difference_usd: number;
+  balanced: boolean;
+  eliminated_receivables_usd: number;
+  eliminated_payables_usd: number;
+  elimination_gap_usd: number;
+  sections: { key: SectionKey; title: string; side: "asset" | "liability"; usd: number; groups: { name: string; usd: number }[] }[];
+  ratios: {
+    current: number | null;
+    acid_test: number | null;
+    cash: number | null;
+    working_capital_usd: number;
+    debt_to_equity: number | null;
+    equity_ratio: number | null;
+  };
+  missing_fx: string[];
+}
+
+export interface SheetBrief {
+  week: string;
+  assets_usd: number;
+  debts_usd: number;
+  equity_usd: number;
 }
 
 export interface SnapshotCard {
@@ -179,11 +214,8 @@ export interface SnapshotCard {
   locked_at: string | null;
   notes: string;
   fx: Record<string, number>;
-  assets_usd: number;
-  liabilities_usd: number;
-  net_usd: number;
-  missing_fx: string[];
-  groups: { side: "asset" | "liability"; name: string; usd: number }[];
+  sheet: Sheet;
+  previous: SheetBrief | null;
   lines: SnapshotLine[];
 }
 
@@ -191,8 +223,11 @@ export interface Snapshots {
   weeks: string[];
   week: string | null;
   snapshots: SnapshotCard[];
-  totals: { assets_usd: number; liabilities_usd: number; net_usd: number };
+  consolidated: Sheet | null;
+  previous_consolidated: SheetBrief | null;
+  totals: { assets_usd: number; debts_usd: number; equity_usd: number };
   missing_fx: string[];
+  catalog: { key: SectionKey; title: string; side: "asset" | "liability"; groups: string[] }[];
 }
 
 export type DecisionStatus = "acik" | "aksiyon" | "devam" | "tamam" | "iptal";

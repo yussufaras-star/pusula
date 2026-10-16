@@ -184,24 +184,48 @@ def test_intercompany_match_across_range_edge() -> None:
     assert len(data["transactions"]) == 1  # aralık dışındaki karşılık listelenmez
 
 
-def test_snapshots_view_defaults_to_latest_week() -> None:
+def test_snapshots_view_structure_previous_and_consolidation() -> None:
     snaps = [
         FinSnapshot(id=1, company_id="tr", week_date=date(2026, 10, 5), fx={"TRY": D("0.025")}),
         FinSnapshot(id=2, company_id="tr", week_date=date(2026, 10, 12), fx={"TRY": D("0.025")}, locked=True),
         FinSnapshot(id=3, company_id="llc", week_date=date(2026, 10, 12)),
     ]
+
+    def line(sid: int, section: str, group: str, label: str, amount: str, currency: str = "TRY") -> FinSnapshotLine:
+        side = "asset" if "assets" in section else "liability"
+        return FinSnapshotLine(snapshot_id=sid, side=side, section=section, group_name=group, label=label,
+                               amount=D(amount), currency=currency)
+
     lines = [
-        FinSnapshotLine(snapshot_id=2, side="asset", group_name="Banka hesapları", label="Garanti", amount=D("40000"), currency="TRY"),
-        FinSnapshotLine(snapshot_id=2, side="liability", group_name="Tedarikçiler", label="X", amount=D("4000"), currency="TRY", sort=1),
-        FinSnapshotLine(snapshot_id=3, side="asset", group_name="Banka hesapları", label="Mercury", amount=D("500"), currency="USD"),
+        line(1, "current_assets", "Hazır değerler", "Garanti", "20000"),
+        line(2, "current_assets", "Hazır değerler", "Garanti", "40000"),
+        line(2, "current_liabilities", "Ticari borçlar", "X", "4000"),
+        line(2, "current_liabilities", "Şirketler arası borçlar", "Rexven LLC", "300", "USD"),
+        line(3, "current_assets", "Hazır değerler", "Mercury", "500", "USD"),
+        line(3, "current_assets", "Şirketler arası alacaklar", "Rexven TR", "300", "USD"),
+        # eski satır: bölüm boş → kısa vadeli
+        FinSnapshotLine(snapshot_id=3, side="liability", group_name="Tedarikçiler", label="Ajans", amount=D("50"), currency="USD"),
     ]
     data = views.snapshots_view(snaps, lines, ["llc", "gmbh", "tr"], None)
     assert data["weeks"] == [date(2026, 10, 12), date(2026, 10, 5)]
     assert [s["company_id"] for s in data["snapshots"]] == ["llc", "tr"]
-    assert data["totals"] == {"assets_usd": 1500.0, "liabilities_usd": 100.0, "net_usd": 1400.0}
-    assert data["snapshots"][1]["locked"] is True
+    llc, tr = data["snapshots"]
+    assert llc["sheet"]["assets_usd"] == 800.0 and llc["sheet"]["debts_usd"] == 50.0
+    assert llc["lines"][2]["section"] == "current_liabilities"
+    assert tr["previous"] == {"week": date(2026, 10, 5), "assets_usd": 500.0, "debts_usd": 0.0, "equity_usd": 500.0}
+    assert llc["previous"] is None
+    cons = data["consolidated"]
+    assert cons["assets_usd"] == 1500.0 and cons["debts_usd"] == 150.0  # 300 alacak / borç elimine
+    assert cons["eliminated_receivables_usd"] == 300.0 and cons["elimination_gap_usd"] == 0.0
+    assert data["totals"] == {"assets_usd": 1500.0, "debts_usd": 150.0, "equity_usd": 1350.0}
+    assert data["previous_consolidated"]["week"] == date(2026, 10, 5)
+    assert [s["key"] for s in cons["sections"]] == ["current_assets", "noncurrent_assets", "current_liabilities", "longterm_liabilities", "equity"]
+    assert cons["ratios"]["current"] == 10.0
+    assert [c["title"] for c in data["catalog"]][-1] == "Özkaynaklar"
+
     only_tr = views.snapshots_view(snaps, lines, ["tr"], date(2026, 10, 5))
-    assert only_tr["week"] == date(2026, 10, 5) and only_tr["snapshots"][0]["lines"] == []
+    assert only_tr["week"] == date(2026, 10, 5) and only_tr["consolidated"] is None
+    assert only_tr["snapshots"][0]["sheet"]["assets_usd"] == 500.0
 
 
 def test_decisions_view_order_and_stats() -> None:

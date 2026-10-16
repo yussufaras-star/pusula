@@ -33,11 +33,19 @@ from pusula.db.models import (
     FinSnapshot,
     FinSnapshotLine,
     Money,
-    SnapshotSide,
+    SnapshotSection,
 )
 from pusula.finance import analytics, store, views
 from pusula.finance.fx import load_fx
-from pusula.finance.snapshot import build_week_lines, mail_summary, previous_snapshot
+from pusula.finance.snapshot import (
+    SECTION_BY_KEY,
+    build_week_lines,
+    intercompany_balances,
+    mail_summary,
+    previous_snapshot,
+    side_of,
+    week_end,
+)
 from pusula.finance.sync import run_finance_sync
 from pusula.finance.statement import (
     Parsed,
@@ -571,13 +579,17 @@ class NewWeekBody(BaseModel):
     week_date: date
     company_ids: list[CompanyId] | None = None  # boşsa tüm şirketler
     copy_previous: bool = True
+    # Hareketlerdeki şirketler arası net transferi alacak / borç olarak ekle
+    include_intercompany: bool = False
 
 
 @router.post("/snapshots")
 def create_week(body: NewWeekBody) -> Any:
-    """Yeni hafta: hesap bakiyeleri + açık planlı kalemler + önceki elle pasifler.
+    """Yeni hafta: hesap bakiyeleri + açık planlı kalemler + önceki elle girilenler.
 
-    Kurlar o anki son ECB kuruyla haftaya kilitlenir.
+    Kurlar o anki son ECB kuruyla haftaya kilitlenir. include_intercompany:
+    şirketin kendi kayıtlarındaki net transferler (bilanço tarihine kadar)
+    şirketler arası alacak / borç satırı olur.
     """
     if body.week_date.isoweekday() != 1:
         raise HTTPException(status_code=400, detail="Hafta pazartesi olmalı")
@@ -590,7 +602,10 @@ def create_week(body: NewWeekBody) -> Any:
             raise HTTPException(status_code=409, detail=f"Bu hafta zaten var: {', '.join(taken)}")
         accounts_ = store.load_accounts(conn)
         planned = store.load_planned(conn)
-        fx_rates = load_fx(conn, body.week_date - timedelta(days=7)).latest_rates()
+        fx_table = load_fx(conn, None if body.include_intercompany else body.week_date - timedelta(days=7))
+        fx_rates = fx_table.latest_rates()
+        ic_txs = store.load_transactions(conn, None, week_end(body.week_date)) if body.include_intercompany else []
+        names = {c.id: c.name for c in companies}
         created: list[int] = []
         for company_id in ids:
             previous: list[FinSnapshotLine] = []
@@ -598,8 +613,10 @@ def create_week(body: NewWeekBody) -> Any:
                 prev = previous_snapshot(existing, company_id, body.week_date)
                 if prev and prev.id is not None:
                     previous = store.load_snapshot_lines(conn, [prev.id])
+            ic = intercompany_balances(company_id, ic_txs, fx_table, week_end(body.week_date), names)
             snapshot_id = store.insert_snapshot(conn, company_id, body.week_date, fx_rates)
-            for line in build_week_lines(company_id, accounts_, planned, previous):
+            lines = build_week_lines(company_id, accounts_, planned, previous, body.week_date, ic)
+            for line in lines:
                 store.insert_line(conn, snapshot_id, line.__dict__)
             created.append(snapshot_id)
     return {"ids": created, "week_date": body.week_date}
@@ -637,7 +654,7 @@ def _line_fx_check(snapshot: FinSnapshot, currency: str) -> None:
 
 
 class LineBody(BaseModel):
-    side: SnapshotSide
+    section: SnapshotSection
     group_name: str
     label: str
     amount: Money
@@ -647,12 +664,16 @@ class LineBody(BaseModel):
 
 @router.post("/snapshots/{snapshot_id}/lines")
 def add_line(snapshot_id: int, body: LineBody) -> Any:
+    """Elle satır; taraf bölümden gelir (özkaynak pasif tarafındadır)."""
+    if not body.group_name.strip() or not body.label.strip():
+        raise HTTPException(status_code=400, detail="Grup ve kalem adı gerekli")
     with connect() as conn, db_errors():
         snapshot = store.load_snapshot(conn, snapshot_id)
         if snapshot is None:
             raise HTTPException(status_code=404, detail="Bilanço bulunamadı")
         _line_fx_check(snapshot, body.currency)
-        line_id = store.insert_line(conn, snapshot_id, {**body.model_dump(), "origin": "manual"})
+        values = {**body.model_dump(), "side": side_of(body.section), "origin": "manual"}
+        line_id = store.insert_line(conn, snapshot_id, values)
     return {"id": line_id}
 
 
@@ -663,6 +684,9 @@ def patch_line(line_id: int, payload: dict[str, Any] = Body(...)) -> Any:
         line = store.load_line(conn, line_id)
         if line is None:
             raise HTTPException(status_code=404, detail="Satır bulunamadı")
+        # Bölüm değişirse taraf da ona uyar (özkaynak pasiftir)
+        if payload.get("section") in SECTION_BY_KEY and "side" not in payload:
+            payload = {**payload, "side": side_of(payload["section"])}
         record = merged(FinSnapshotLine, line.model_dump(), payload)
         snapshot = store.load_snapshot(conn, line.snapshot_id)
         if snapshot is not None:

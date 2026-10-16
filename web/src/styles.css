@@ -2777,3 +2777,72 @@ textarea.f-input {
   gap: 8px 20px;
   margin: 4px 0 8px;
 }
+
+/* bilanço bölümleri */
+.fin-bs-section {
+  margin-bottom: 12px;
+}
+
+.fin-bs-sname {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 650;
+  padding: 6px 0 4px;
+  border-bottom: 1px solid var(--grid);
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-bs-total {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  margin-top: 4px;
+  border-top: 2px solid var(--axis);
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-bs-computed {
+  font-style: italic;
+  color: var(--ink-2);
+}
+
+.fin-bs-gap {
+  color: var(--critical-ink);
+  font-weight: 600;
+}
+
+.btn.link-add {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  padding: 2px 0 2px 12px;
+}
+
+.fin-ratios {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.fin-ratio {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-ratio b {
+  font-size: 15px;
+}
+
+.fin-checks-col {
+  flex-direction: column;
+}

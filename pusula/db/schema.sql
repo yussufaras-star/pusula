@@ -658,12 +658,27 @@ CREATE TABLE IF NOT EXISTS fin_snapshot_lines (
     label        text NOT NULL,
     amount       numeric(18, 2) NOT NULL DEFAULT 0,
     currency     text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
-    -- Satırın kaynağı: hesap bakiyesi, açık planlı kalem veya elle giriş.
-    -- Yeni haftada yalnız 'manual' pasifler önceki haftadan kopyalanır.
-    origin       text NOT NULL DEFAULT 'manual' CHECK (origin IN ('account', 'planned', 'manual')),
+    -- Satırın kaynağı: hesap bakiyesi, açık planlı kalem, şirketler arası
+    -- net transfer veya elle giriş. Yeni haftaya yalnız 'manual' kopyalanır.
+    origin       text NOT NULL DEFAULT 'manual',
+    -- Bilanço bölümü; side ile tutarlı (aktif: dönen/duran, pasif: KV/UV/özkaynak).
+    section      text,
     sort         int NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_fin_snapshot_lines_snapshot ON fin_snapshot_lines (snapshot_id);
+
+-- Geçiş: bölüm kolonu ve genişleyen kaynak listesi (eski kurulumlar için).
+ALTER TABLE fin_snapshot_lines ADD COLUMN IF NOT EXISTS section text;
+ALTER TABLE fin_snapshot_lines DROP CONSTRAINT IF EXISTS fin_snapshot_lines_origin_check;
+ALTER TABLE fin_snapshot_lines ADD CONSTRAINT fin_snapshot_lines_origin_check
+    CHECK (origin IN ('account', 'planned', 'intercompany', 'manual'));
+ALTER TABLE fin_snapshot_lines DROP CONSTRAINT IF EXISTS fin_snapshot_lines_section_check;
+ALTER TABLE fin_snapshot_lines ADD CONSTRAINT fin_snapshot_lines_section_check
+    CHECK (
+        section IS NULL
+        OR (side = 'asset' AND section IN ('current_assets', 'noncurrent_assets'))
+        OR (side = 'liability' AND section IN ('current_liabilities', 'longterm_liabilities', 'equity'))
+    );
 
 -- Kilitli haftanın satırları değiştirilemez. UPDATE'te satır başka haftaya
 -- taşınıyorsa hem eski hem yeni hafta kontrol edilir.

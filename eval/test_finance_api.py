@@ -152,3 +152,19 @@ def test_db_errors_map_to_short_messages() -> None:
             with web_finance.db_errors():
                 raise exc
         assert info.value.status_code == status
+
+
+def test_add_line_takes_side_from_section(env, monkeypatch) -> None:
+    from pusula.db.models import FinSnapshot
+
+    client, _ = env
+    inserted: list = []
+    snap = FinSnapshot(id=5, company_id="tr", week_date=date(2026, 10, 12), fx={"TRY": Decimal("0.025")})
+    monkeypatch.setattr(web_finance.store, "load_snapshot", lambda conn, i: snap if i == 5 else None)
+    monkeypatch.setattr(web_finance.store, "insert_line", lambda conn, sid, values: inserted.append(values) or 9)
+    body = {"section": "equity", "group_name": "Ödenmiş sermaye", "label": "Sermaye", "amount": "100000", "currency": "TRY"}
+    assert client.post("/api/finance/snapshots/5/lines", json=body).json() == {"id": 9}
+    assert inserted[0]["side"] == "liability" and inserted[0]["section"] == "equity" and inserted[0]["origin"] == "manual"
+    # haftaya kilitlenmemiş kur ve bilinmeyen bölüm reddedilir
+    assert client.post("/api/finance/snapshots/5/lines", json={**body, "currency": "EUR"}).status_code == 400
+    assert client.post("/api/finance/snapshots/5/lines", json={**body, "section": "assets"}).status_code == 422

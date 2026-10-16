@@ -2,11 +2,28 @@ import { useEffect, useState } from "react";
 
 import { api, ApiError } from "../api";
 import { StatTile } from "../components/StatTile";
-import { day, istanbulToday, money, monday, short, usd } from "./format";
-import type { CompanyId, Meta, SnapshotCard, SnapshotLine, Snapshots } from "./types";
+import { day, istanbulToday, money, monday, short, signed, usd } from "./format";
+import type { CompanyId, Meta, SectionKey, Sheet, SheetBrief, SnapshotCard, SnapshotLine, Snapshots } from "./types";
 import { CompanyTag, Field, Loading, Modal, scopeIds, useFin, type TabProps } from "./ui";
 
-const ORIGIN: Record<SnapshotLine["origin"], string> = { account: "hesap", planned: "planlı", manual: "elle" };
+const ORIGIN: Record<SnapshotLine["origin"], string> = {
+  account: "hesap",
+  planned: "planlı",
+  intercompany: "şirketler arası",
+  manual: "elle",
+};
+const ASSET_SECTIONS: SectionKey[] = ["current_assets", "noncurrent_assets"];
+const PASSIVE_SECTIONS: SectionKey[] = ["current_liabilities", "longterm_liabilities", "equity"];
+type Catalog = Snapshots["catalog"];
+
+const nf2 = new Intl.NumberFormat("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const ratio = (v: number | null) => (v === null ? "—" : nf2.format(v));
+const pct = (v: number | null) => (v === null ? "—" : `%${new Intl.NumberFormat("tr-TR", { maximumFractionDigits: 1 }).format(v * 100)}`);
+
+function delta(now: number, prev: SheetBrief | null, key: keyof Omit<SheetBrief, "week">): string | undefined {
+  if (!prev) return undefined;
+  return `önceki hafta ${signed(now - prev[key])}`;
+}
 
 export function BalanceTab({ scope, meta, tick }: TabProps) {
   const [week, setWeek] = useState<string | null>(null);
@@ -32,6 +49,10 @@ export function BalanceTab({ scope, meta, tick }: TabProps) {
     window.setTimeout(() => setCopied(null), 2000);
   }
 
+  // Tek şirkette o şirketin bilançosu, konsolidede elimine edilmiş toplam
+  const headline: Sheet | null = data.consolidated ?? data.snapshots[0]?.sheet ?? null;
+  const prev = data.consolidated ? data.previous_consolidated : (data.snapshots[0]?.previous ?? null);
+
   return (
     <>
       <div className="controls">
@@ -41,7 +62,7 @@ export function BalanceTab({ scope, meta, tick }: TabProps) {
             {data.weeks.length ? null : <option value="">Henüz hafta yok</option>}
             {data.weeks.map((w) => (
               <option key={w} value={w}>
-                {day(w)}
+                {day(w)} – {day(addDays6(w))}
               </option>
             ))}
           </select>
@@ -57,38 +78,55 @@ export function BalanceTab({ scope, meta, tick }: TabProps) {
         </button>
       </div>
 
-      {!data.week ? (
+      {!data.week || !headline ? (
         <section className="card">
           <div className="card-body empty">
-            Henüz haftalık bilanço yok. "Yeni hafta" hesap bakiyeleri ve açık planlı kalemlerden taslak oluşturur.
+            {data.week
+              ? "Bu hafta seçili şirket için bilanço girilmemiş."
+              : 'Henüz haftalık bilanço yok. "Yeni hafta" hesap bakiyeleri ve açık planlı kalemlerden taslak oluşturur.'}
           </div>
         </section>
       ) : (
         <>
           {data.missing_fx.length ? <div className="banner">Kur kilitlenmemiş: {data.missing_fx.join(", ")}. Bu satırlar toplama girmedi.</div> : null}
           <div className="tiles fin-tiles">
-            <StatTile label="Aktifler" value={short(data.totals.assets_usd)} expected={usd(data.totals.assets_usd)} />
-            <StatTile label="Pasifler" value={short(data.totals.liabilities_usd)} expected={usd(data.totals.liabilities_usd)} />
+            <StatTile label="Aktif toplamı" value={short(data.totals.assets_usd)} expected={delta(data.totals.assets_usd, prev, "assets_usd") ?? usd(data.totals.assets_usd)} />
+            <StatTile label="Yabancı kaynaklar" value={short(data.totals.debts_usd)} expected={delta(data.totals.debts_usd, prev, "debts_usd") ?? "kısa + uzun vadeli"} />
             <StatTile
-              label="Net"
-              value={short(data.totals.net_usd)}
-              expected={usd(data.totals.net_usd)}
-              tone={data.totals.net_usd >= 0 ? "good" : "critical"}
-              badge={data.totals.net_usd >= 0 ? "pozitif" : "negatif"}
+              label="Özkaynak"
+              value={short(data.totals.equity_usd)}
+              expected={delta(data.totals.equity_usd, prev, "equity_usd") ?? usd(data.totals.equity_usd)}
+              tone={data.totals.equity_usd >= 0 ? "good" : "critical"}
+              badge={data.totals.equity_usd >= 0 ? "pozitif" : "negatif"}
             />
             <StatTile
-              label="Kesinleşen"
-              value={`${data.snapshots.filter((s) => s.locked).length}/${data.snapshots.length}`}
-              expected="şirket"
+              label="Cari oran"
+              value={ratio(headline.ratios.current)}
+              expected={headline.ratios.current === null ? "veri yetersiz" : "dönen varlık / KV borç"}
+              tone={headline.ratios.current === null ? "neutral" : headline.ratios.current >= 1 ? "good" : "critical"}
+              badge={headline.ratios.current === null ? undefined : headline.ratios.current >= 1 ? "1 üstü" : "1 altı"}
             />
           </div>
-          {data.snapshots.length ? (
-            data.snapshots.map((s) => <SnapshotView key={s.id} snap={s} meta={meta} onChanged={refresh} />)
-          ) : (
+
+          {data.consolidated ? (
             <section className="card">
-              <div className="card-body empty">Bu hafta seçili şirket için bilanço girilmemiş.</div>
+              <div className="card-head">
+                <h2>Konsolide bilanço</h2>
+                <span className="hint">
+                  {data.snapshots.length} şirket · şirketler arası alacak ve borçlar elimine · USD, haftaya kilitli kurla
+                </span>
+              </div>
+              <div className="card-body">
+                <EliminationNote sheet={data.consolidated} />
+                <SheetView sheet={data.consolidated} />
+                <RatioStrip sheet={data.consolidated} />
+              </div>
             </section>
-          )}
+          ) : null}
+
+          {data.snapshots.map((s) => (
+            <SnapshotView key={s.id} snap={s} meta={meta} catalog={data.catalog} onChanged={refresh} />
+          ))}
         </>
       )}
 
@@ -108,11 +146,116 @@ export function BalanceTab({ scope, meta, tick }: TabProps) {
   );
 }
 
-function SnapshotView({ snap, meta, onChanged }: { snap: SnapshotCard; meta: Meta; onChanged: () => void }) {
+function addDays6(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 6);
+  return d.toISOString().slice(0, 10);
+}
+
+function EliminationNote({ sheet }: { sheet: Sheet }) {
+  if (!sheet.eliminated_receivables_usd && !sheet.eliminated_payables_usd) return null;
+  const gap = Math.abs(sheet.elimination_gap_usd) > 1;
+  return (
+    <div className={`banner${gap ? "" : " fin-info"}`}>
+      Elimine edilen: şirketler arası alacak {usd(sheet.eliminated_receivables_usd)}, borç {usd(sheet.eliminated_payables_usd)}.
+      {gap ? ` Taraflar tutmuyor: fark ${usd(sheet.elimination_gap_usd)}. Bir şirketin kaydı eksik veya kur farkı olabilir.` : ""}
+    </div>
+  );
+}
+
+/** Salt okunur bilanço: aktif | pasif, bölüm ve grup toplamları. */
+function SheetView({ sheet }: { sheet: Sheet }) {
+  const section = (key: SectionKey) => sheet.sections.find((s) => s.key === key)!;
+  const column = (keys: SectionKey[], title: string, total: number, extra?: React.ReactNode) => (
+    <div className="fin-bs-side">
+      <div className="fin-bs-head">
+        <b>{title}</b>
+      </div>
+      {keys.map((k) => {
+        const sec = section(k);
+        const groups = sec.groups.filter((g) => g.usd !== 0);
+        return (
+          <div key={k} className="fin-bs-section">
+            <div className="fin-bs-sname">
+              <span>{sec.title}</span>
+              <span>{usd(sec.usd)}</span>
+            </div>
+            {groups.map((g) => (
+              <div key={g.name} className="fin-bs-line">
+                <span>{g.name}</span>
+                <span className="num">{usd(g.usd)}</span>
+              </div>
+            ))}
+            {k === "equity" ? extra : null}
+          </div>
+        );
+      })}
+      <div className="fin-bs-total">
+        <span>{title} toplamı</span>
+        <b>{usd(total)}</b>
+      </div>
+    </div>
+  );
+  return (
+    <div className="fin-bs">
+      {column(ASSET_SECTIONS, "Aktif", sheet.assets_usd)}
+      {column(PASSIVE_SECTIONS, "Pasif", sheet.liabilities_and_equity_usd, <EquityRows sheet={sheet} />)}
+    </div>
+  );
+}
+
+/** Özkaynağı girilmemiş şirketlerde hesaplanan özkaynak; bilanço tutmuyorsa denklik farkı. */
+function EquityRows({ sheet }: { sheet: Sheet }) {
+  const gap = Math.abs(sheet.elimination_gap_usd) > 1;
+  return (
+    <>
+      {sheet.computed_equity_usd !== 0 || !sheet.has_equity ? (
+        <div
+          className="fin-bs-line fin-bs-computed"
+          title="Özkaynak satırı girilmemiş şirket(ler) için bilanço denkliğinden: aktif − yabancı kaynak"
+        >
+          <span>{sheet.has_equity ? "Hesaplanan özkaynak (girilmemiş şirketler)" : "Özkaynak (aktif − yabancı kaynak)"}</span>
+          <span className="num">{usd(sheet.computed_equity_usd)}</span>
+        </div>
+      ) : null}
+      {sheet.balanced ? null : (
+        <div className="fin-bs-line fin-bs-gap">
+          <span>Denklik farkı ({gap ? "şirketler arası kayıtlar tutmuyor veya eksik kalem" : "eksik kalem olabilir"})</span>
+          <span className="num">{usd(sheet.difference_usd)}</span>
+        </div>
+      )}
+    </>
+  );
+}
+
+function RatioStrip({ sheet }: { sheet: Sheet }) {
+  const r = sheet.ratios;
+  const items: [string, string, string][] = [
+    ["Cari oran", ratio(r.current), "dönen varlık / KV yabancı kaynak"],
+    ["Asit-test", ratio(r.acid_test), "(dönen − stok) / KV yabancı kaynak"],
+    ["Nakit oranı", ratio(r.cash), "hazır değerler / KV yabancı kaynak"],
+    ["Net işletme sermayesi", usd(r.working_capital_usd), "dönen varlık − KV yabancı kaynak"],
+    ["Borç / özkaynak", ratio(r.debt_to_equity), "yabancı kaynak / özkaynak"],
+    ["Özkaynak oranı", pct(r.equity_ratio), "özkaynak / aktif"],
+  ];
+  return (
+    <div className="fin-ratios">
+      {items.map(([label, value, hint]) => (
+        <div key={label} className="fin-ratio" title={hint}>
+          <span className="muted">{label}</span>
+          <b>{value === "—" ? <span className="muted">veri yetersiz</span> : value}</b>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SnapshotView({ snap, meta, catalog, onChanged }: { snap: SnapshotCard; meta: Meta; catalog: Catalog; onChanged: () => void }) {
   const [notes, setNotes] = useState(snap.notes);
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState<SectionKey | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const company = meta.companies.find((c) => c.id === snap.company_id);
+  const sheet = snap.sheet;
   const fxText = Object.entries(snap.fx)
     .map(([c, r]) => `1 ${c} = ${r.toFixed(c === "TRY" ? 5 : 4)} USD`)
     .join(" · ");
@@ -127,7 +270,56 @@ function SnapshotView({ snap, meta, onChanged }: { snap: SnapshotCard; meta: Met
     }
   }
 
-  const sides: SnapshotLine["side"][] = ["asset", "liability"];
+  const column = (keys: SectionKey[], title: string, total: number) => (
+    <div className="fin-bs-side">
+      <div className="fin-bs-head">
+        <b>{title}</b>
+      </div>
+      {keys.map((k) => {
+        const sec = sheet.sections.find((s) => s.key === k)!;
+        const lines = snap.lines.filter((l) => l.section === k);
+        const groups = sec.groups.filter((g) => g.usd !== 0 || lines.some((l) => l.group_name === g.name));
+        return (
+          <div key={k} className="fin-bs-section">
+            <div className="fin-bs-sname">
+              <span>{sec.title}</span>
+              <span>{usd(sec.usd)}</span>
+            </div>
+            {groups.map((g) => (
+              <div key={g.name} className="fin-bs-group">
+                <div className="fin-bs-gname">
+                  <span>{g.name}</span>
+                  <span>{usd(g.usd)}</span>
+                </div>
+                {lines
+                  .filter((l) => l.group_name === g.name)
+                  .map((l) => (
+                    <LineRow
+                      key={l.id}
+                      line={l}
+                      locked={snap.locked}
+                      onSave={(amount) => call(`/api/finance/snapshot-lines/${l.id}`, "PATCH", { amount })}
+                      onDelete={() => call(`/api/finance/snapshot-lines/${l.id}`, "DELETE")}
+                    />
+                  ))}
+              </div>
+            ))}
+            {k === "equity" ? <EquityRows sheet={sheet} /> : null}
+            {snap.locked ? null : (
+              <button className="btn sm link-add" onClick={() => setAdding(k)}>
+                + {sec.title.toLocaleLowerCase("tr")} kalemi
+              </button>
+            )}
+          </div>
+        );
+      })}
+      <div className="fin-bs-total">
+        <span>{title} toplamı</span>
+        <b>{usd(total)}</b>
+      </div>
+    </div>
+  );
+
   return (
     <section className="card">
       <div className="card-head">
@@ -136,48 +328,17 @@ function SnapshotView({ snap, meta, onChanged }: { snap: SnapshotCard; meta: Met
         </h2>
         <span className="hint">
           {snap.locked ? `kesinleşti · ${day(snap.locked_at)}` : "taslak"} · {fxText || "kur yok"}
+          {snap.previous ? ` · önceki hafta özkaynak ${usd(snap.previous.equity_usd)} (${signed(sheet.equity_usd - snap.previous.equity_usd)})` : ""}
         </span>
       </div>
       <div className="card-body">
         {err ? <div className="banner error">{err}</div> : null}
+        {sheet.missing_fx.length ? <div className="banner">Kur kilitlenmemiş: {sheet.missing_fx.join(", ")}.</div> : null}
         <div className="fin-bs">
-          {sides.map((side) => {
-            const lines = snap.lines.filter((l) => l.side === side);
-            const groups = snap.groups.filter((g) => g.side === side);
-            const total = side === "asset" ? snap.assets_usd : snap.liabilities_usd;
-            return (
-              <div key={side} className="fin-bs-side">
-                <div className="fin-bs-head">
-                  <b>{side === "asset" ? "Aktifler" : "Pasifler"}</b>
-                  <b>{usd(total)}</b>
-                </div>
-                {groups.length ? null : <div className="muted">—</div>}
-                {groups.map((g) => (
-                  <div key={g.name} className="fin-bs-group">
-                    <div className="fin-bs-gname">
-                      <span>{g.name}</span>
-                      <span>{usd(g.usd)}</span>
-                    </div>
-                    {lines
-                      .filter((l) => l.group_name === g.name)
-                      .map((l) => (
-                        <LineRow
-                          key={l.id}
-                          line={l}
-                          locked={snap.locked}
-                          onSave={(amount) => call(`/api/finance/snapshot-lines/${l.id}`, "PATCH", { amount })}
-                          onDelete={() => call(`/api/finance/snapshot-lines/${l.id}`, "DELETE")}
-                        />
-                      ))}
-                  </div>
-                ))}
-              </div>
-            );
-          })}
+          {column(ASSET_SECTIONS, "Aktif", sheet.assets_usd)}
+          {column(PASSIVE_SECTIONS, "Pasif", sheet.liabilities_and_equity_usd)}
         </div>
-        <div className="fin-bs-net">
-          Net <b>{usd(snap.net_usd)}</b>
-        </div>
+        <RatioStrip sheet={sheet} />
         <Field label="Not">
           <textarea
             className="f-input"
@@ -197,9 +358,7 @@ function SnapshotView({ snap, meta, onChanged }: { snap: SnapshotCard; meta: Met
               Haftayı sil
             </button>
             <div className="spacer" />
-            <button className="btn" onClick={() => setAdding(true)}>
-              Satır ekle
-            </button>
+            {!sheet.balanced ? <span className="warn-text">Bilanço denk değil; kesinleştirmeden önce farkı kapat.</span> : null}
             <button
               className="btn primary"
               onClick={() =>
@@ -214,10 +373,12 @@ function SnapshotView({ snap, meta, onChanged }: { snap: SnapshotCard; meta: Met
       {adding ? (
         <LineForm
           snap={snap}
-          onClose={() => setAdding(false)}
+          catalog={catalog}
+          section={adding}
+          onClose={() => setAdding(null)}
           onSave={async (body) => {
             await call(`/api/finance/snapshots/${snap.id}/lines`, "POST", body);
-            setAdding(false);
+            setAdding(null);
           }}
         />
       ) : null}
@@ -256,36 +417,74 @@ function LineRow({ line, locked, onSave, onDelete }: { line: SnapshotLine; locke
   );
 }
 
-function LineForm({ snap, onClose, onSave }: { snap: SnapshotCard; onClose: () => void; onSave: (body: Record<string, unknown>) => void }) {
+const OTHER = "__diger__";
+
+function LineForm({
+  snap,
+  catalog,
+  section,
+  onClose,
+  onSave,
+}: {
+  snap: SnapshotCard;
+  catalog: Catalog;
+  section: SectionKey;
+  onClose: () => void;
+  onSave: (body: Record<string, unknown>) => void;
+}) {
   const currencies = ["USD", ...Object.keys(snap.fx)];
-  const [f, setF] = useState({ side: "liability", group_name: "Tedarikçiler", label: "", amount: "", currency: currencies[0] });
-  const set = (k: keyof typeof f, v: string) => setF({ ...f, [k]: v });
-  const groups = Array.from(new Set(snap.lines.filter((l) => l.side === f.side).map((l) => l.group_name)));
+  const [sec, setSec] = useState<SectionKey>(section);
+  const groups = catalog.find((c) => c.key === sec)?.groups ?? [];
+  const [group, setGroup] = useState(groups[0] ?? OTHER);
+  const [custom, setCustom] = useState("");
+  const [label, setLabel] = useState("");
+  const [amount, setAmount] = useState("");
+  const [currency, setCurrency] = useState(currencies[0]);
+  const groupName = group === OTHER ? custom.trim() : group;
+
   return (
-    <Modal title="Satır ekle" onClose={onClose}>
+    <Modal title="Bilanço kalemi ekle" onClose={onClose}>
       <div className="f-grid">
-        <Field label="Taraf">
-          <select className="f-input" value={f.side} onChange={(e) => set("side", e.target.value)}>
-            <option value="asset">Aktif</option>
-            <option value="liability">Pasif</option>
+        <Field label="Bölüm">
+          <select
+            className="f-input"
+            value={sec}
+            onChange={(e) => {
+              const next = e.target.value as SectionKey;
+              setSec(next);
+              setGroup(catalog.find((c) => c.key === next)?.groups[0] ?? OTHER);
+            }}
+          >
+            {catalog.map((c) => (
+              <option key={c.key} value={c.key}>
+                {c.side === "asset" ? "Aktif" : "Pasif"} · {c.title}
+              </option>
+            ))}
           </select>
         </Field>
         <Field label="Grup">
-          <input className="f-input" list="fin-groups" value={f.group_name} onChange={(e) => set("group_name", e.target.value)} />
-          <datalist id="fin-groups">
+          <select className="f-input" value={group} onChange={(e) => setGroup(e.target.value)}>
             {groups.map((g) => (
-              <option key={g} value={g} />
+              <option key={g} value={g}>
+                {g}
+              </option>
             ))}
-          </datalist>
+            <option value={OTHER}>Diğer (yaz)</option>
+          </select>
         </Field>
+        {group === OTHER ? (
+          <Field label="Grup adı">
+            <input className="f-input" value={custom} onChange={(e) => setCustom(e.target.value)} />
+          </Field>
+        ) : null}
         <Field label="Kalem">
-          <input className="f-input" value={f.label} onChange={(e) => set("label", e.target.value)} />
+          <input className="f-input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="ör. Ambalaj stoğu, Banka kredisi, Sermaye" />
         </Field>
-        <Field label="Tutar">
-          <input className="f-input num" type="number" step="0.01" value={f.amount} onChange={(e) => set("amount", e.target.value)} />
+        <Field label="Tutar" hint="borç ve özkaynak da pozitif yazılır">
+          <input className="f-input num" type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} />
         </Field>
         <Field label="Para birimi" hint="yalnız bu haftaya kilitlenen kurlar">
-          <select className="f-input" value={f.currency} onChange={(e) => set("currency", e.target.value)}>
+          <select className="f-input" value={currency} onChange={(e) => setCurrency(e.target.value)}>
             {currencies.map((c) => (
               <option key={c}>{c}</option>
             ))}
@@ -299,8 +498,8 @@ function LineForm({ snap, onClose, onSave }: { snap: SnapshotCard; onClose: () =
         </button>
         <button
           className="btn primary"
-          disabled={!f.label.trim() || !f.group_name.trim() || f.amount === ""}
-          onClick={() => onSave({ ...f, label: f.label.trim(), group_name: f.group_name.trim(), sort: 999 })}
+          disabled={!label.trim() || !groupName || amount === ""}
+          onClick={() => onSave({ section: sec, group_name: groupName, label: label.trim(), amount, currency, sort: 999 })}
         >
           Ekle
         </button>
@@ -313,6 +512,7 @@ function NewWeek({ meta, ids, onClose, onCreated }: { meta: Meta; ids: CompanyId
   const [week, setWeek] = useState(monday(istanbulToday()));
   const [chosen, setChosen] = useState<CompanyId[]>(ids);
   const [copy, setCopy] = useState(true);
+  const [ic, setIc] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -322,7 +522,7 @@ function NewWeek({ meta, ids, onClose, onCreated }: { meta: Meta; ids: CompanyId
     try {
       await api("/api/finance/snapshots", {
         method: "POST",
-        body: JSON.stringify({ week_date: monday(week), company_ids: chosen, copy_previous: copy }),
+        body: JSON.stringify({ week_date: monday(week), company_ids: chosen, copy_previous: copy, include_intercompany: ic }),
       });
       onCreated(monday(week));
     } catch (e) {
@@ -334,7 +534,7 @@ function NewWeek({ meta, ids, onClose, onCreated }: { meta: Meta; ids: CompanyId
   return (
     <Modal title="Yeni haftalık bilanço" onClose={onClose}>
       <div className="f-grid">
-        <Field label="Hafta" hint={`pazartesi: ${day(monday(week))}`}>
+        <Field label="Hafta" hint={`${day(monday(week))} – ${day(addDays6(monday(week)))} · bilanço tarihi pazar`}>
           <input className="f-input" type="date" value={week} onChange={(e) => e.target.value && setWeek(e.target.value)} />
         </Field>
         <Field label="Şirketler">
@@ -350,11 +550,20 @@ function NewWeek({ meta, ids, onClose, onCreated }: { meta: Meta; ids: CompanyId
           </div>
         </Field>
       </div>
-      <label className="check">
-        <input type="checkbox" checked={copy} onChange={(e) => setCopy(e.target.checked)} />
-        Önceki haftanın elle girilen pasiflerini kopyala
-      </label>
-      <p className="muted fin-note">Hesap bakiyeleri ve açık tek seferlik planlı kalemler otomatik gelir. Kurlar bugünkü ECB kuruyla haftaya kilitlenir.</p>
+      <div className="fin-checks fin-checks-col">
+        <label className="check">
+          <input type="checkbox" checked={copy} onChange={(e) => setCopy(e.target.checked)} />
+          Önceki haftanın elle girilen kalemlerini kopyala (stok, demirbaş, kredi, sermaye vb.)
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={ic} onChange={(e) => setIc(e.target.checked)} />
+          Şirketler arası net transferleri alacak / borç olarak ekle (hareketlerden, USD)
+        </label>
+      </div>
+      <p className="muted fin-note">
+        Hesap bakiyeleri hazır değerlere, negatif bakiyeler mali borçlara, açık tek seferlik planlı kalemler ticari alacak ve borçlara
+        yazılır; vadesi bir yıldan uzak olanlar uzun vadelidir. Kurlar bugünkü ECB kuruyla haftaya kilitlenir.
+      </p>
       {err ? <div className="banner error">{err}</div> : null}
       <div className="f-actions">
         <div className="spacer" />

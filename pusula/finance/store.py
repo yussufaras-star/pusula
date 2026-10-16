@@ -285,7 +285,7 @@ DECISION_COLUMNS = (
     " meeting_date, created_at, updated_at"
 )
 SNAPSHOT_COLUMNS = "id, company_id, week_date, locked, locked_at, fx, notes, created_at"
-LINE_COLUMNS = "id, snapshot_id, side, group_name, label, amount, currency, origin, sort"
+LINE_COLUMNS = "id, snapshot_id, side, section, group_name, label, amount, currency, origin, sort"
 
 
 def _rows(conn: psycopg.Connection, query: str, params: Sequence[object] = ()) -> list[dict]:
@@ -394,7 +394,7 @@ WRITABLE: dict[str, frozenset[str]] = {
         }
     ),
     "fin_snapshots": frozenset({"notes", "locked"}),
-    "fin_snapshot_lines": frozenset({"side", "group_name", "label", "amount", "currency", "sort"}),
+    "fin_snapshot_lines": frozenset({"side", "section", "group_name", "label", "amount", "currency", "sort"}),
     "fin_transactions": frozenset({"category_id", "counterparty_company_id", "user_edited_at"}),
 }
 DELETABLE = frozenset({"fin_planned_items", "fin_decisions", "fin_snapshots", "fin_snapshot_lines"})
@@ -449,13 +449,15 @@ def insert_snapshot(
 
 
 def insert_line(conn: psycopg.Connection, snapshot_id: int, values: dict[str, object]) -> int:
-    """values: side, group_name, label, amount, currency, origin, sort."""
+    """values: side, section, group_name, label, amount, currency, origin, sort."""
     row = conn.execute(
-        "INSERT INTO fin_snapshot_lines (snapshot_id, side, group_name, label, amount, currency, origin, sort)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        "INSERT INTO fin_snapshot_lines"
+        " (snapshot_id, side, section, group_name, label, amount, currency, origin, sort)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
         (
             snapshot_id,
             values["side"],
+            values.get("section"),
             values["group_name"],
             values["label"],
             values["amount"],

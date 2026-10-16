@@ -142,7 +142,11 @@ FlowDirection = Literal["in", "out"]
 Recurrence = Literal["none", "weekly", "monthly"]
 PlannedStatus = Literal["open", "done", "cancelled"]
 SnapshotSide = Literal["asset", "liability"]
-SnapshotOrigin = Literal["account", "planned", "manual"]
+SnapshotOrigin = Literal["account", "planned", "intercompany", "manual"]
+SnapshotSection = Literal[
+    "current_assets", "noncurrent_assets", "current_liabilities", "longterm_liabilities", "equity"
+]
+ASSET_SECTIONS: frozenset[str] = frozenset({"current_assets", "noncurrent_assets"})
 DecisionStatus = Literal["acik", "aksiyon", "devam", "tamam", "iptal"]
 DecisionPriority = Literal["yuksek", "orta", "dusuk"]
 
@@ -283,7 +287,15 @@ class FinSnapshotLine(BaseModel):
     amount: Money = Decimal("0")
     currency: Currency
     origin: SnapshotOrigin = "manual"
+    section: SnapshotSection | None = None
     sort: int = 0
+
+    @model_validator(mode="after")
+    def _section_matches_side(self) -> "FinSnapshotLine":
+        # DB'deki CHECK ile aynı: aktif bölümler aktif tarafta, diğerleri pasifte
+        if self.section is not None and (self.section in ASSET_SECTIONS) != (self.side == "asset"):
+            raise ValueError("Bölüm, aktif / pasif tarafıyla uyuşmuyor")
+        return self
 
 
 class FinDecision(BaseModel):
