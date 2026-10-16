@@ -219,6 +219,7 @@ class FinTransaction(BaseModel):
     external_id: str
     source: TxSource
     user_edited_at: datetime | None = None
+    category_rule_id: int | None = None
     created_at: datetime | None = None
 
 
@@ -313,3 +314,22 @@ class FinDecision(BaseModel):
     meeting_date: date | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+RuleDirection = Literal["in", "out", "any"]
+RuleMatch = Literal["exact", "contains"]
+RuleSource = Literal["system", "user"]
+
+
+class FinCategoryRule(BaseModel):
+    """fin_category_rules tablosu: otomatik kategori kuralı."""
+
+    id: int | None = None
+    company_id: CompanyId | None = None
+    direction: RuleDirection = "any"
+    match_type: RuleMatch
+    pattern: Annotated[str, Field(min_length=2)]
+    category_id: str
+    source: RuleSource = "user"
+    label: str | None = None
+    created_at: datetime | None = None

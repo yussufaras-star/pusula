@@ -581,6 +581,32 @@ export function mockFinance(method: string, url: string): unknown {
     return { text: "12 Eki 2026 haftalık finans özeti\n\nKONSOLİDE\nAktifler: $498.120\nPasifler: $86.400\nNet: $411.720\n" };
   }
 
+  if (path === "/api/finance/uncategorized") {
+    const groups = new Map<string, { company_id: CompanyId; direction: "in" | "out"; pattern: string; label: string; count: number; usd: number }>();
+    const pool = TXS.filter((t) => ids.includes(t.company_id) && !t.category_id && !t.counterparty_company_id);
+    for (const t of pool) {
+      const label = t.counterparty || t.description;
+      const direction = t.amount > 0 ? "in" : "out";
+      const key = `${t.company_id}|${direction}|${label.toLowerCase()}`;
+      const row = groups.get(key) ?? { company_id: t.company_id, direction, pattern: label.toLowerCase(), label, count: 0, usd: 0 };
+      row.count++;
+      row.usd = r2(row.usd + Math.abs(t.amount_usd));
+      groups.set(key, row);
+    }
+    return { items: [...groups.values()].sort((a, b) => b.usd - a.usd).slice(0, 15), total: pool.length, missing_fx: [] };
+  }
+
+  if (path === "/api/finance/rules") {
+    return {
+      rules: [
+        { id: 1, company_id: null, direction: "in", match_type: "contains", pattern: "stripe", category_id: "satis", source: "system", label: null, matched: 180 },
+        { id: 2, company_id: null, direction: "out", match_type: "contains", pattern: "dhl", category_id: "kargo", source: "system", label: null, matched: 64 },
+        { id: 3, company_id: "llc", direction: "out", match_type: "exact", pattern: "aspol print inc", category_id: "tedarikci", source: "user", label: "ASPOL PRINT INC", matched: 6 },
+        { id: 4, company_id: "tr", direction: "out", match_type: "exact", pattern: "pos komisyon", category_id: "banka", source: "user", label: "POS komisyon", matched: 41 },
+      ],
+    };
+  }
+
   if (path === "/api/finance/decisions") {
     const visible = DECISIONS.filter((d) => !d.company_id || ids.includes(d.company_id)).map((d) => ({
       ...d,
@@ -633,6 +659,9 @@ function mockWrite(method: string, path: string): unknown {
     };
   }
   if (path.endsWith("/statement/import")) return { inserted: 12, duplicates: 30, skipped: 1, balance: 2_940_000 };
+  if (path === "/api/finance/rules") return { id: 9, applied: 12 };
+  if (path.startsWith("/api/finance/rules/")) return { id: 9, reverted: 6, reapplied: 0 };
+  if (path.startsWith("/api/finance/transactions/")) return { id: 1, similar: 4 };
   if (method === "DELETE") return { id: 1 };
   if (path.endsWith("/lock")) {
     const s = SNAPSHOTS.find((x) => String(x.id) === path.split("/")[4]);

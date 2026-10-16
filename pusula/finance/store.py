@@ -21,6 +21,7 @@ from pusula.db.models import (
     API_PROVIDERS,
     FinAccount,
     FinCategory,
+    FinCategoryRule,
     FinCompany,
     FinDecision,
     FinPlannedItem,
@@ -28,7 +29,7 @@ from pusula.db.models import (
     FinSnapshotLine,
     FinTransaction,
 )
-from pusula.finance.analytics import OWN_CATEGORY, auto_intercompany, own_transfers
+from pusula.finance.analytics import OWN_CATEGORY, auto_intercompany, categorize, own_transfers
 from pusula.finance.statement import Parsed
 
 ACCOUNT_COLUMNS = (
@@ -292,7 +293,8 @@ def last_fx_date(conn: psycopg.Connection) -> date | None:
 
 TX_COLUMNS = (
     "id, account_id, company_id, booked_at, amount, currency, description, counterparty,"
-    " category_id, counterparty_company_id, external_id, source, user_edited_at, created_at"
+    " category_id, counterparty_company_id, external_id, source, user_edited_at, category_rule_id,"
+    " created_at"
 )
 PLANNED_COLUMNS = (
     "id, company_id, direction, title, counterparty, amount, currency, due_date, recurrence,"
@@ -413,7 +415,9 @@ WRITABLE: dict[str, frozenset[str]] = {
     ),
     "fin_snapshots": frozenset({"notes", "locked"}),
     "fin_snapshot_lines": frozenset({"side", "section", "group_name", "label", "amount", "currency", "sort"}),
-    "fin_transactions": frozenset({"category_id", "counterparty_company_id", "user_edited_at"}),
+    "fin_transactions": frozenset(
+        {"category_id", "counterparty_company_id", "user_edited_at", "category_rule_id"}
+    ),
 }
 DELETABLE = frozenset({"fin_planned_items", "fin_decisions", "fin_snapshots", "fin_snapshot_lines"})
 
@@ -485,3 +489,74 @@ def insert_line(conn: psycopg.Connection, snapshot_id: int, values: dict[str, ob
         ),
     ).fetchone()
     return int(row[0])
+
+
+# --- kategori kuralları ---------------------------------------------------------------
+
+RULE_COLUMNS = "id, company_id, direction, match_type, pattern, category_id, source, label, created_at"
+
+
+def load_rules(conn: psycopg.Connection) -> list[FinCategoryRule]:
+    rows = _rows(conn, f"SELECT {RULE_COLUMNS} FROM fin_category_rules ORDER BY source DESC, id")
+    return [FinCategoryRule(**r) for r in rows]
+
+
+def upsert_rule(conn: psycopg.Connection, rule: FinCategoryRule) -> int:
+    """Aynı (şirket, yön, tür, kalıp) varsa kategorisi güncellenir ve kullanıcı kuralı olur."""
+    row = conn.execute(
+        """
+        INSERT INTO fin_category_rules (company_id, direction, match_type, pattern, category_id, source, label)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (coalesce(company_id, ''), direction, match_type, pattern)
+        DO UPDATE SET category_id = EXCLUDED.category_id, source = EXCLUDED.source, label = EXCLUDED.label
+        RETURNING id
+        """,
+        (rule.company_id, rule.direction, rule.match_type, rule.pattern, rule.category_id, rule.source, rule.label),
+    ).fetchone()
+    return int(row[0])
+
+
+def delete_rule(conn: psycopg.Connection, rule_id: int) -> int | None:
+    """Kuralı siler, verdiği kategorileri geri alır (elle düzeltilenler hariç).
+
+    Kural yoksa None; varsa geri alınan hareket sayısı.
+    """
+    reverted = conn.execute(
+        "UPDATE fin_transactions SET category_id = NULL, category_rule_id = NULL"
+        " WHERE category_rule_id = %s AND user_edited_at IS NULL RETURNING id",
+        (rule_id,),
+    ).fetchall()
+    gone = conn.execute("DELETE FROM fin_category_rules WHERE id = %s RETURNING id", (rule_id,)).fetchone()
+    return None if gone is None else len(reverted)
+
+
+def load_uncategorized(conn: psycopg.Connection, since: date | None = None) -> list[FinTransaction]:
+    """Kural adayları: kategorisiz, şirketler arası işaretsiz, elle düzeltilmemiş."""
+    query = (
+        f"SELECT {TX_COLUMNS} FROM fin_transactions"
+        " WHERE category_id IS NULL AND counterparty_company_id IS NULL AND user_edited_at IS NULL"
+    )
+    params: list[object] = []
+    if since is not None:
+        query += " AND booked_at >= %s"
+        params.append(since)
+    return [FinTransaction(**r) for r in _rows(conn, query, params)]
+
+
+def apply_category_rules(conn: psycopg.Connection, since: date | None = None) -> int:
+    """Kuralları kategorisiz hareketlere uygular; güncellenen sayı."""
+    matches = categorize(load_uncategorized(conn, since), load_rules(conn))
+    if not matches:
+        return 0
+    ids = sorted(matches)
+    rows = conn.execute(
+        """
+        UPDATE fin_transactions t SET category_id = u.cat, category_rule_id = u.rule
+        FROM unnest(%s::bigint[], %s::text[], %s::bigint[]) AS u(id, cat, rule)
+        WHERE t.id = u.id AND t.category_id IS NULL AND t.user_edited_at IS NULL
+          AND t.counterparty_company_id IS NULL
+        RETURNING t.id
+        """,
+        (ids, [matches[i].category_id for i in ids], [matches[i].id for i in ids]),
+    ).fetchall()
+    return len(rows)

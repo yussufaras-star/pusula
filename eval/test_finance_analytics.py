@@ -378,3 +378,74 @@ def test_own_transfers_leave_monthly_flow() -> None:
     tagged = [t.model_copy(update={"category_id": "hesap_arasi"}) if t.id in ids else t for t in (out, inc, sale)]
     [month] = monthly_flows(tagged, _fx(), KINDS)
     assert (month.inflow, month.outflow) == (D("700"), D("0"))
+
+
+# --- otomatik kategori -----------------------------------------------------------
+
+
+def _rule(pattern: str, category: str, match: str = "contains", direction: str = "any", **kw):
+    from pusula.db.models import FinCategoryRule
+
+    return FinCategoryRule(id=kw.pop("id", next(_seq)), pattern=pattern, category_id=category,
+                           match_type=match, direction=direction, **kw)
+
+
+def test_rule_key_normalizes_turkish_and_spaces() -> None:
+    from pusula.finance.analytics import rule_key
+
+    assert rule_key("  MÜŞTERİ   Ödemesi ") == "musteri odemesi"
+    assert rule_key(None) == ""
+
+
+def test_categorize_priority_direction_scope_and_boundaries() -> None:
+    from pusula.finance.analytics import categorize
+
+    rules = [
+        _rule("stripe", "satis", direction="in", source="system", id=1),
+        _rule("ups ", "kargo", direction="out", source="system", id=2),
+        _rule("consult", "danismanlik", direction="out", source="system", id=3),
+        _rule("aspol print inc", "tedarikci", match="exact", direction="out", source="user", id=4),
+        _rule("stripe payout", "proje", direction="in", source="user", id=5),
+        _rule("vendoways llc", "satis", match="exact", direction="in", company_id="gmbh", source="user", id=6),
+    ]
+    stripe = _tx("llc", date(2026, 9, 1), "100", description="STRIPE PAYOUT")
+    stripe_out = _tx("llc", date(2026, 9, 1), "-5", description="Stripe fee")
+    ups = _tx("llc", date(2026, 9, 1), "-20", counterparty="UPS Store")
+    groups = _tx("llc", date(2026, 9, 1), "-20", counterparty="Mastermind Groups")
+    consult = _tx("llc", date(2026, 9, 1), "-900", counterparty="Startup Law Consultancy, Inc.")
+    aspol = _tx("llc", date(2026, 9, 1), "-50000", counterparty="ASPOL PRINT INC")
+    aspol_like = _tx("llc", date(2026, 9, 1), "-1", counterparty="ASPOL PRINT INC EXTRA")
+    vendo_llc = _tx("llc", date(2026, 9, 1), "40", counterparty="VENDOWAYS LLC")
+    done = _tx("llc", date(2026, 9, 1), "100", description="STRIPE", category_id="diger_gir")
+    edited = _tx("llc", date(2026, 9, 1), "100", description="STRIPE", user_edited_at=datetime(2026, 9, 2, tzinfo=TZ))
+    ic = _tx("llc", date(2026, 9, 1), "100", description="STRIPE", counterparty_company_id="tr")
+    out = categorize([stripe, stripe_out, ups, groups, consult, aspol, aspol_like, vendo_llc, done, edited, ic], rules)
+    # kullanıcı kuralı sistemden önce; yön, kelime sınırı ve şirket kapsamı tutulur
+    assert {k: v.id for k, v in out.items()} == {stripe.id: 5, ups.id: 2, consult.id: 3, aspol.id: 4}
+
+
+def test_rule_direction_ok() -> None:
+    from pusula.finance.analytics import rule_direction_ok
+
+    assert rule_direction_ok("in", "in") and rule_direction_ok("out", "out")
+    assert not rule_direction_ok("in", "out")
+    assert rule_direction_ok("out", "transfer") and rule_direction_ok("any", "out")
+
+
+def test_top_uncategorized_groups_by_counterparty_and_direction() -> None:
+    from pusula.finance.analytics import top_uncategorized
+
+    txs = [
+        _tx("llc", date(2026, 9, 1), "-500", counterparty="ASPOL PRINT INC"),
+        _tx("llc", date(2026, 9, 2), "-700", counterparty="Aspol  Print Inc"),
+        _tx("llc", date(2026, 9, 2), "300", counterparty="Murat"),
+        _tx("llc", date(2026, 9, 3), "-200", counterparty="Murat"),
+        _tx("llc", date(2026, 9, 3), "-999", counterparty="Done", category_id="maas"),
+        _tx("gmbh", date(2026, 9, 3), "-100", "EUR", counterparty="DHL"),
+    ]
+    rows = top_uncategorized(txs, _fx(), limit=3)
+    assert [(r["pattern"], r["direction"], r["count"], r["usd"]) for r in rows] == [
+        ("aspol print inc", "out", 2, D("1200")),
+        ("murat", "in", 1, D("300")),
+        ("murat", "out", 1, D("200")),
+    ]

@@ -229,14 +229,16 @@ def run_finance_sync(
                 budget_sec,
                 started,
             )
-        own = 0
+        own = categorized = 0
         try:
             # Yeni gelenler eski hareketlerle de eşleşebilir: ilk senkron penceresi + pay
             since = now.date() - timedelta(days=(days or FIRST_DAYS)) - OVERLAP
             with connect() as conn:
                 own = store.apply_own_transfers(conn, since)
+                # Önce hesap arası aktarımlar ayrılır, kalanlar kurallarla kategorilenir
+                categorized = store.apply_category_rules(conn, since)
         except Exception as exc:
-            logger.warning("hesap arasi eslestirme basarisiz (%s)", type(exc).__name__)
+            logger.warning("hesap arasi / kategori kurali basarisiz (%s)", type(exc).__name__)
         with connect() as conn:
             store.stamp_sync_run(conn, now)
     return {
@@ -245,4 +247,5 @@ def run_finance_sync(
         "fx": fx_report,
         "accounts": results,
         "own_transfers": own,
+        "categorized": categorized,
     }
