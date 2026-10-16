@@ -17,7 +17,9 @@ damgalarından bir şeride dökülür:
   işlemden önceki 2 dk dolu. Zoho kayıt başına yalnız son değişikliği
   verdiğinden alt sınırdır.
 
-Çakışan aralıklar birleşir (aynı dakika iki kez sayılmaz). Mesai içindeki
+Çakışan aralıklar birleşir (aynı dakika iki kez sayılmaz). İki faaliyet
+arasındaki 5 dk'dan kısa boşluk işin akışıdır (numara çevirme, not) ve dolu
+sayılır (yönetici kararı, 16 Ekim). Mesai içindeki diğer
 boşlukların en uzunlarından toplam 75 dk mola sayılır, kalan boşluk kayıp
 zamandır. Doluluk = dolu / (dolu + kayıp).
 
@@ -61,6 +63,8 @@ NO_SHOW_WAIT_MIN = 10
 # Bookings randevusu ile Zoho Meeting oturumu bu kadar dakika içinde eşleşir.
 MATCH_MIN = 20
 MOLA_DK = MOLA_SAAT * 60
+# İki faaliyet arasındaki bundan kısa boşluk dolu sayılır (mola/kayıp değil).
+GECIS_MIN = 5
 
 Interval = tuple[datetime, datetime]
 # fetch_intervals satırı: (başlangıç, bitiş, "dolu" | "girilmemis")
@@ -164,6 +168,17 @@ def day_timeline(
         cursor = max(cursor, b)
     if cursor < hi:
         gaps.append((cursor, hi))
+    # Faaliyetten sonraki kısa boşluk (sonrasında faaliyet var ya da gün
+    # sürüyor) işin akışıdır: dolu. Gün başı ve mesai sonu boşluğu değil.
+    short = timedelta(minutes=GECIS_MIN)
+    flow = [
+        (a, b)
+        for a, b in gaps
+        if a > lo and b - a < short and (b < hi or hi < bounds[1])
+    ]
+    if flow:
+        gaps = [g for g in gaps if g not in flow]
+        busy = merge([*busy, *flow])
     pieces = [piece for gap in gaps for piece in _subtract(gap, covers)]
     off = merge((max(a, lo), min(b, hi)) for a, b in excused if b > lo and a < hi)
     if off:
