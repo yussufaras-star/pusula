@@ -6,8 +6,7 @@
 name: block-ingest
 
 on:
-  schedule:
-    - cron: "7 6-16 * * *"
+  # Zamanlamayı gun-saati.yml yapar (GitHub cron'u saatlerce gecikiyordu).
   workflow_dispatch:
 
 concurrency:
