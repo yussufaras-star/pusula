@@ -39,7 +39,7 @@ function targetNote(t: TargetItem): string {
 
 const TARGET_RULE: Partial<Record<keyof Targets, string>> = {
   arama:
-    "Hedef: arama blokları (09-11, 14-17) 300 dk − 75 dk mola, görüşme başına 5 dk → 45. Gelmeyen toplantının 10 dk sonrası arama süresi sayılır ve hedefe eklenir.",
+    "Hedef: arama blokları (09-11, 14-17) 300 dk − 75 dk mola, görüşme başına 5 dk → 45. Cumartesi: 09-15 (360 dk) − 75 dk mola − o günkü planlı toplantı süresi, görüşme başına 5 dk. Gelmeyen toplantının 10 dk sonrası arama süresi sayılır ve hedefe eklenir.",
   ulasilan: "Hedef: arama hedefinin %70'i.",
   randevu: "Hedef: aynı gün tipinin son 90 günlük ortalaması; toplantı bloklarında (11-14, 17-18) birikir.",
 };

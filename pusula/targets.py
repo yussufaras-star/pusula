@@ -4,7 +4,10 @@ Kurallar (pusula.blocks takvimi; hafta içi arama 09-11 + 14-17, toplantı
 11-14 + 17-18; cumartesi tamamı toplantı):
 
 - Arama: arama blokları (300 dk) eksi günlük mola (75 dk), görüşme başına
-  5 dk bant → 45. Yalnız arama bloklarında birikir; cumartesi yoktur.
+  5 dk bant → 45. Yalnız arama bloklarında birikir.
+- Cumartesi arama: 09-15 (360 dk) eksi mola (75 dk) eksi temsilcinin o günkü
+  planlı toplantı süresi (iptal hariç), görüşme başına 5 dk. 09-15 boyunca
+  eşit birikir (yönetici kararı, 17 Ekim).
 - Gelmeyen toplantı: 10 dk bekleme sonrası planlanan bitişe kadarki süre
   arama süresi sayılır ve hedefe eklenir (5 dk'da bir arama), o pencerede
   birikir. Cumartesi de geçerlidir.
@@ -20,7 +23,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any, Iterable
 
-from pusula.blocks import PLANNED_BLOCKS, blocks_for
+from pusula.blocks import PLANNED_BLOCKS, SATURDAY_BLOCK, blocks_for
 from pusula.metrics import TZ, combine, finish
 from pusula.panel_data import MOLA_SAAT
 
@@ -50,6 +53,13 @@ def _weekday_minutes(kind: str) -> float:
 
 # (300 - 75) / 5 = 45 arama.
 STANDARD_CALLS = round((_weekday_minutes("call") - MOLA_SAAT * 60) / CALL_BAND_MIN)
+SATURDAY_MIN = (SATURDAY_BLOCK.end_hour - SATURDAY_BLOCK.start_hour) * 60.0
+
+
+def saturday_calls(meetings: Iterable[dict[str, Any]]) -> float:
+    """Cumartesi arama hedefi: (360 - 75 mola - planlı toplantı dk) / 5."""
+    busy = sum(float(m.get("planned_min") or 0) for m in meetings if m.get("state") != "iptal")
+    return max(0.0, (SATURDAY_MIN - MOLA_SAAT * 60 - busy) / CALL_BAND_MIN)
 
 
 def history_daily(hist_hours: dict[int, dict[str, Any]]) -> dict[str, float | None]:
@@ -61,6 +71,9 @@ def history_daily(hist_hours: dict[int, dict[str, Any]]) -> dict[str, float | No
 
 
 def block_hours(day: date, kind: str) -> list[int]:
+    if day.weekday() == 5 and kind == "call":
+        # Cumartesi tek blok; arama hedefi 09-15 boyunca birikir.
+        kind = SATURDAY_BLOCK.kind
     return [
         hour
         for block in blocks_for(day)
@@ -74,6 +87,8 @@ def day_factor(day: date, metric: str) -> float:
     if metric not in COUNT_METRICS:
         return 1.0
     kind = METRIC_KIND[metric]
+    if day.weekday() == 5 and kind == "call":
+        return 0.0  # cumartesi arama hedefi saturday_calls'tan gelir
     return len(block_hours(day, kind)) * 60.0 / _weekday_minutes(kind)
 
 
@@ -133,10 +148,14 @@ def rep_targets(
     cutoff: datetime,
 ) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
+    meetings = list(meetings)
     windows = freed_windows(meetings)
     bonus = _minutes(windows) / CALL_BAND_MIN
     bonus_now = _minutes(windows, cutoff) / CALL_BAND_MIN
-    base = STANDARD_CALLS * day_factor(day, "arama")
+    if day.weekday() == 5:
+        base = saturday_calls(meetings)
+    else:
+        base = STANDARD_CALLS * day_factor(day, "arama")
     if base or bonus:
         calls = {
             "daily": round(base + bonus, 1),
