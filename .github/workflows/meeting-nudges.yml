@@ -5,8 +5,10 @@
 name: meeting-nudges
 
 on:
-  schedule:
-    - cron: "*/5 5-16 * * 1-6"
+  # 17 Ekim 2026: zamanlama kapatıldı — randevu hatırlatmalarını artık Zoho
+  # Bookings kendisi gönderiyor. workflow_dispatch elle çalıştırma için duruyor.
+  # schedule:
+  #   - cron: "*/5 5-16 * * 1-6"
   workflow_dispatch:
 
 concurrency:

@@ -289,6 +289,7 @@ def main() -> int:
         CRM_DK_PER_GORUSME,
         CRM_SN_PER_ULASILAMAYAN,
         OLU_ZAMAN_SN,
+        WP_DK_PER_MESAJ,
         TOPLANTI_DK,
         occupancy_breakdown,
         weekly_series,
@@ -822,6 +823,10 @@ def main() -> int:
         f"= {occ['olu_dk']:.2f} dk"
     )
     print(
+        f"  whatsapp {occ['whatsapp']} x {WP_DK_PER_MESAJ:g} dk "
+        f"= {occ['wp_dk']:.2f} dk"
+    )
+    print(
         f"  toplam pay={occ['pay_dk']:.2f} dk "
         f"({occ['pay_dk'] / 60.0:.2f} saat)"
     )
@@ -837,6 +842,7 @@ def main() -> int:
         + occ["crm_miss_dk"]
         + occ["crm_hit_dk"]
         + occ["olu_dk"]
+        + occ["wp_dk"]
     )
     if abs(recon - occ["pay_dk"]) > 0.05:
         print(f"hata: pay bilesenleri toplamı {recon:.2f} != {occ['pay_dk']:.2f}")
@@ -847,7 +853,7 @@ def main() -> int:
     print(
         f"  pay = arama {occ['call_dk']:.2f} + toplanti {occ['meet_dk']:.2f} "
         f"+ crm_miss {occ['crm_miss_dk']:.2f} + crm_hit {occ['crm_hit_dk']:.2f} "
-        f"+ olu {occ['olu_dk']:.2f}"
+        f"+ olu {occ['olu_dk']:.2f} + whatsapp {occ['wp_dk']:.2f}"
     )
     old_pay_dk = (
         (
