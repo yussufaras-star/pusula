@@ -6,7 +6,8 @@
 name: block-ingest
 
 on:
-  # Zamanlamayı gun-saati.yml yapar (GitHub cron'u saatlerce gecikiyordu).
+  # Harici tetikleyici her saat :07'de dispatch eder (13 Ekim'den beri);
+  # GitHub cron'u saatlerce gecikip çift çalışma üretiyordu, kaldırıldı.
   workflow_dispatch:
 
 concurrency:

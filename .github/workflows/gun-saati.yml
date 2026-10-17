@@ -1,13 +1,14 @@
 # Gün saati: GitHub'ın zamanlanmış tetikleri saatlerce gecikiyor (Ekim 2026'da
 # 18:30 kartı 21:51'de gitti). Elle tetiklenen işler ise saniyeler içinde
-# başlıyor. Bu iş sabah bir kez başlar, gün boyu bekler ve tam saatinde
-# block-ingest (09:07-19:07, her saat) ile card-snapshots'ı (12:30, 15:30,
-# 18:30; pazar hariç) workflow_dispatch ile tetikler.
+# başlıyor. Bu iş sabah bir kez başlar, gün boyu bekler ve card-snapshots'ı
+# 12:30, 15:30, 18:30'da (pazar hariç) workflow_dispatch ile tetikler.
+# Saatlik block-ingest'i harici bir tetikleyici her saat :07'de dispatch
+# ediyor (13 Ekim'den beri); burada tekrarlanmaz.
 #
 # Asıl tetik: Zoho Cliq günlük zamanlayıcısı (08:55 İstanbul) bu işi
 # dispatch eder. Aşağıdaki cron yalnız yedek; ikisi birden başlarsa ikincisi
 # sırada bekler, sıra geldiğinde saati geçmiş adımları atlar.
-# Bir iş 6 saati aşamaz; gün iki ardışık işe bölünür.
+# Bir iş 6 saati aşamaz; her kart kendi ardışık işinde beklenir.
 name: gun-saati
 
 on:
@@ -28,30 +29,27 @@ env:
   GH_REPO: ${{ github.repository }}
 
 jobs:
-  sabah:
+  kart-1230:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
-      - name: 09:07-14:07 veri, 12:30 kart
-        run: |
-          . scripts/gun_saati.sh
-          for h in 09 10 11 12; do tetikle "$h:07" block-ingest.yml 10; done
-          kart "12:30"
-          for h in 13 14; do tetikle "$h:07" block-ingest.yml 10; done
+      - run: . scripts/gun_saati.sh && kart "12:30"
 
-  aksam:
-    needs: sabah
+  kart-1530:
+    needs: kart-1230
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
-      - name: 15:07-19:07 veri, 15:30 ve 18:30 kart
-        run: |
-          . scripts/gun_saati.sh
-          tetikle "15:07" block-ingest.yml 10
-          kart "15:30"
-          for h in 16 17 18; do tetikle "$h:07" block-ingest.yml 10; done
-          kart "18:30"
-          tetikle "19:07" block-ingest.yml 10
+      - run: . scripts/gun_saati.sh && kart "15:30"
+
+  kart-1830:
+    needs: kart-1530
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - run: . scripts/gun_saati.sh && kart "18:30"
