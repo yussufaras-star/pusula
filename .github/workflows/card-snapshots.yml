@@ -3,11 +3,7 @@
 name: card-snapshots
 
 on:
-  schedule:
-    # 12:30 ve 18:30 İstanbul (UTC+3), Pzt–Cmt. GitHub zamanlaması gecikebilir.
-    - cron: "30 9 * * 1-6"
-    - cron: "30 12 * * 1-6"
-    - cron: "30 15 * * 1-6"
+  # Zamanlamayı gun-saati.yml yapar (GitHub cron'u saatlerce gecikiyordu).
   workflow_dispatch:
 
 concurrency:
