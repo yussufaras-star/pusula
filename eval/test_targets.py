@@ -36,11 +36,21 @@ def test_standard_call_target_is_blocks_minus_break_over_five_minutes() -> None:
     assert STANDARD_CALLS == 45
 
 
-def test_saturday_is_all_meetings() -> None:
+def test_saturday_calls_are_day_minus_break_minus_meetings() -> None:
     assert day_factor(MONDAY, "arama") == 1.0
-    assert day_factor(SATURDAY, "arama") == 0.0
+    # (360 - 75) / 5 = 57; 09-15 boyunca eşit birikir.
     out = rep_targets(today={}, hist_hours={}, meetings=[], day=SATURDAY, cutoff=at(SATURDAY, 12))
-    assert "arama" not in out and "ulasma_orani" not in out
+    assert out["arama"]["daily"] == 57.0
+    assert out["arama"]["by_now"] == 28.5
+    assert out["ulasma_orani"]["daily"] == 70.0
+    items = [
+        meeting(at(SATURDAY, 10), "geldi", 30),
+        meeting(at(SATURDAY, 11), "bekleniyor", 45),
+        meeting(at(SATURDAY, 12), "iptal", 30),  # iptal düşülmez
+    ]
+    out = rep_targets(today={}, hist_hours={}, meetings=items, day=SATURDAY, cutoff=at(SATURDAY, 15))
+    assert out["arama"]["daily"] == 42.0  # (285 - 75) / 5
+    assert out["arama"]["by_now"] == 42.0
 
 
 def test_calls_accrue_only_in_call_blocks() -> None:
@@ -81,8 +91,10 @@ def test_no_show_frees_slot_after_ten_minute_wait() -> None:
 def test_no_show_on_saturday_creates_call_target() -> None:
     items = [meeting(at(SATURDAY, 10), "gelmedi", 40)]
     out = rep_targets(today={}, hist_hours={}, meetings=items, day=SATURDAY, cutoff=at(SATURDAY, 14))
-    assert out["arama"]["daily"] == 6.0  # 30 dk / 5
-    assert out["arama"]["by_now"] == 6.0
+    # Taban (285 - 40) / 5 = 49, gelmeyen 30 dk / 5 = 6 geri eklenir.
+    assert out["arama"]["daily"] == 55.0
+    assert out["arama"]["bonus"] == 6.0
+    assert out["arama"]["by_now"] == 46.8  # 49 x 5/6 + 6
 
 
 def test_attach_targets_sums_team_and_skips_leave() -> None:
@@ -198,9 +210,9 @@ def test_talk_time_target_five_minutes_with_sample() -> None:
     assert gaps_for(c) == []
     c["today"].update({"sure_ort": 300.0, "giden_temas": 12})
     assert gaps_for(c) == []
-    # Cumartesi (arama yok) süre hedefi de yok.
+    # Cumartesi de arama günü: süre hedefi geçerli.
     sat = rep_targets(today={}, hist_hours={}, meetings=[], day=SATURDAY, cutoff=at(SATURDAY, 12))
-    assert "sure_ort" not in sat
+    assert sat["sure_ort"]["daily"] == 300.0
 
 
 def test_every_nudge_carries_occupancy() -> None:
