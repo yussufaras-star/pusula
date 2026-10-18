@@ -25,6 +25,7 @@ from pusula.db.models import (
     FinTransaction,
 )
 from pusula.finance.fx import FxTable
+from pusula.finance.tax import wallet_ref
 
 ZERO = Decimal("0")
 IC_CATEGORY = "ic_transfer"
@@ -143,7 +144,8 @@ def own_transfers(
     (son 4 hane ya da farklı kurumsa kurum adı, ör. Wise'ta 'STRIPE') veya
     metinde şirketin kendi adı geçer.
     Ödeme altyapısı hesabında (Stripe vb.) yalnız 'payout' aktarım olabilir;
-    satış, iade, chargeback asla. Şirketler arası işaretli veya kullanıcının
+    satış, iade, chargeback asla. Satıcı cüzdan yüklemesi ('REX-…') asla.
+    Şirketler arası işaretli veya kullanıcının
     düzelttiği hareket aday değildir; kuralla verilmiş kategori ise aktarım
     çıkarsa değişebilir.
     """
@@ -165,6 +167,9 @@ def own_transfers(
         if tx.id is None or tx.user_edited_at is not None or tx.counterparty_company_id:
             return False
         if tx.category_id not in (None, OWN_CATEGORY) and tx.category_rule_id is None:
+            return False
+        if wallet_ref(tx.description):
+            # Satıcının 'REX-…' referanslı cüzdan yüklemesi; tutarı tesadüfen tutsa da aktarım değil
             return False
         account = by_id.get(tx.account_id)
         if account is not None and account.type == "payment":

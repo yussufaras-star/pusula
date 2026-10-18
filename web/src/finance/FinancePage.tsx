@@ -9,10 +9,11 @@ import { addDays, day, istanbulToday, SCOPES } from "./format";
 import { IntercompanyTab } from "./IntercompanyTab";
 import { OverviewTab } from "./OverviewTab";
 import { ProjectionTab } from "./ProjectionTab";
+import { TaxTab } from "./TaxTab";
 import type { Meta, Scope, SyncReport } from "./types";
 import { Loading, type TabProps } from "./ui";
 
-export type FinanceTab = "genel" | "akis" | "projeksiyon" | "sirketler-arasi" | "bilanco" | "kararlar" | "hesaplar";
+export type FinanceTab = "genel" | "akis" | "projeksiyon" | "sirketler-arasi" | "bilanco" | "vergi" | "kararlar" | "hesaplar";
 
 const TITLES: Record<FinanceTab, [string, string]> = {
   genel: ["Genel bakış", "Konsolide nakit, şirketler ve uyarılar"],
@@ -20,12 +21,13 @@ const TITLES: Record<FinanceTab, [string, string]> = {
   projeksiyon: ["Projeksiyon", "Planlı alacak ve borçlarla kasa seyri"],
   "sirketler-arasi": ["Şirketler arası", "Transferler ve net pozisyon"],
   bilanco: ["Haftalık bilanço", "Şirket başına aktif ve pasif"],
+  vergi: ["Cüzdan ve vergi", "LLC: satıcı ve üretici cüzdanları düşülünce kalan varlık ve ABD vergisi"],
   kararlar: ["Kararlar", "Stratejik kararlar ve takibi"],
   hesaplar: ["Hesaplar", "Banka bağlantıları ve ekstre yükleme"],
 };
 
 // Tarih aralığı yalnız geçmiş veriye bakan sekmeleri etkiler.
-const RANGED: FinanceTab[] = ["genel", "akis", "sirketler-arasi"];
+const RANGED: FinanceTab[] = ["genel", "akis", "sirketler-arasi", "vergi"];
 
 type Preset = "3" | "6" | "12" | "yil" | "ozel";
 const PRESETS: { key: Preset; label: string }[] = [
@@ -144,6 +146,8 @@ export function FinancePage({ tab }: { tab: FinanceTab }) {
         <IntercompanyTab {...props} meta={meta.data} />
       ) : tab === "bilanco" ? (
         <BalanceTab {...props} meta={meta.data} />
+      ) : tab === "vergi" ? (
+        <TaxTab {...props} meta={meta.data} />
       ) : tab === "kararlar" ? (
         <DecisionsTab {...props} meta={meta.data} />
       ) : (

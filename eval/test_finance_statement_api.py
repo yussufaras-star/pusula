@@ -40,6 +40,7 @@ def client(monkeypatch) -> TestClient:
     monkeypatch.setattr(web_finance.store, "load_account", lambda conn, i: accounts.get(i))
     monkeypatch.setattr(web_finance.store, "load_companies", lambda conn: [])
     monkeypatch.setattr(web_finance.store, "apply_own_transfers", lambda conn, since: 0)
+    monkeypatch.setattr(web_finance.store, "apply_wallet_deposits", lambda conn, since=None: 0)
     monkeypatch.setattr(web_finance.store, "apply_category_rules", lambda conn, since=None: 0)
     client = TestClient(app)
     client.cookies.set("pusula_session", encode_session(ADMIN))

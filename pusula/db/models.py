@@ -142,7 +142,7 @@ FlowDirection = Literal["in", "out"]
 Recurrence = Literal["none", "weekly", "monthly"]
 PlannedStatus = Literal["open", "done", "cancelled"]
 SnapshotSide = Literal["asset", "liability"]
-SnapshotOrigin = Literal["account", "planned", "intercompany", "manual"]
+SnapshotOrigin = Literal["account", "planned", "intercompany", "wallet", "tax", "manual"]
 SnapshotSection = Literal[
     "current_assets", "noncurrent_assets", "current_liabilities", "longterm_liabilities", "equity"
 ]
@@ -332,4 +332,44 @@ class FinCategoryRule(BaseModel):
     category_id: str
     source: RuleSource = "user"
     label: str | None = None
+    created_at: datetime | None = None
+
+
+WalletKind = Literal["seller", "producer"]
+Rate = Annotated[Decimal, Field(ge=0, le=1, max_digits=6, decimal_places=4)]
+
+
+class FinWallet(BaseModel):
+    """fin_wallets tablosu: elle girilen satıcı / üretici cüzdan bakiyesi.
+
+    Satıcı cüzdanı: satıcıların yüklediği, henüz harcanmamış para (borç).
+    Üretici cüzdanı: üreticilere ödenecek tutar (borç); negatifse avans.
+    """
+
+    id: int | None = None
+    company_id: CompanyId
+    kind: WalletKind
+    name: Annotated[str, Field(min_length=1, max_length=120)]
+    balance: Money = Decimal("0")
+    currency: Currency = "USD"
+    as_of: date
+    notes: str | None = None
+    active: bool = True
+    sort: int = 0
+    updated_at: datetime | None = None
+
+
+class FinTaxScenario(BaseModel):
+    """fin_tax_scenarios tablosu: kalan net varlık üzerinden vergi senaryosu."""
+
+    id: int | None = None
+    company_id: CompanyId
+    name: Annotated[str, Field(min_length=1, max_length=120)]
+    federal_rate: Rate = Decimal("0.21")
+    state_rate: Rate = Decimal("0")
+    extra_deductions: Money = Decimal("0")
+    taxed_base: Money = Decimal("0")
+    notes: str | None = None
+    active: bool = True
+    sort: int = 0
     created_at: datetime | None = None

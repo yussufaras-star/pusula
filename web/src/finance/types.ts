@@ -170,7 +170,7 @@ export interface SnapshotLine {
   label: string;
   amount: number;
   currency: string;
-  origin: "account" | "planned" | "intercompany" | "manual";
+  origin: "account" | "planned" | "intercompany" | "wallet" | "tax" | "manual";
   sort: number;
 }
 
@@ -309,4 +309,70 @@ export interface Uncategorized {
   items: UncategorizedRow[];
   total: number;
   missing_fx: string[];
+}
+
+// --- LLC cüzdan ve vergi (/api/finance/tax) ---
+
+export type WalletKind = "seller" | "producer";
+
+export interface Wallet {
+  id: number;
+  company_id: CompanyId;
+  kind: WalletKind;
+  name: string;
+  balance: number;
+  balance_usd: number;
+  currency: string;
+  as_of: string;
+  notes: string | null;
+  active: boolean;
+  sort: number;
+  updated_at: string | null;
+}
+
+export interface TaxResult {
+  taxable_usd: number;
+  state_usd: number;
+  federal_usd: number;
+  total_usd: number;
+  paid_usd: number;
+  remaining_usd: number;
+  after_tax_usd: number;
+  effective_rate: number | null;
+}
+
+export interface TaxScenario {
+  id: number;
+  company_id: CompanyId;
+  name: string;
+  federal_rate: number;
+  state_rate: number;
+  extra_deductions: number;
+  taxed_base: number;
+  notes: string | null;
+  active: boolean;
+  sort: number;
+  primary: boolean;
+  result: TaxResult;
+}
+
+export interface TaxPayload extends FxMeta {
+  company_id: CompanyId;
+  as_of: string;
+  year: number;
+  start: string;
+  end: string;
+  base: { cash_usd: number; seller_usd: number; producer_usd: number; net_assets_usd: number; paid_usd: number };
+  accounts: { id: number; name: string; currency: string; balance: number; balance_usd: number; balance_at: string | null }[];
+  wallets: Wallet[];
+  scenarios: TaxScenario[];
+  deposits: {
+    usd: number;
+    count: number;
+    refunds_usd: number;
+    without_ref: number;
+    customers: number;
+    channels: { account_id: number; name: string; usd: number; count: number }[];
+    top: { ref: string; name: string; usd: number; count: number; last: string | null }[];
+  };
 }

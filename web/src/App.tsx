@@ -20,6 +20,7 @@ type FinanceRoute =
   | "finans/projeksiyon"
   | "finans/sirketler-arasi"
   | "finans/bilanco"
+  | "finans/vergi"
   | "finans/kararlar"
   | "finans/hesaplar";
 type Route = SalesRoute | FinanceRoute;
@@ -43,6 +44,7 @@ const NAV: Record<Area, NavItem[]> = {
     { route: "finans/projeksiyon", label: "Projeksiyon" },
     { route: "finans/sirketler-arasi", label: "Şirketler arası" },
     { route: "finans/bilanco", label: "Haftalık bilanço" },
+    { route: "finans/vergi", label: "Cüzdan ve vergi" },
     { route: "finans/kararlar", label: "Kararlar" },
     { route: "finans/hesaplar", label: "Hesaplar" },
   ],

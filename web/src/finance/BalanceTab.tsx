@@ -10,6 +10,8 @@ const ORIGIN: Record<SnapshotLine["origin"], string> = {
   account: "hesap",
   planned: "planlı",
   intercompany: "şirketler arası",
+  wallet: "cüzdan",
+  tax: "tahmini vergi",
   manual: "elle",
 };
 const ASSET_SECTIONS: SectionKey[] = ["current_assets", "noncurrent_assets"];
