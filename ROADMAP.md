@@ -46,7 +46,7 @@ Streamlit bırakıldı; React + FastAPI, Vercel. KPI hesabı tek sorguda
 6. **Görüşme Analizleri** (kod ✅, 2026-10-19; anahtarlar bekleniyor) — haftanın
    telefon görüşmeleri ve toplantıları. Çağrılar CRM'den (temsilci, lead, sonuç),
    ses Verimor'dan (CRM kayıt adresindeki call_uuid); toplantı videoları Zoho
-   Meeting'den. Konuşma-tanıma (OpenAI / ElevenLabs / Deepgram) → Claude ile
+   Meeting'den. Konuşma-tanıma (AssemblyAI; OpenAI / ElevenLabs / Deepgram da olur) → Claude ile
    görüşme başına özet, itiraz, beş başlıkta puan, sonraki adım, alıntılı
    güçlü/gelişim maddesi; haftalık sayılar koddan, temsilci başına tek odak
    maddesi (`pusula/conversations.py`, `/api/conversations`, gece işi

@@ -189,7 +189,7 @@ export function ConversationsPage({ me }: { me: Me }) {
       {weeks.data && !setup?.son_calisma ? (
         <div className="banner">
           Analiz henüz hiç çalışmadı. Kayıtlar her gece işlenir (telefon: CRM + Verimor, toplantı: Zoho Meeting).
-          {isAdmin ? " Konuşma-tanıma ve Claude anahtarları GitHub secrets'a eklenince ilk çalışma başlar." : ""}
+          {isAdmin ? " AssemblyAI ve Claude anahtarları GitHub secrets'ta olunca kayıtlar işlenir." : ""}
         </div>
       ) : null}
       {isAdmin && setup?.rapor ? <RunNotes report={setup.rapor} /> : null}

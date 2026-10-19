@@ -315,7 +315,7 @@ def transcribe_pending(
     conn: Any, week_start: date, *, budget_sec: float | None = None, limit: int | None = None
 ) -> dict[str, Any]:
     if not transcribe.enabled():
-        return {"atlandi": "konuşma-tanıma anahtarı yok (OPENAI/ELEVENLABS/DEEPGRAM)"}
+        return {"atlandi": "konuşma-tanıma anahtarı yok (ASSEMBLYAI/OPENAI/ELEVENLABS/DEEPGRAM)"}
     started = time.monotonic()
     report: dict[str, Any] = {"yazildi": 0, "atlandi": 0, "hata": 0}
     for item in _pending(conn, week_start, "bekliyor", limit):
