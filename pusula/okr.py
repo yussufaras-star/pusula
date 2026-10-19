@@ -56,7 +56,8 @@ class Metric:
 METRICS: dict[str, Metric] = {
     "ciro": Metric("Ciro", "tl", True),
     "satis": Metric("Satış adedi", "adet", True),
-    "atanan": Metric("Atanan lead (contact)", "adet", True),
+    "gelen_lead": Metric("Gelen lead (Zoho Leads)", "adet", True),
+    "atanan": Metric("Atanan lead", "adet", True),
     "arama": Metric("Arama", "adet", True),
     "ulasilan": Metric("Ulaşılan", "adet", True),
     "randevu": Metric("Toplantı", "adet", True),
@@ -291,7 +292,7 @@ def tr_day(day: date) -> str:
     return f"{day.day} {MONTHS_TR[day.month - 1]}"
 
 
-ROLLUP_METRICS = ("ciro", "satis", "atanan")
+ROLLUP_METRICS = ("ciro", "satis", "gelen_lead")
 
 
 def annual_rollup(

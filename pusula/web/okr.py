@@ -17,6 +17,7 @@ from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 
 from pusula import okr
+from pusula.ingest.lead_inflow import load_inflow
 from pusula.live import data_as_of
 from pusula.metrics import TZ, Span
 from pusula.okr_template import template_for
@@ -97,19 +98,20 @@ def _can_write_owner(user: AuthUser, owner: str) -> bool:
     return user.role == "admin" or (owner != okr.TEAM and owner == user.rep_id)
 
 
-SALES_KEYS = ("ciro", "satis", "ort_satis", "atanan")
+SALES_KEYS = ("ciro", "satis", "ort_satis", "atanan", "gelen_lead")
 # Yönetici kararı (19 Ekim): OKR'da ekip cirosu ve satışı tüm şirkettir
 # (yönetim ve diğer sahipler, ayrılanlar dahil); Q1 2026 CRM rakamı sayılır.
-# Lead ataması Nisan 2026'dan önce eksiktir; o dönem check-in ile girilir.
+# Lead ataması Nisan 2026'dan önce eksiktir. Gelen lead (ekip) Zoho Leads
+# modülünün günlük sayımıdır (lead_inflow_daily, yıl başından beri).
 OKR_SALES_START = date(2026, 1, 1)
 LEAD_START = REAL_SALES_START
 
 
 def sales_values(first: date, end: date, now: datetime) -> tuple[dict[str, dict[str, Any]], dict[str, date]]:
-    """(sahip → ciro, satış, ort. satış, atanan lead; metrik → ölçüm başı).
+    """(sahip → ciro, satış, ort. satış, atanan/gelen lead; metrik → ölçüm başı).
 
-    Ekip satırı tüm kazanılan deal'ler ve tüm atanan lead'lerdir; temsilci
-    satırı kendi deal ve lead'leri. Ucuz sorgular.
+    Ekip satırı tüm kazanılan deal'ler, tüm atanan lead'ler ve Zoho'ya gelen
+    lead'lerdir; temsilci satırı kendi deal ve lead'leri. Ucuz sorgular.
     """
     today = now.date()
     sales_first = max(first, OKR_SALES_START)
@@ -118,6 +120,7 @@ def sales_values(first: date, end: date, now: datetime) -> tuple[dict[str, dict[
     def build() -> tuple[dict[str, dict[str, Any]], dict[str, date]]:
         won = won_by_rep(sales_first, end) if end >= sales_first else None
         assigned = _assigned(Span.days(lead_first, end)) if end >= lead_first else None
+        inflow = load_inflow(first, end)
         out: dict[str, dict[str, Any]] = {}
         coverage: dict[str, date] = {}
         owners = {r.rep_id for r in load_reps()}
@@ -133,7 +136,11 @@ def sales_values(first: date, end: date, now: datetime) -> tuple[dict[str, dict[
                 row["ort_satis"] = round(row["ciro"] / row["satis"], 2) if row["satis"] else None
             if assigned is not None:
                 row["atanan"] = sum(assigned.values()) if owner == okr.TEAM else assigned.get(owner, 0)
+            if owner == okr.TEAM and inflow is not None:
+                row["gelen_lead"] = inflow
             out[owner] = row
+        if inflow is not None:
+            coverage["gelen_lead"] = first
         if won is not None:
             coverage.update({"ciro": sales_first, "satis": sales_first, "ort_satis": sales_first})
         if assigned is not None:
