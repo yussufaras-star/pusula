@@ -330,7 +330,9 @@ def annual_rollup(
                 missing.append(q)
             else:
                 total += float(value)
-        out[metric] = (round(total, 2), missing)
+        # Hiçbir çeyrekte değer yoksa toplam 0 değil "veri yok"tur.
+        if len(missing) < len(quarter_values):
+            out[metric] = (round(total, 2), missing)
     return out
 
 
