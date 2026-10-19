@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import { Logo } from "./components/Logo";
 import { FinancePage, type FinanceTab } from "./finance/FinancePage";
+import { BoardPage } from "./pages/Board";
 import { ComparePage } from "./pages/Compare";
 import { LivePage } from "./pages/Live";
 import { LoginPage } from "./pages/Login";
@@ -35,7 +36,7 @@ const NAV: Record<Area, NavItem[]> = {
   satis: [
     { route: "canli", label: "Canlı" },
     { route: "karsilastir", label: "Karşılaştır" },
-    { route: "pano", label: "Ekip Panosu", soon: true },
+    { route: "pano", label: "Ekip Panosu" },
     { route: "raporlar", label: "Raporlar" },
   ],
   finans: [
@@ -139,30 +140,13 @@ export function App() {
           <ComparePage me={me} />
         ) : route === "raporlar" ? (
           <ReportsPage me={me} />
-        ) : area === "finans" ? (
+        ) : route === "pano" ? (
+          <BoardPage me={me} />
+        ) : (
           // Tek bileşen: sekme değişince şirket ve tarih seçimi korunur
           <FinancePage tab={route.slice("finans/".length) as FinanceTab} />
-        ) : (
-          <Soon route={route as SoonRoute} />
         )}
       </main>
-    </div>
-  );
-}
-
-type SoonRoute = Exclude<SalesRoute, "canli" | "karsilastir" | "raporlar">;
-
-const SOON_TEXT: Record<SoonRoute, [string, string]> = {
-  pano: ["Ekip Panosu", "Ekip hedefine canlı ilerleme, kişisel rekorlar ve ofis TV'si için büyük ekran."],
-};
-
-function Soon({ route }: { route: SoonRoute }) {
-  const [title, text] = SOON_TEXT[route];
-  return (
-    <div className="card placeholder-page">
-      <h2>{title}</h2>
-      <p>{text}</p>
-      <p className="muted">Sonraki aşamada geliyor.</p>
     </div>
   );
 }

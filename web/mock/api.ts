@@ -17,6 +17,7 @@ import type {
   Segment,
 } from "../src/types";
 import { mockFinance } from "./finance";
+import { mockOkr } from "./okr";
 
 const REPS: [string, string, number][] = [
   ["r1", "Ayşe Yılmaz", 1.15],
@@ -497,6 +498,8 @@ export function mockApi(method: string, url: string): unknown {
   const path = url.split("?")[0];
   if (path === "/api/me") return ME;
   if (path.startsWith("/api/finance/")) return mockFinance(method, url);
+  if (path === "/api/okr") return mockOkr();
+  if (path.startsWith("/api/okr/")) return { ok: true, id: 1 };
   if (path === "/api/live") return live();
   if (path === "/api/leaves" && method === "POST") {
     LEAVES.has("r5") ? LEAVES.delete("r5") : LEAVES.add("r5");
