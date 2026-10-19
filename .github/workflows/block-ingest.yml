@@ -36,6 +36,37 @@ env:
   PUSULA_WHATSAPP_INGEST: ${{ vars.PUSULA_WHATSAPP_INGEST }}
 
 jobs:
+  # Kart güvencesi: gun-saati'nin asıl tetiği (Cliq zamanlayıcısı) 20:55'te
+  # gelebiliyor, GitHub cron'u da düşebiliyor (19 Ekim'de 12:30 kartı
+  # gitmedi). Bu iş her saat güvenilir geldiğinden, o gün gun-saati hiç
+  # başlamadıysa (iptaller hariç) onu başlatır. gun-saati saati geçen kartı
+  # atlar; çift başlarsa ikincisi sırada bekler.
+  gun-saati-guvence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Gün saati bugün başladı mı
+        run: |
+          saat=$(TZ=Europe/Istanbul date +%H)
+          gun=$(TZ=Europe/Istanbul date +%u)
+          if [ "$gun" = "7" ] || [ "$saat" -ge 19 ]; then
+            echo "atlandı: pazar ya da 19:00 sonrası"; exit 0
+          fi
+          bugun=$(TZ=Europe/Istanbul date +%F)
+          n=$(gh run list --workflow gun-saati.yml --limit 20 --json createdAt,conclusion \
+            --jq "[.[] | select(.conclusion != \"cancelled\") | .createdAt | fromdateiso8601 | . + 10800 | strftime(\"%Y-%m-%d\") | select(. == \"$bugun\")] | length")
+          if [ "$n" -gt 0 ]; then
+            echo "gun-saati bugün başlamış ($n)"
+          else
+            echo "gun-saati bugün başlamamış; tetikleniyor"
+            gh workflow run gun-saati.yml --ref main
+          fi
+
   sync-hourly:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -76,6 +107,11 @@ jobs:
       - name: Lead senkronu
         continue-on-error: true
         run: python scripts/lead_sync.py
+      # Ekip Panosu "gelen lead": Zoho Leads'e günlük düşen lead (dönüştürülen
+      # dahil). İlk çalışmada yıl başından doldurur, sonra son 3 günü yeniler.
+      - name: Gelen lead akışı
+        continue-on-error: true
+        run: python scripts/lead_inflow.py
       - name: WhatsApp ve CRM işlemleri
         continue-on-error: true
         run: python scripts/live_ingest.py

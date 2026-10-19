@@ -5,9 +5,10 @@
 # Saatlik block-ingest'i harici bir tetikleyici her saat :07'de dispatch
 # ediyor (13 Ekim'den beri); burada tekrarlanmaz.
 #
-# Asıl tetik: Zoho Cliq günlük zamanlayıcısı (08:55 İstanbul) bu işi
-# dispatch eder. Aşağıdaki cron yalnız yedek; ikisi birden başlarsa ikincisi
-# sırada bekler, sıra geldiğinde saati geçmiş adımları atlar.
+# Tetikler: Zoho Cliq günlük zamanlayıcısı (08:55 olmalı; Ekim 2026'da 20:55'te
+# geliyordu), aşağıdaki yedek cron ve block-ingest'in saatlik güvencesi (o gün
+# hiç başlamadıysa başlatır). Birden çok başlarsa sonrakiler sırada bekler,
+# sıra geldiğinde saati geçmiş adımları atlar.
 # Bir iş 6 saati aşamaz; her kart kendi ardışık işinde beklenir.
 name: gun-saati
 

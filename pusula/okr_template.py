@@ -30,10 +30,10 @@ PLAN_2026 = {
         2_819_400, 3_900_170, 4_839_970, 3_148_330, 5_920_740, 4_370_070,
     ],
     "satis": [95, 95, 96, 101, 73, 83, 60, 83, 103, 67, 126, 93],
-    "atanan": [4948, 4948, 5000, 5260, 3802, 4323, 3125, 4323, 5365, 3490, 6563, 4844],
+    "lead": [4948, 4948, 5000, 5260, 3802, 4323, 3125, 4323, 5365, 3490, 6563, 4844],
 }
 PLAN_2026_QUARTER_LEADS = {1: 14_896, 2: 13_385, 3: 12_813, 4: 14_896}
-PLAN_2026_YEAR = {"ciro": 50_514_250, "satis": 1075, "atanan": 55_990}
+PLAN_2026_YEAR = {"ciro": 50_514_250, "satis": 1075, "lead": 55_990}
 REACH_PLAN = 60.0
 TAKE_PLAN = 3.2
 
@@ -45,12 +45,12 @@ def _mn(v: float) -> str:
 def _plan_krs(months: slice, *, leads: float | None = None) -> list[dict[str, Any]]:
     ciro = PLAN_2026["ciro"][months]
     satis = PLAN_2026["satis"][months]
-    lead = PLAN_2026["atanan"][months]
+    lead = PLAN_2026["lead"][months]
     lead_target = leads if leads is not None else sum(lead)
     return [
         {**_kr(f"Ciro {_mn(sum(ciro))}", "ciro", 0, sum(ciro), "tl"), "phasing": ciro},
         {**_kr(f"{sum(satis)} yeni müşteri (satış)", "satis", 0, sum(satis), "adet"), "phasing": satis},
-        {**_kr(f"{lead_target:,.0f} lead (contact) işlenir".replace(",", "."), "atanan", 0, lead_target, "adet"), "phasing": lead},
+        {**_kr(f"{lead_target:,.0f} lead gelir".replace(",", "."), "gelen_lead", 0, lead_target, "adet"), "phasing": lead},
     ]
 
 
@@ -76,13 +76,13 @@ def _year_2026() -> list[dict[str, Any]]:
             "key": "y2026", "quarter": 0, "kind": "taahhut", "status": "aktif",
             "title": "2026 planını teslim et: 50,5 M TL ciro, 1.075 yeni müşteri",
             "description": (
-                "Ocak'ta koyduğumuz yıllık plan. Ciro, satış ve lead çeyreklerin toplamıdır; "
-                "Q1 CRM taşıma döneminde ölçülmedi, gerçekleşeni Q1 sonuçlarına check-in ile girilir."
+                "Ocak'ta koyduğumuz yıllık plan. Ciro, satış ve lead çeyreklerin toplamıdır. "
+                "Lead: Zoho Leads modülüne gelen (contact'a dönüştürülenler dahil, 1-2 Nisan taşıması hariç)."
             ),
             "krs": [
                 {**_kr("Ciro 50,51 M TL", "ciro", 0, PLAN_2026_YEAR["ciro"], "tl"), "phasing": PLAN_2026["ciro"]},
                 {**_kr("1.075 yeni müşteri (satış)", "satis", 0, PLAN_2026_YEAR["satis"], "adet"), "phasing": PLAN_2026["satis"]},
-                {**_kr("55.990 lead (contact) işlenir", "atanan", 0, PLAN_2026_YEAR["atanan"], "adet"), "phasing": PLAN_2026["atanan"]},
+                {**_kr("55.990 lead gelir", "gelen_lead", 0, PLAN_2026_YEAR["lead"], "adet"), "phasing": PLAN_2026["lead"]},
                 *_funnel_krs(),
             ],
         },
