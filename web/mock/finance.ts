@@ -607,6 +607,45 @@ export function mockFinance(method: string, url: string): unknown {
     };
   }
 
+  if (path === "/api/finance/tax") {
+    const [start, end] = range(q);
+    const llcCash = cash(["llc"]);
+    const wallets = [
+      { id: 1, company_id: "llc", kind: "seller", name: "Toplam", balance: 412_300, balance_usd: 412_300, currency: "USD", as_of: addDays(TODAY, -2), notes: "Platform admin paneli", active: true, sort: 0, updated_at: ago(30) },
+      { id: 2, company_id: "llc", kind: "producer", name: "ASPOL PRINT INC", balance: 96_400, balance_usd: 96_400, currency: "USD", as_of: addDays(TODAY, -1), notes: null, active: true, sort: 0, updated_at: ago(20) },
+      { id: 3, company_id: "llc", kind: "producer", name: "Atolye LLC", balance: 41_250, balance_usd: 41_250, currency: "USD", as_of: addDays(TODAY, -1), notes: null, active: true, sort: 1, updated_at: ago(20) },
+      { id: 4, company_id: "llc", kind: "producer", name: "Zanaart LLC", balance: -8_000, balance_usd: -8_000, currency: "USD", as_of: addDays(TODAY, -6), notes: "avans", active: true, sort: 2, updated_at: ago(140) },
+    ] as const;
+    const seller = 412_300;
+    const producer = 96_400 + 41_250 - 8_000;
+    const net = llcCash - seller - producer;
+    const paid = 19_550;
+    const sc = (id: number, name: string, federal: number, state: number, extra: number, taxed: number, sort: number) => {
+      const taxable = Math.max(net - extra - taxed, 0);
+      const st = taxable * state;
+      const fed = (taxable - st) * federal;
+      const total = st + fed;
+      return {
+        id, company_id: "llc", name, federal_rate: federal, state_rate: state, extra_deductions: extra, taxed_base: taxed, notes: null, active: true, sort, primary: id === 1,
+        result: { taxable_usd: r2(taxable), state_usd: r2(st), federal_usd: r2(fed), total_usd: r2(total), paid_usd: paid, remaining_usd: r2(Math.max(total - paid, 0)), after_tax_usd: r2(net - total), effective_rate: net > 0 ? Math.round((total / net) * 10000) / 10000 : null },
+      };
+    };
+    const names = ["Betul Coban", "TEKALP LLC", "SOVEREIGN SPARKLE", "Ali Tozun", "Real Famous Ltd", "MUSTAFA SARI"];
+    return {
+      company_id: "llc", as_of: new Date().toISOString(), year: Number(TODAY.slice(0, 4)), start, end,
+      base: { cash_usd: r2(llcCash), seller_usd: seller, producer_usd: producer, net_assets_usd: r2(net), paid_usd: paid },
+      accounts: ACCOUNTS.filter((a) => a.company_id === "llc" && a.active).map((a) => ({ id: a.id, name: a.name, currency: a.currency, balance: a.balance, balance_usd: r2(toUsd(a.balance, a.currency)), balance_at: a.balance_at })),
+      wallets,
+      scenarios: [sc(1, "Federal %21", 0.21, 0, 0, 0, 1), sc(2, "Federal %21 + eyalet %6,5", 0.21, 0.065, 0, 0, 2), sc(3, "Yıl sonu 60 B$ ek gider", 0.21, 0, 60_000, 0, 3)],
+      deposits: {
+        usd: 1_752_649.68, count: 5_541, refunds_usd: 3_224.82, without_ref: 2_866, customers: 1_284,
+        channels: [{ account_id: 9, name: "Wise USD", usd: 1_032_567.89, count: 3_840 }, { account_id: 2, name: "Mercury ••4259", usd: 720_081.79, count: 1_701 }, { account_id: 11, name: "Stripe", usd: 452_888.55, count: 2_866 }],
+        top: names.map((name, i) => ({ ref: `REX-${110039 + i * 9371}`, name, usd: 18_400 - i * 2_150, count: 24 - i * 3, last: addDays(TODAY, -i) })),
+      },
+      ...FX,
+    };
+  }
+
   if (path === "/api/finance/decisions") {
     const visible = DECISIONS.filter((d) => !d.company_id || ids.includes(d.company_id)).map((d) => ({
       ...d,
@@ -660,6 +699,7 @@ function mockWrite(method: string, path: string): unknown {
   }
   if (path.endsWith("/statement/import")) return { inserted: 12, duplicates: 30, skipped: 1, balance: 2_940_000 };
   if (path === "/api/finance/rules") return { id: 9, applied: 12 };
+  if (path.startsWith("/api/finance/wallets") || path.startsWith("/api/finance/tax-scenarios")) return { id: 1 };
   if (path.startsWith("/api/finance/rules/")) return { id: 9, reverted: 6, reapplied: 0 };
   if (path.startsWith("/api/finance/transactions/")) return { id: 1, similar: 4 };
   if (method === "DELETE") return { id: 1 };

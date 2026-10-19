@@ -33,10 +33,12 @@ from pusula.db.models import (
     FinPlannedItem,
     FinSnapshot,
     FinSnapshotLine,
+    FinTaxScenario,
+    FinWallet,
     Money,
     SnapshotSection,
 )
-from pusula.finance import analytics, store, views
+from pusula.finance import analytics, store, tax, views
 from pusula.finance.fx import load_fx
 from pusula.finance.snapshot import (
     SECTION_BY_KEY,
@@ -190,6 +192,7 @@ def statement_import(account_id: int, body: StatementBody) -> Any:
         if span:
             since = span[0] - timedelta(days=analytics.OWN_MATCH_DAYS)
             store.apply_own_transfers(conn, since)
+            store.apply_wallet_deposits(conn, since)
             store.apply_category_rules(conn, since)
     return jsonable_encoder(
         {
@@ -450,6 +453,22 @@ def snapshot_summary(week: str, company: str = views.ALL) -> Any:
     return {"text": text}
 
 
+@router.get("/tax")
+def tax_screen(company: str = "llc", start: str | None = None, end: str | None = None) -> Any:
+    """Cüzdanlar + kalan net varlık + vergi senaryoları (tek şirket)."""
+    now = _now()
+    first, last = date_range(start, end, now.date())
+    with connect() as conn:
+        companies = store.load_companies(conn)
+        if company not in {c.id for c in companies}:
+            raise HTTPException(status_code=400, detail="Vergi ekranı tek şirket için")
+        # Ödenen vergi yıl başından; yüklemeler seçili aralıktan
+        bundle = _bundle(conn, min(first, date(now.year, 1, 1)), max(last, now.date()))
+        wallets = store.load_wallets(conn)
+        scenarios = store.load_tax_scenarios(conn)
+    return jsonable_encoder(views.tax_view(bundle, wallets, scenarios, company, first, last, now))
+
+
 @router.get("/decisions")
 def decisions(company: str = views.ALL) -> Any:
     with connect() as conn:
@@ -694,6 +713,46 @@ def delete_decision(decision_id: int) -> Any:
     return _delete("fin_decisions", decision_id)
 
 
+# --- yazma: cüzdan ve vergi senaryosu -------------------------------------------------
+
+
+def _wallet_stamp(payload: dict[str, Any]) -> dict[str, Any]:
+    """Bakiye girilip tarih verilmediyse bakiye bugün itibarıyladır."""
+    if "balance" in payload and not payload.get("as_of"):
+        return {**payload, "as_of": _now().date().isoformat()}
+    return payload
+
+
+@router.post("/wallets")
+def create_wallet(payload: dict[str, Any] = Body(...)) -> Any:
+    return _create("fin_wallets", FinWallet, {"as_of": _now().date().isoformat(), **_wallet_stamp(payload)})
+
+
+@router.patch("/wallets/{wallet_id}")
+def patch_wallet(wallet_id: int, payload: dict[str, Any] = Body(...)) -> Any:
+    return _patch("fin_wallets", FinWallet, wallet_id, _wallet_stamp(payload))
+
+
+@router.delete("/wallets/{wallet_id}")
+def delete_wallet(wallet_id: int) -> Any:
+    return _delete("fin_wallets", wallet_id)
+
+
+@router.post("/tax-scenarios")
+def create_scenario(payload: dict[str, Any] = Body(...)) -> Any:
+    return _create("fin_tax_scenarios", FinTaxScenario, payload)
+
+
+@router.patch("/tax-scenarios/{scenario_id}")
+def patch_scenario(scenario_id: int, payload: dict[str, Any] = Body(...)) -> Any:
+    return _patch("fin_tax_scenarios", FinTaxScenario, scenario_id, payload)
+
+
+@router.delete("/tax-scenarios/{scenario_id}")
+def delete_scenario(scenario_id: int) -> Any:
+    return _delete("fin_tax_scenarios", scenario_id)
+
+
 # --- yazma: haftalık bilanço ---------------------------------------------------------
 
 
@@ -707,7 +766,8 @@ class NewWeekBody(BaseModel):
 
 @router.post("/snapshots")
 def create_week(body: NewWeekBody) -> Any:
-    """Yeni hafta: hesap bakiyeleri + açık planlı kalemler + önceki elle girilenler.
+    """Yeni hafta: hesap bakiyeleri + açık planlı kalemler + cüzdanlar + tahmini
+    vergi + önceki elle girilenler.
 
     Kurlar o anki son ECB kuruyla haftaya kilitlenir. include_intercompany:
     şirketin kendi kayıtlarındaki net transferler (bilanço tarihine kadar)
@@ -728,6 +788,10 @@ def create_week(body: NewWeekBody) -> Any:
         fx_rates = fx_table.latest_rates()
         ic_txs = store.load_transactions(conn, None, week_end(body.week_date)) if body.include_intercompany else []
         names = {c.id: c.name for c in companies}
+        wallets = store.load_wallets(conn)
+        scenarios = store.load_tax_scenarios(conn)
+        year_start = date(body.week_date.year, 1, 1)
+        tax_txs = store.load_transactions(conn, year_start, week_end(body.week_date)) if scenarios else []
         created: list[int] = []
         for company_id in ids:
             previous: list[FinSnapshotLine] = []
@@ -737,11 +801,37 @@ def create_week(body: NewWeekBody) -> Any:
                     previous = store.load_snapshot_lines(conn, [prev.id])
             ic = intercompany_balances(company_id, ic_txs, fx_table, week_end(body.week_date), names)
             snapshot_id = store.insert_snapshot(conn, company_id, body.week_date, fx_rates)
-            lines = build_week_lines(company_id, accounts_, planned, previous, body.week_date, ic)
+            lines = build_week_lines(
+                company_id,
+                accounts_,
+                planned,
+                previous,
+                body.week_date,
+                ic,
+                wallets=wallets,
+                tax_due=_tax_due(company_id, accounts_, wallets, scenarios, tax_txs, fx_table, year_start),
+            )
             for line in lines:
                 store.insert_line(conn, snapshot_id, line.__dict__)
             created.append(snapshot_id)
     return {"ids": created, "week_date": body.week_date}
+
+
+def _tax_due(
+    company_id: str,
+    accounts_: list[FinAccount],
+    wallets: list[FinWallet],
+    scenarios: list[FinTaxScenario],
+    txs: list[Any],
+    fx_table: Any,
+    year_start: date,
+) -> list[tuple[str, Decimal]]:
+    """Şirketin ana senaryosuyla ödenecek kalan vergi (USD); senaryo yoksa boş."""
+    main = tax.primary(scenarios, company_id)
+    if main is None:
+        return []
+    base = tax.tax_base(company_id, accounts_, wallets, txs, fx_table, year_start)
+    return [(f"Tahmini ABD vergisi ({main.name})", tax.compute(base, main).remaining)]
 
 
 class SnapshotPatch(BaseModel):

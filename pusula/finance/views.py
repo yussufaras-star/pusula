@@ -21,9 +21,11 @@ from pusula.db.models import (
     FinPlannedItem,
     FinSnapshot,
     FinSnapshotLine,
+    FinTaxScenario,
     FinTransaction,
+    FinWallet,
 )
-from pusula.finance import analytics
+from pusula.finance import analytics, tax
 from pusula.finance.fx import FxTable
 from pusula.finance.snapshot import SECTIONS, BalanceSheet, balance_sheet, section_of
 
@@ -536,6 +538,108 @@ def decisions_view(decisions: Sequence[FinDecision], scope: Sequence[str], today
             "overdue": len(overdue),
             "impact_usd": money(sum((d.impact_usd or Decimal("0") for d in active), Decimal("0"))),
         },
+    }
+
+
+# --- LLC cüzdan ve vergi ------------------------------------------------------------
+
+TOP_CUSTOMERS = 15
+
+
+def _rate_out(value: Decimal) -> float:
+    return float(value.quantize(Decimal("0.0001")))
+
+
+def result_out(result: tax.TaxResult, base: tax.TaxBase) -> dict[str, Any]:
+    net = base.net_assets
+    return {
+        "taxable_usd": money(result.taxable),
+        "state_usd": money(result.state),
+        "federal_usd": money(result.federal),
+        "total_usd": money(result.total),
+        "paid_usd": money(result.paid),
+        "remaining_usd": money(result.remaining),
+        "after_tax_usd": money(net - result.total),
+        # Toplam vergi / net varlık: matrah düzeltmeleriyle birlikte gerçek yük
+        "effective_rate": _rate_out(result.total / net) if net > 0 else None,
+    }
+
+
+def scenario_out(s: FinTaxScenario) -> dict[str, Any]:
+    return {
+        **s.model_dump(),
+        "federal_rate": _rate_out(s.federal_rate),
+        "state_rate": _rate_out(s.state_rate),
+        "extra_deductions": money(s.extra_deductions),
+        "taxed_base": money(s.taxed_base),
+    }
+
+
+def tax_view(
+    bundle: Bundle,
+    wallets: Sequence[FinWallet],
+    scenarios: Sequence[FinTaxScenario],
+    company_id: str,
+    start: date,
+    end: date,
+    now: datetime,
+) -> dict[str, Any]:
+    """Kalan net varlık (hesaplar − satıcı cüzdanları − üretici bakiyeleri) ve vergi senaryoları.
+
+    Yüklemeler [start, end] aralığındaki cüzdan kategorisi hareketleridir;
+    ödenen vergi yıl başından bugüne. Bakiyeler güncel (son kur).
+    """
+    fx = bundle.fx
+    today = now.date()
+    year_start = date(today.year, 1, 1)
+    base = tax.tax_base(company_id, bundle.accounts, wallets, bundle.transactions, fx, year_start)
+    own_scenarios = [s for s in scenarios if s.company_id == company_id]
+    main = tax.primary(own_scenarios, company_id)
+    in_range = [t for t in bundle.transactions if t.company_id == company_id and start <= t.booked_at <= end]
+    dep = tax.deposits(in_range, bundle.accounts, fx)
+    accounts = [a for a in bundle.accounts if a.company_id == company_id and a.active]
+    return {
+        "company_id": company_id,
+        "as_of": now,
+        "year": today.year,
+        "start": start,
+        "end": end,
+        "base": {
+            "cash_usd": money(base.cash_usd),
+            "seller_usd": money(base.seller_usd),
+            "producer_usd": money(base.producer_usd),
+            "net_assets_usd": money(base.net_assets),
+            "paid_usd": money(base.paid_usd),
+        },
+        "accounts": [
+            {"id": a.id, "name": a.name, "currency": a.currency, "balance": money(a.current_balance),
+             "balance_usd": money(fx.to_usd(a.current_balance, a.currency)), "balance_at": a.balance_at}
+            for a in sorted(accounts, key=lambda a: (a.sort, a.id or 0))
+        ],
+        "wallets": [
+            {**w.model_dump(), "balance": money(w.balance), "balance_usd": money(fx.to_usd(w.balance, w.currency))}
+            for w in wallets
+            if w.company_id == company_id
+        ],
+        "scenarios": [
+            {**scenario_out(s), "result": result_out(tax.compute(base, s), base), "primary": main is not None and s.id == main.id}
+            for s in own_scenarios
+        ],
+        "deposits": {
+            "usd": money(dep.usd),
+            "count": dep.count,
+            "refunds_usd": money(dep.refunds_usd),
+            "without_ref": dep.without_ref,
+            "customers": len(dep.customers),
+            "channels": [
+                {"account_id": c.account_id, "name": c.name, "usd": money(c.usd), "count": c.count} for c in dep.channels
+            ],
+            "top": [
+                {"ref": c.ref, "name": c.name, "usd": money(c.usd), "count": c.count, "last": c.last}
+                for c in dep.customers[:TOP_CUSTOMERS]
+            ],
+        },
+        **_fx_meta(fx),
     }
 
 

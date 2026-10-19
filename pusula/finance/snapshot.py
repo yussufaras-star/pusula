@@ -28,6 +28,7 @@ from pusula.db.models import (
     FinSnapshot,
     FinSnapshotLine,
     FinTransaction,
+    FinWallet,
 )
 from pusula.finance.fx import FxTable
 
@@ -114,6 +115,9 @@ LONG_PAYABLE = "Uzun vadeli ticari borçlar"
 # Vadesi bu kadar günden uzak kalem uzun vadelidir (bilanço tarihinden 1 yıl).
 LONG_TERM_DAYS = 365
 TAX_CATEGORIES = frozenset({"vergi", "maas"})
+ADVANCES_RECEIVED = "Alınan avanslar"
+ADVANCES_GIVEN = "Verilen avanslar ve peşin giderler"
+OTHER_RECEIVABLE = "Diğer alacaklar"
 # Denklik farkı bundan küçükse yuvarlama sayılır (USD).
 BALANCE_TOLERANCE = Decimal("1")
 OPEN_DECISION_STATUSES = ("aksiyon", "devam", "acik")
@@ -200,6 +204,9 @@ def build_week_lines(
     previous_lines: Iterable[FinSnapshotLine] = (),
     week: date | None = None,
     intercompany: Sequence[tuple[str, str, Decimal]] = (),
+    *,
+    wallets: Iterable[FinWallet] = (),
+    tax_due: Sequence[tuple[str, Decimal]] = (),
 ) -> list[DraftLine]:
     """Yeni hafta satırları.
 
@@ -209,6 +216,9 @@ def build_week_lines(
       Ticari borçlar (vergi/maaş kategorisi → Ödenecek vergi, SGK ve maaş);
       vadesi bilanço tarihinden 1 yıl sonrası uzun vadeli.
     - Şirketler arası net transferler: alacak / borç (USD).
+    - Cüzdanlar: satıcı cüzdanı → Alınan avanslar; üretici bakiyesi →
+      Ticari borçlar (negatifse verilen avans).
+    - Tahmini vergi (USD) → Ödenecek vergi, SGK ve maaş.
     - Önceki haftanın elle girilen satırları kopyalanır; otomatik gelen bir
       satırla aynı bölüm + etiketi taşıyan kopyalanmaz.
     """
@@ -245,6 +255,20 @@ def build_week_lines(
             push("current_assets", IC_RECEIVABLE, label, usd, "USD", "intercompany")
         else:
             push("current_liabilities", IC_PAYABLE, label, -usd, "USD", "intercompany")
+
+    for wallet in wallets:
+        if wallet.company_id != company_id or not wallet.active or wallet.balance == 0:
+            continue
+        seller = wallet.kind == "seller"
+        label = f"{'Satıcı cüzdanı' if seller else 'Üretici'} · {wallet.name}"
+        if wallet.balance > 0:
+            push("current_liabilities", ADVANCES_RECEIVED if seller else TRADE_PAYABLE, label, wallet.balance, wallet.currency, "wallet")
+        else:
+            push("current_assets", OTHER_RECEIVABLE if seller else ADVANCES_GIVEN, label, -wallet.balance, wallet.currency, "wallet")
+
+    for label, usd in tax_due:
+        if usd > 0:
+            push("current_liabilities", TAX_PAYROLL, label, usd, "USD", "tax")
 
     auto = {(line.section, line.label) for line in lines}
     for prev in sorted(previous_lines, key=lambda line: line.sort):

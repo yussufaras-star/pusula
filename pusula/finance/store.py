@@ -27,10 +27,13 @@ from pusula.db.models import (
     FinPlannedItem,
     FinSnapshot,
     FinSnapshotLine,
+    FinTaxScenario,
     FinTransaction,
+    FinWallet,
 )
 from pusula.finance.analytics import OWN_CATEGORY, auto_intercompany, categorize, own_transfers
 from pusula.finance.statement import Parsed
+from pusula.finance.tax import WALLET_CATEGORY, WALLET_COMPANY, is_wallet_deposit
 
 ACCOUNT_COLUMNS = (
     "id, company_id, name, institution, type, currency, provider, provider_account_id,"
@@ -295,6 +298,29 @@ def apply_own_transfers(conn: psycopg.Connection, since: date) -> int:
     return len(rows)
 
 
+def apply_wallet_deposits(conn: psycopg.Connection, since: date | None = None) -> int:
+    """LLC'de 'REX-…' referanslı girişleri satıcı cüzdan yüklemesi yapar; güncellenen sayı.
+
+    Hesap arası ayrımından sonra, kategori kurallarından önce çalışır; SQL
+    koşulu elle düzeltilmiş ve şirketler arası satırı yine korur.
+    """
+    query = f"SELECT {TX_COLUMNS} FROM fin_transactions WHERE company_id = %s AND amount > 0"
+    params: list[object] = [WALLET_COMPANY]
+    if since is not None:
+        query += " AND booked_at >= %s"
+        params.append(since)
+    ids = sorted(t.id for t in (FinTransaction(**r) for r in _rows(conn, query, params)) if is_wallet_deposit(t) and t.id)
+    if not ids:
+        return 0
+    rows = conn.execute(
+        "UPDATE fin_transactions SET category_id = %s, category_rule_id = NULL"
+        " WHERE id = ANY(%s) AND user_edited_at IS NULL AND counterparty_company_id IS NULL"
+        " AND (category_id IS NULL OR category_rule_id IS NOT NULL) RETURNING id",
+        (WALLET_CATEGORY, ids),
+    ).fetchall()
+    return len(rows)
+
+
 def last_fx_date(conn: psycopg.Connection) -> date | None:
     row = conn.execute("SELECT max(date) FROM fin_fx_rates").fetchone()
     return row[0] if row else None
@@ -317,6 +343,11 @@ DECISION_COLUMNS = (
 )
 SNAPSHOT_COLUMNS = "id, company_id, week_date, locked, locked_at, fx, notes, created_at"
 LINE_COLUMNS = "id, snapshot_id, side, section, group_name, label, amount, currency, origin, sort"
+WALLET_COLUMNS = "id, company_id, kind, name, balance, currency, as_of, notes, active, sort, updated_at"
+SCENARIO_COLUMNS = (
+    "id, company_id, name, federal_rate, state_rate, extra_deductions, taxed_base, notes, active, sort,"
+    " created_at"
+)
 
 
 def _rows(conn: psycopg.Connection, query: str, params: Sequence[object] = ()) -> list[dict]:
@@ -384,9 +415,21 @@ def load_row(conn: psycopg.Connection, table: str, row_id: int) -> dict | None:
         "fin_planned_items": PLANNED_COLUMNS,
         "fin_decisions": DECISION_COLUMNS,
         "fin_accounts": ACCOUNT_COLUMNS,
+        "fin_wallets": WALLET_COLUMNS,
+        "fin_tax_scenarios": SCENARIO_COLUMNS,
     }[table]
     rows = _rows(conn, f"SELECT {columns} FROM {table} WHERE id = %s", (row_id,))
     return rows[0] if rows else None
+
+
+def load_wallets(conn: psycopg.Connection) -> list[FinWallet]:
+    rows = _rows(conn, f"SELECT {WALLET_COLUMNS} FROM fin_wallets ORDER BY company_id, kind, sort, name")
+    return [FinWallet(**r) for r in rows]
+
+
+def load_tax_scenarios(conn: psycopg.Connection) -> list[FinTaxScenario]:
+    rows = _rows(conn, f"SELECT {SCENARIO_COLUMNS} FROM fin_tax_scenarios ORDER BY company_id, sort, id")
+    return [FinTaxScenario(**r) for r in rows]
 
 
 def load_snapshot_lines(conn: psycopg.Connection, snapshot_ids: Sequence[int]) -> list[FinSnapshotLine]:
@@ -429,8 +472,19 @@ WRITABLE: dict[str, frozenset[str]] = {
     "fin_transactions": frozenset(
         {"category_id", "counterparty_company_id", "user_edited_at", "category_rule_id"}
     ),
+    "fin_wallets": frozenset(
+        {"company_id", "kind", "name", "balance", "currency", "as_of", "notes", "active", "sort"}
+    ),
+    "fin_tax_scenarios": frozenset(
+        {
+            "company_id", "name", "federal_rate", "state_rate", "extra_deductions", "taxed_base",
+            "notes", "active", "sort",
+        }
+    ),
 }
-DELETABLE = frozenset({"fin_planned_items", "fin_decisions", "fin_snapshots", "fin_snapshot_lines"})
+DELETABLE = frozenset(
+    {"fin_planned_items", "fin_decisions", "fin_snapshots", "fin_snapshot_lines", "fin_wallets", "fin_tax_scenarios"}
+)
 
 
 def _check(table: str, values: dict[str, object]) -> None:

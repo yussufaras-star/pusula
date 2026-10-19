@@ -235,8 +235,10 @@ def run_finance_sync(
             since = now.date() - timedelta(days=(days or FIRST_DAYS)) - OVERLAP
             with connect() as conn:
                 own = store.apply_own_transfers(conn, since)
-                # Önce hesap arası aktarımlar ayrılır, kalanlar kurallarla kategorilenir
-                categorized = store.apply_category_rules(conn, since)
+                # Önce hesap arası aktarımlar, sonra satıcı cüzdan yüklemeleri
+                # ayrılır; kalanlar kurallarla kategorilenir
+                categorized = store.apply_wallet_deposits(conn, since)
+                categorized += store.apply_category_rules(conn, since)
         except Exception as exc:
             logger.warning("hesap arasi / kategori kurali basarisiz (%s)", type(exc).__name__)
         with connect() as conn:

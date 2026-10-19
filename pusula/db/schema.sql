@@ -664,7 +664,8 @@ CREATE TABLE IF NOT EXISTS fin_snapshot_lines (
     amount       numeric(18, 2) NOT NULL DEFAULT 0,
     currency     text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
     -- Satırın kaynağı: hesap bakiyesi, açık planlı kalem, şirketler arası
-    -- net transfer veya elle giriş. Yeni haftaya yalnız 'manual' kopyalanır.
+    -- net transfer, cüzdan bakiyesi, tahmini vergi veya elle giriş. Yeni
+    -- haftaya yalnız 'manual' kopyalanır.
     origin       text NOT NULL DEFAULT 'manual',
     -- Bilanço bölümü; side ile tutarlı (aktif: dönen/duran, pasif: KV/UV/özkaynak).
     section      text,
@@ -676,7 +677,7 @@ CREATE INDEX IF NOT EXISTS idx_fin_snapshot_lines_snapshot ON fin_snapshot_lines
 ALTER TABLE fin_snapshot_lines ADD COLUMN IF NOT EXISTS section text;
 ALTER TABLE fin_snapshot_lines DROP CONSTRAINT IF EXISTS fin_snapshot_lines_origin_check;
 ALTER TABLE fin_snapshot_lines ADD CONSTRAINT fin_snapshot_lines_origin_check
-    CHECK (origin IN ('account', 'planned', 'intercompany', 'manual'));
+    CHECK (origin IN ('account', 'planned', 'intercompany', 'wallet', 'tax', 'manual'));
 ALTER TABLE fin_snapshot_lines DROP CONSTRAINT IF EXISTS fin_snapshot_lines_section_check;
 ALTER TABLE fin_snapshot_lines ADD CONSTRAINT fin_snapshot_lines_section_check
     CHECK (
@@ -824,6 +825,77 @@ FROM (VALUES
 ) AS v(direction, pattern, category_id)
 ON CONFLICT DO NOTHING;
 
+-- LLC: satıcı cüzdanı ve vergi. Satıcılar cüzdanlarına Wise, Mercury ve
+-- Stripe'tan para yükler; açıklamaya 'REX-<müşteri no>' yazarlar. Bu para
+-- gelir değil, satıcıya borçtur. Üreticilere ödenecek tutar da borçtur.
+-- ABD vergisi bu borçlar düşüldükten sonra kalan net varlık üzerinden.
+INSERT INTO fin_categories (id, name, kind, sort) VALUES
+    ('cuzdan',  'Satıcı cüzdan yüklemesi', 'in',  4),
+    ('uretici', 'Üretici ödemesi',         'out',  9)
+ON CONFLICT (id) DO NOTHING;
+
+-- LLC'de Stripe tahsilatı satıcı cüzdan yüklemesidir (genel 'stripe' → satış
+-- kuralından önce gelir: şirkete özel kural).
+INSERT INTO fin_category_rules (company_id, direction, match_type, pattern, category_id, source)
+VALUES ('llc', 'in', 'contains', 'stripe', 'cuzdan', 'system')
+ON CONFLICT DO NOTHING;
+
+-- Geçiş: genel kuralla 'satış' olmuş LLC Stripe tahsilatları ve REX
+-- referanslı girişler yeniden sınıflansın; REX referanslı girişler kendi
+-- hesapları arası aktarım olamaz (yanlış eşleşmeler geri alınır).
+UPDATE fin_transactions SET category_id = NULL, category_rule_id = NULL
+WHERE company_id = 'llc' AND amount > 0 AND user_edited_at IS NULL
+  AND counterparty_company_id IS NULL
+  AND (
+      (category_id = 'satis' AND category_rule_id IS NOT NULL
+       AND (counterparty = 'Stripe' OR description ~* '(^|[^a-z0-9])rex[^a-z0-9]{0,3}[0-9]'))
+      OR (category_id = 'hesap_arasi' AND category_rule_id IS NULL
+          AND description ~* '(^|[^a-z0-9])rex[^a-z0-9]{0,3}[0-9]')
+  );
+
+-- Elle girilen cüzdan bakiyeleri. kind: seller (satıcıların harcanmamış
+-- parası) | producer (üreticiye ödenecek; negatifse verilen avans).
+CREATE TABLE IF NOT EXISTS fin_wallets (
+    id          bigserial PRIMARY KEY,
+    company_id  text NOT NULL REFERENCES fin_companies (id),
+    kind        text NOT NULL CHECK (kind IN ('seller', 'producer')),
+    name        text NOT NULL CHECK (length(name) BETWEEN 1 AND 120),
+    balance     numeric(18, 2) NOT NULL DEFAULT 0,
+    currency    text NOT NULL DEFAULT 'USD' CHECK (currency ~ '^[A-Z]{3}$'),
+    as_of       date NOT NULL DEFAULT current_date,
+    notes       text,
+    active      boolean NOT NULL DEFAULT true,
+    sort        int NOT NULL DEFAULT 0,
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (company_id, kind, name)
+);
+
+DROP TRIGGER IF EXISTS fin_wallets_touch ON fin_wallets;
+CREATE TRIGGER fin_wallets_touch
+    BEFORE UPDATE ON fin_wallets
+    FOR EACH ROW EXECUTE FUNCTION fin_touch_updated_at();
+
+-- Vergi senaryoları. Matrah = hesaplar − satıcı cüzdanları − üretici
+-- bakiyeleri − ek gider − daha önce vergilenmiş birikim (en az 0).
+-- Eyalet vergisi federal matrahtan düşülür. Tutarlar USD.
+CREATE TABLE IF NOT EXISTS fin_tax_scenarios (
+    id                bigserial PRIMARY KEY,
+    company_id        text NOT NULL REFERENCES fin_companies (id),
+    name              text NOT NULL CHECK (length(name) BETWEEN 1 AND 120),
+    federal_rate      numeric(6, 4) NOT NULL DEFAULT 0.21 CHECK (federal_rate BETWEEN 0 AND 1),
+    state_rate        numeric(6, 4) NOT NULL DEFAULT 0 CHECK (state_rate BETWEEN 0 AND 1),
+    extra_deductions  numeric(18, 2) NOT NULL DEFAULT 0,
+    taxed_base        numeric(18, 2) NOT NULL DEFAULT 0,
+    notes             text,
+    active            boolean NOT NULL DEFAULT true,
+    sort              int NOT NULL DEFAULT 0,
+    created_at        timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO fin_tax_scenarios (company_id, name, federal_rate, state_rate, sort)
+SELECT 'llc', 'Federal %21', 0.21, 0, 1
+WHERE NOT EXISTS (SELECT 1 FROM fin_tax_scenarios WHERE company_id = 'llc');
+
 -- RLS açık, politika yok: Supabase anon/authenticated rolleri finans
 -- tablolarını okuyamaz; uygulama tablo sahibi olarak bağlanır.
 DO $$
@@ -832,7 +904,7 @@ BEGIN
     FOREACH t IN ARRAY ARRAY[
         'fin_companies', 'fin_accounts', 'fin_categories', 'fin_transactions', 'fin_fx_rates',
         'fin_planned_items', 'fin_snapshots', 'fin_snapshot_lines', 'fin_decisions',
-        'fin_category_rules'
+        'fin_category_rules', 'fin_wallets', 'fin_tax_scenarios'
     ]
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
