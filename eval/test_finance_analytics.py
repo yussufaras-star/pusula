@@ -491,3 +491,25 @@ def test_statement_account_stale_by_statement_date_not_upload_time() -> None:
     fresh = _account(id=8, provider="csv", last_synced_at=now, balance_at=now - timedelta(days=2))
     alerts = overview_alerts([old_statement, fresh], [], [], _fx(), now)
     assert [a.id for a in alerts.stale] == [7]
+
+
+def test_card_purchase_and_ach_beneficiary_are_not_transfers() -> None:
+    """Kart harcaması aktarım değildir; Mercury ACH açıklamasındaki alıcı adı kanıt sayılmaz."""
+    from pusula.finance.analytics import own_transfers
+
+    accounts = [
+        _account(id=1, name="Mercury ••4259"),
+        _account(id=6, name="Mercury ••6808"),
+        _account(id=15, name="Mercury IO kart", type="card", provider="mercury", credential_key="LLC"),
+    ]
+    stamps = _tx("llc", date(2026, 9, 18), "-2000", account_id=15, description="STAMPS.COM", counterparty="Stamps.com")
+    customer = _tx("llc", date(2026, 9, 18), "2000", account_id=1, description="GZ ART LLC; MERCURYACH; Rexven LLC",
+                   counterparty="GZ ART LLC")
+    supplier = _tx("llc", date(2026, 9, 20), "-700", account_id=6, counterparty="Zanaart LLC")
+    deposit = _tx("llc", date(2026, 9, 20), "700", account_id=1, description="ZENVIA LLC; MERCURYACH; REXVEN LLC",
+                  counterparty="ZENVIA LLC")
+    # kart borcu ödemesi: banka çıkışı + kart girişi, kart tarafı banka hesabının son 4 hanesini gösterir
+    pay_out = _tx("llc", date(2026, 10, 1), "-5000", account_id=6, counterparty="Mercury Credit")
+    pay_in = _tx("llc", date(2026, 10, 1), "5000", account_id=15, counterparty="Mercury Checking ••6808")
+    marked = own_transfers([stamps, customer, supplier, deposit, pay_out, pay_in], accounts, COMPANIES)
+    assert marked == {pay_out.id, pay_in.id}

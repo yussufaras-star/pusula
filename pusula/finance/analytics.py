@@ -144,7 +144,8 @@ def own_transfers(
     (son 4 hane ya da farklı kurumsa kurum adı, ör. Wise'ta 'STRIPE') veya
     metinde şirketin kendi adı geçer.
     Ödeme altyapısı hesabında (Stripe vb.) yalnız 'payout' aktarım olabilir;
-    satış, iade, chargeback asla. Satıcı cüzdan yüklemesi ('REX-…') asla.
+    satış, iade, chargeback asla. Satıcı cüzdan yüklemesi ('REX-…') ve kart
+    harcaması asla. Şirket adı kanıtı yalnız karşı taraf alanından.
     Şirketler arası işaretli veya kullanıcının
     düzelttiği hareket aday değildir; kuralla verilmiş kategori ise aktarım
     çıkarsa değişebilir.
@@ -172,6 +173,9 @@ def own_transfers(
             # Satıcının 'REX-…' referanslı cüzdan yüklemesi; tutarı tesadüfen tutsa da aktarım değil
             return False
         account = by_id.get(tx.account_id)
+        if account is not None and account.type == "card" and tx.amount < 0:
+            # Kart çıkışı alışveriştir; kart hesabına yalnız ödeme (giriş) aktarım olabilir
+            return False
         if account is not None and account.type == "payment":
             return "payout" in rule_key(text_of(tx))
         return True
@@ -197,7 +201,9 @@ def own_transfers(
         return re.search(r"(?<![a-z0-9])" + re.escape(institution) + r"(?![a-z0-9])", rule_key(text_of(tx))) is not None
 
     def own_name(tx: FinTransaction) -> bool:
-        folded = fold_text(text_of(tx))
+        # Yalnız karşı taraf: Mercury ACH girişinin açıklamasında alıcı olarak
+        # şirketin adı geçer ('X LLC; MERCURYACH; Rexven LLC'), bu kanıt değildir.
+        folded = fold_text(tx.counterparty or tx.description)
         return any(rx.match(folded) for rx in own_patterns.get(tx.company_id, []))
 
     pool = [t for t in txs if candidate(t)]
