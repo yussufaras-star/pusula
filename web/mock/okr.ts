@@ -16,6 +16,8 @@ function kr(id: number, objective_id: number, p: Partial<OkrKeyResult>): OkrKeyR
     target_value: 1,
     owner_rep_id: null,
     owner_name: null,
+    phasing: null,
+    note: null,
     sort: id,
     source: "otomatik",
     current: null,

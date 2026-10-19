@@ -582,8 +582,11 @@ export interface OkrKeyResult {
   target_value: number;
   owner_rep_id: string | null;
   owner_name: string | null;
+  phasing: number[] | null;
   sort: number;
-  source: "otomatik" | "elle";
+  // yedek: otomatik ölçüm bu dönemde yok, son check-in değeri kullanılıyor.
+  source: "otomatik" | "elle" | "yedek";
+  note: string | null;
   current: number | null;
   progress: number | null;
   score: number | null;

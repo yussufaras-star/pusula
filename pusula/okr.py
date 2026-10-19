@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Iterable
 
+from psycopg.types.json import Json
+
 from pusula.config import get_org_id
 from pusula.panel_data import connect
 
@@ -54,6 +56,7 @@ class Metric:
 METRICS: dict[str, Metric] = {
     "ciro": Metric("Ciro", "tl", True),
     "satis": Metric("Satış adedi", "adet", True),
+    "atanan": Metric("Atanan lead (contact)", "adet", True),
     "arama": Metric("Arama", "adet", True),
     "ulasilan": Metric("Ulaşılan", "adet", True),
     "randevu": Metric("Toplantı", "adet", True),
@@ -94,6 +97,34 @@ def elapsed_share(first: date, last: date, today: date) -> float:
         return 1.0
     total = (last - first).days + 1
     return round(((today - first).days + 0.5) / total, 4)
+
+
+def _next_month(day: date) -> date:
+    return date(day.year + 1, 1, 1) if day.month == 12 else date(day.year, day.month + 1, 1)
+
+
+def phased_share(first: date, last: date, today: date, weights: list[float] | None) -> float:
+    """Aylık plan dağılımına göre geçen pay. weights dönemin her ayı için bir
+    değerdir (ör. aylık ciro hedefi); uymazsa takvim günü oranına düşer."""
+    months = []
+    day = first
+    while day <= last:
+        months.append(day)
+        day = _next_month(day)
+    if not weights or len(weights) != len(months) or sum(weights) <= 0:
+        return elapsed_share(first, last, today)
+    if today < first:
+        return 0.0
+    if today > last:
+        return 1.0
+    done = 0.0
+    for month, weight in zip(months, weights):
+        month_last = _next_month(month) - timedelta(days=1)
+        if today > month_last:
+            done += weight
+        elif today >= month:
+            done += weight * ((today - month).days + 0.5) / ((month_last - month).days + 1)
+    return round(done / sum(weights), 4)
 
 
 def period_state(first: date, last: date, today: date) -> str:
@@ -183,19 +214,36 @@ def kr_view(
     share: float,
     state: str,
     today: date,
+    first: date | None = None,
+    last: date | None = None,
+    override: float | None = None,
+    note: str | None = None,
 ) -> dict[str, Any]:
-    """Anahtar sonucun panodaki hâli. checkins yeniden eskiye sıralı."""
+    """Anahtar sonucun panodaki hâli. checkins yeniden eskiye sıralı.
+
+    Otomatik ölçülen sonuçta veri yoksa (ör. CRM taşıma öncesi) son check-in
+    değeri kullanılır (source 'yedek'). override yıllık toplam gibi dışarıda
+    hesaplanan değerdir.
+    """
     metric = METRICS.get(kr.get("metric") or "")
     start = float(kr["start_value"] or 0)
     target = float(kr["target_value"])
     direction = metric.direction if metric else (kr.get("direction") or "up")
-    if metric:
+    manual = next((c for c in checkins if c.get("value") is not None), None)
+    if override is not None:
+        source, current = "otomatik", override
+    elif metric:
         source = "otomatik"
         current = _num((values or {}).get(kr["metric"])) if state != "gelecek" else None
+        if current is None and state != "gelecek":
+            source = "yedek"
+            current = _num(manual["value"]) if manual else None
     else:
         source = "elle"
-        manual = next((c for c in checkins if c.get("value") is not None), None)
         current = _num(manual["value"]) if manual else None
+    phasing = kr.get("phasing")
+    if phasing and first is not None and last is not None:
+        share = phased_share(first, last, today, [float(w) for w in phasing])
     progress = kr_progress(start, target, current, direction)
     status, expected = kr_status(
         progress,
@@ -221,6 +269,7 @@ def kr_view(
         "unit": metric.unit if metric else kr.get("unit") or "sayi",
         "metric_label": metric.label if metric else None,
         "source": source,
+        "note": note,
         "current": current,
         "progress": progress,
         "score": None if progress is None else round(progress, 2),
@@ -230,6 +279,58 @@ def kr_view(
         "checkin_due": stale,
         "checkins": checkins[:6],
     }
+
+
+MONTHS_TR = (
+    "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+    "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık",
+)
+
+
+def tr_day(day: date) -> str:
+    return f"{day.day} {MONTHS_TR[day.month - 1]}"
+
+
+ROLLUP_METRICS = ("ciro", "satis", "atanan")
+
+
+def annual_rollup(
+    *,
+    objectives: list[dict[str, Any]],
+    krs: list[dict[str, Any]],
+    checkins: list[dict[str, Any]],
+    quarter_values: dict[int, dict[str, float | None]],
+) -> dict[str, tuple[float, list[int]]]:
+    """Yıllık ekip ciro/satış/lead'i = başlamış çeyreklerin toplamı.
+
+    Çeyreğin değeri otomatik ölçümdür; ölçüm yoksa o çeyrekteki aynı
+    metrikli ekip anahtar sonucunun son check-in değeridir. İkisi de yoksa
+    çeyrek eksik sayılır. quarter_values yalnız başlamış çeyrekleri taşır.
+    """
+    quarter_of = {o["id"]: o["quarter"] for o in objectives if o["owner"] == TEAM and o["quarter"]}
+    latest = sorted(checkins, key=lambda c: str(c["created_at"]), reverse=True)
+    manual: dict[tuple[int, str], float] = {}
+    for kr in krs:
+        q = quarter_of.get(kr["objective_id"])
+        metric = kr.get("metric")
+        if q is None or metric not in ROLLUP_METRICS or (q, metric) in manual:
+            continue
+        value = next((c["value"] for c in latest if c["kr_id"] == kr["id"] and c.get("value") is not None), None)
+        if value is not None:
+            manual[(q, metric)] = float(value)
+    out: dict[str, tuple[float, list[int]]] = {}
+    for metric in ROLLUP_METRICS:
+        total, missing = 0.0, []
+        for q in sorted(quarter_values):
+            value = quarter_values[q].get(metric)
+            if value is None:
+                value = manual.get((q, metric))
+            if value is None:
+                missing.append(q)
+            else:
+                total += float(value)
+        out[metric] = (round(total, 2), missing)
+    return out
 
 
 def rule_warnings(objectives: list[dict[str, Any]], names: dict[str, str]) -> list[str]:
@@ -262,11 +363,15 @@ def build_board(
     values: dict[str, dict[str, Any]],
     names: dict[str, str],
     today: date,
+    coverage: dict[str, date] | None = None,
+    rollups: dict[str, tuple[float, list[int]]] | None = None,
 ) -> dict[str, Any]:
     """Saf: yılın tüm satırlarından seçili dönemin panosu.
 
     objectives yılın tamamıdır (hizalama için yıllık hedefler gerekir);
-    values sahip → sales_report satırı ('team' ekip toplamı).
+    values sahip → sales_report satırı ('team' ekip toplamı). coverage:
+    metrik → ölçümün başladığı gün (dönem başından sonraysa not düşülür).
+    rollups: yıllık ekip sonucu için metrik → (çeyrek toplamı, eksik çeyrekler).
     """
     first, last = period_bounds(year, quarter)
     share = elapsed_share(first, last, today)
@@ -284,18 +389,33 @@ def build_board(
         if obj["quarter"] != quarter:
             continue
         kind = obj.get("kind") or "taahhut"
-        views = [
-            kr_view(
-                kr,
-                kind=kind,
-                checkins=by_kr.get(kr["id"], []),
-                values=values.get(obj["owner"]),
-                share=share,
-                state=state,
-                today=today,
+        views = []
+        for kr in by_obj.get(obj["id"], []):
+            override, note = None, None
+            metric = kr.get("metric")
+            if rollups and obj["owner"] == TEAM and metric in rollups:
+                override, missing = rollups[metric]
+                note = "Çeyreklerin toplamı"
+                if missing:
+                    quarters = ", ".join(f"Ç{q}" for q in missing)
+                    note += f"; {quarters} eksik — o çeyreğin sonucuna check-in ile gir"
+            elif metric and coverage and coverage.get(metric) and coverage[metric] > first:
+                note = f"{tr_day(coverage[metric])} tarihinden beri ölçülüyor"
+            views.append(
+                kr_view(
+                    kr,
+                    kind=kind,
+                    checkins=by_kr.get(kr["id"], []),
+                    values=values.get(obj["owner"]),
+                    share=share,
+                    state=state,
+                    today=today,
+                    first=first,
+                    last=last,
+                    override=override,
+                    note=note,
+                )
             )
-            for kr in by_obj.get(obj["id"], [])
-        ]
         for view in views:
             view["owner_name"] = names.get(view.get("owner_rep_id") or "")
         score = objective_score(v["score"] for v in views)
@@ -396,9 +516,11 @@ CREATE TABLE IF NOT EXISTS okr_key_results (
     start_value   numeric(18, 2) NOT NULL DEFAULT 0,
     target_value  numeric(18, 2) NOT NULL,
     owner_rep_id  text,
+    phasing       jsonb,
     sort          int NOT NULL DEFAULT 0,
     created_at    timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE okr_key_results ADD COLUMN IF NOT EXISTS phasing jsonb;
 CREATE INDEX IF NOT EXISTS okr_key_results_obj ON okr_key_results (objective_id);
 CREATE TABLE IF NOT EXISTS okr_checkins (
     id          bigserial PRIMARY KEY,
@@ -433,7 +555,7 @@ OBJECTIVE_FIELDS = (
 )
 KR_FIELDS = (
     "objective_id", "title", "metric", "unit", "direction", "start_value",
-    "target_value", "owner_rep_id", "sort",
+    "target_value", "owner_rep_id", "phasing", "sort",
 )
 
 
@@ -522,13 +644,17 @@ def kr_row(kr_id: int) -> dict[str, Any] | None:
     return rows[0] if rows else None
 
 
+def _adapt(value: Any) -> Any:
+    return Json(value) if isinstance(value, (list, dict)) else value
+
+
 def insert(table: str, values: dict[str, Any]) -> int:
     cols = list(values)
     with connect() as conn:
         conn.execute(SCHEMA_SQL)
         row = conn.execute(
             f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))}) RETURNING id",
-            [values[c] for c in cols],
+            [_adapt(values[c]) for c in cols],
         ).fetchone()
     return int(row[0])
 
@@ -540,7 +666,8 @@ def update(table: str, row_id: int, values: dict[str, Any]) -> None:
     if table == "okr_objectives":
         sets += ", updated_at = now()"
     with connect() as conn:
-        conn.execute(f"UPDATE {table} SET {sets} WHERE id = %s", [*values.values(), row_id])
+        conn.execute(SCHEMA_SQL)  # eski kurulumda phasing sütunu eklenir
+        conn.execute(f"UPDATE {table} SET {sets} WHERE id = %s", [*map(_adapt, values.values()), row_id])
 
 
 def delete(table: str, row_id: int) -> None:
@@ -576,10 +703,11 @@ def seed_year(year: int, template: list[dict[str, Any]], *, by: str) -> int:
             for kr_sort, kr in enumerate(obj["krs"]):
                 conn.execute(
                     "INSERT INTO okr_key_results (objective_id, title, metric, unit, direction, start_value, "
-                    "target_value, sort) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    "target_value, phasing, sort) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         obj_id, kr["title"], kr.get("metric"), kr.get("unit", "sayi"),
-                        kr.get("direction", "up"), kr.get("start", 0), kr["target"], kr_sort,
+                        kr.get("direction", "up"), kr.get("start", 0), kr["target"],
+                        _adapt(kr.get("phasing")), kr_sort,
                     ),
                 )
             n += 1

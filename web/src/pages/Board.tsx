@@ -423,9 +423,15 @@ function KrRow({
         <div className="okr-kr-title">
           <span>{kr.title}</span>
           <span className="okr-src">
-            {kr.source === "otomatik" ? `otomatik · ${kr.metric_label}` : "elle · check-in ile"}
+            {kr.source === "otomatik"
+              ? `otomatik · ${kr.metric_label}`
+              : kr.source === "yedek"
+                ? `${kr.metric_label} · bu dönem ölçülmedi, check-in ile gir`
+                : "elle · check-in ile"}
+            {kr.phasing ? " · aylık plana göre tempo" : ""}
             {kr.owner_name ? ` · sorumlu ${kr.owner_name}` : ""}
           </span>
+          {kr.note ? <span className="okr-src">{kr.note}</span> : null}
         </div>
         <div className="okr-kr-score">
           <b className={`okr-grade ${tone}`}>{grade(kr.score)}</b>
@@ -853,6 +859,7 @@ function KrForm({
       start_value: Number(f.start_value || 0),
       target_value: Number(f.target_value),
       owner_rep_id: isTeam ? f.owner_rep_id || null : null,
+      phasing: kr?.phasing ?? null,
       sort: kr?.sort ?? objective.krs.length,
     };
     void run(kr ? `/api/okr/key-results/${kr.id}` : "/api/okr/key-results", kr ? "PATCH" : "POST", body);
@@ -924,7 +931,8 @@ function KrForm({
 }
 
 function CheckinForm({ kr, onClose, onSaved }: { kr: OkrKeyResult; onClose: () => void; onSaved: () => void }) {
-  const manual = kr.source === "elle";
+  // Otomatik ölçülen sonuçta değer girilmez; ölçüm yoksa (yedek) gerçekleşen elle girilir.
+  const manual = kr.source !== "otomatik";
   const [value, setValue] = useState(manual && kr.current !== null ? String(kr.current) : "");
   const [confidence, setConfidence] = useState(kr.confidence ?? 7);
   const [note, setNote] = useState("");

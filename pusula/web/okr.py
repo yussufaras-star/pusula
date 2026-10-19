@@ -9,7 +9,7 @@ yapar, takdir ve kendi konuşma notunu ekler.
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,11 +18,12 @@ from pydantic import BaseModel, Field
 
 from pusula import okr
 from pusula.live import data_as_of
-from pusula.metrics import TZ
+from pusula.metrics import TZ, Span
 from pusula.okr_template import template_for
 from pusula.panel_auth import AuthUser
 from pusula.panel_data import load_reps
-from pusula.sales_report import REPORT_START, build_sales_report
+from pusula.panel_ciro import REAL_SALES_START
+from pusula.sales_report import REPORT_START, _assigned, build_sales_report, won_by_rep
 from pusula.web import cache
 from pusula.web.auth import admin_user, current_user
 
@@ -55,6 +56,8 @@ class KeyResultBody(BaseModel):
     start_value: float = 0
     target_value: float
     owner_rep_id: str | None = None
+    # Dönemin her ayı için plan değeri; tempo bu dağılıma göre beklenir.
+    phasing: list[float] | None = Field(default=None, max_length=12)
     sort: int = 0
 
 
@@ -94,23 +97,105 @@ def _can_write_owner(user: AuthUser, owner: str) -> bool:
     return user.role == "admin" or (owner != okr.TEAM and owner == user.rep_id)
 
 
-def period_values(year: int, quarter: int, now: datetime) -> dict[str, dict[str, Any]]:
-    """Sahip → dönemin sales_report satırı. Rapor önbelleği /api/sales-report ile ortaktır."""
+SALES_KEYS = ("ciro", "satis", "ort_satis", "atanan")
+# Yönetici kararı (19 Ekim): OKR'da ekip cirosu ve satışı tüm şirkettir
+# (yönetim ve diğer sahipler, ayrılanlar dahil); Ç1 2026 CRM rakamı sayılır.
+# Lead ataması Nisan 2026'dan önce eksiktir; o dönem check-in ile girilir.
+OKR_SALES_START = date(2026, 1, 1)
+LEAD_START = REAL_SALES_START
+
+
+def sales_values(first: date, end: date, now: datetime) -> tuple[dict[str, dict[str, Any]], dict[str, date]]:
+    """(sahip → ciro, satış, ort. satış, atanan lead; metrik → ölçüm başı).
+
+    Ekip satırı tüm kazanılan deal'ler ve tüm atanan lead'lerdir; temsilci
+    satırı kendi deal ve lead'leri. Ucuz sorgular.
+    """
+    today = now.date()
+    sales_first = max(first, OKR_SALES_START)
+    lead_first = max(first, LEAD_START)
+
+    def build() -> tuple[dict[str, dict[str, Any]], dict[str, date]]:
+        won = won_by_rep(sales_first, end) if end >= sales_first else None
+        assigned = _assigned(Span.days(lead_first, end)) if end >= lead_first else None
+        out: dict[str, dict[str, Any]] = {}
+        coverage: dict[str, date] = {}
+        owners = {r.rep_id for r in load_reps()}
+        for owner in [*owners, okr.TEAM]:
+            row: dict[str, Any] = {}
+            if won is not None:
+                if owner == okr.TEAM:
+                    row["ciro"] = sum(float(v["ciro"]) for v in won.values())
+                    row["satis"] = sum(int(v["satis"]) for v in won.values())
+                else:
+                    row["ciro"] = float((won.get(owner) or {}).get("ciro") or 0)
+                    row["satis"] = int((won.get(owner) or {}).get("satis") or 0)
+                row["ort_satis"] = round(row["ciro"] / row["satis"], 2) if row["satis"] else None
+            if assigned is not None:
+                row["atanan"] = sum(assigned.values()) if owner == okr.TEAM else assigned.get(owner, 0)
+            out[owner] = row
+        if won is not None:
+            coverage.update({"ciro": sales_first, "satis": sales_first, "ort_satis": sales_first})
+        if assigned is not None:
+            coverage["atanan"] = lead_first
+        return out, coverage
+
+    return cache.cached(
+        ("okr-sales", first.isoformat(), end.isoformat(), today.isoformat(), data_as_of()),
+        REPORT_TTL if end >= today else HISTORY_TTL,
+        build,
+    )
+
+
+def period_values(year: int, quarter: int, now: datetime) -> tuple[dict[str, dict[str, Any]], dict[str, date]]:
+    """(sahip → dönem değerleri, metrik → ölçümün başladığı gün).
+
+    Faaliyet ve oranlar sales_report'tan (REPORT_START'tan beri; önbellek
+    /api/sales-report ile ortak). Ciro, satış ve lead sales_values'tan.
+    Kapsam dışı dönemde değer yoktur; pano o zaman check-in değerini kullanır.
+    """
     today = now.date()
     first, last = okr.period_bounds(year, quarter)
-    first = max(first, REPORT_START)
     end = min(last, today)
-    if end < first:
-        return {}
-    as_of = data_as_of()
-    report = cache.cached(
-        ("sales-report", first.isoformat(), end.isoformat(), today.isoformat(), as_of),
-        REPORT_TTL if end >= today else HISTORY_TTL,
-        lambda: jsonable_encoder(build_sales_report(first, end, now)),
-    )
-    out = {okr.TEAM: report["team"]}
-    for row in report["reps"]:
-        out[str(row["rep_id"])] = row
+    values: dict[str, dict[str, Any]] = {}
+    coverage: dict[str, date] = {}
+    act_first = max(first, REPORT_START)
+    if end >= act_first:
+        as_of = data_as_of()
+        report = cache.cached(
+            ("sales-report", act_first.isoformat(), end.isoformat(), today.isoformat(), as_of),
+            REPORT_TTL if end >= today else HISTORY_TTL,
+            lambda: jsonable_encoder(build_sales_report(act_first, end, now)),
+        )
+        values[okr.TEAM] = dict(report["team"])
+        for row in report["reps"]:
+            values[str(row["rep_id"])] = dict(row)
+        coverage = {key: act_first for key in okr.METRICS if key not in SALES_KEYS}
+    for row in values.values():
+        for key in SALES_KEYS:
+            row.pop(key, None)
+    if end >= first:
+        sales, sales_cov = sales_values(first, end, now)
+        for owner, row in sales.items():
+            values.setdefault(owner, {}).update(row)
+        coverage.update(sales_cov)
+    return values, coverage
+
+
+def quarter_totals(year: int, now: datetime) -> dict[int, dict[str, float | None]]:
+    """Başlamış çeyreklerin ekip ciro/satış/lead'i. Ölçüm çeyreği baştan
+    kapsamıyorsa None (yıllık toplam o çeyrekte check-in değerini kullanır)."""
+    today = now.date()
+    out: dict[int, dict[str, float | None]] = {}
+    for q in range(1, 5):
+        first, last = okr.period_bounds(year, q)
+        if first > today:
+            continue
+        team, coverage = sales_values(first, min(last, today), now)
+        out[q] = {
+            key: team[okr.TEAM].get(key) if coverage.get(key) == first else None
+            for key in okr.ROLLUP_METRICS
+        }
     return out
 
 
@@ -134,7 +219,15 @@ def board(year: int | None = None, quarter: int | None = None, user: AuthUser = 
     names = {r.rep_id: r.full_name for r in reps}
     in_period = {o["id"] for o in objectives if o["quarter"] == quarter}
     needs_values = any(k.get("metric") and k["objective_id"] in in_period for k in krs)
-    values = period_values(year, quarter, now) if needs_values else {}
+    values, coverage = period_values(year, quarter, now) if needs_values else ({}, {})
+    rollups = None
+    if quarter == 0 and needs_values:
+        rollups = okr.annual_rollup(
+            objectives=objectives,
+            krs=krs,
+            checkins=checkins,
+            quarter_values=quarter_totals(year, now),
+        )
     payload = okr.build_board(
         year=year,
         quarter=quarter,
@@ -144,6 +237,8 @@ def board(year: int | None = None, quarter: int | None = None, user: AuthUser = 
         values=values,
         names=names,
         today=today,
+        coverage=coverage,
+        rollups=rollups,
     )
     payload["cfr"] = [
         {**c, "rep_name": names.get(c.get("rep_id") or "")}
