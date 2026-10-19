@@ -453,6 +453,14 @@ def snapshot_summary(week: str, company: str = views.ALL) -> Any:
     return {"text": text}
 
 
+@router.get("/recurring")
+def recurring_payments(company: str = views.ALL, start: str | None = None, end: str | None = None) -> Any:
+    first, last = date_range(start, end, _now().date())
+    with connect() as conn:
+        bundle = _bundle(conn, first, last)
+    return jsonable_encoder(views.recurring_view(bundle, _scope(company, bundle.companies), first, last))
+
+
 @router.get("/tax")
 def tax_screen(company: str = "llc", start: str | None = None, end: str | None = None) -> Any:
     """Cüzdanlar + kalan net varlık + vergi senaryoları (tek şirket)."""

@@ -821,7 +821,14 @@ FROM (VALUES
     ('out', 'bank fee', 'banka'), ('out', 'komisyon', 'banka'), ('out', 'commission', 'banka'),
     ('out', 'law ', 'danismanlik'), ('out', 'legal', 'danismanlik'), ('out', 'hukuk', 'danismanlik'),
     ('out', 'avukat', 'danismanlik'), ('out', 'consult', 'danismanlik'), ('out', 'muhasebe', 'danismanlik'),
-    ('out', 'accounting', 'danismanlik'), ('out', 'cpa ', 'danismanlik'), ('out', 'noter', 'danismanlik')
+    ('out', 'accounting', 'danismanlik'), ('out', 'cpa ', 'danismanlik'), ('out', 'noter', 'danismanlik'),
+    -- Mercury IO kart satıcıları
+    ('out', 'stamps.com', 'kargo'), ('out', 'shipstation', 'kargo'), ('out', 'auctane', 'kargo'),
+    ('out', '17track', 'kargo'), ('out', '17returns', 'kargo'), ('out', 'nestshipper', 'kargo'),
+    ('out', 'shiphunt', 'kargo'), ('out', 'runpod', 'yazilim'), ('out', 'oxylabs', 'yazilim'),
+    ('out', 'erank', 'yazilim'), ('out', 'imyfone', 'yazilim'), ('out', 'manychat', 'yazilim'),
+    ('out', 'openrouter', 'yazilim'), ('out', 'google cloud', 'yazilim'), ('out', 'x corp', 'reklam'),
+    ('out', 'intl. transaction fee', 'banka'), ('in', 'mercury io cashback', 'diger_gir')
 ) AS v(direction, pattern, category_id)
 ON CONFLICT DO NOTHING;
 
@@ -926,6 +933,14 @@ CREATE TABLE IF NOT EXISTS fin_tax_settings (
 
 -- Geçiş: ilk sürümün oran senaryoları (varlık üzerinden) kaldırıldı.
 DROP TABLE IF EXISTS fin_tax_scenarios;
+
+-- Geçiş: Wise'ta iptal edilen giden transferin iade bacağı ayrı kimlik alır
+-- (referans + ':iade'); eskiden çıkış bacağı aynı referansa takılıp kayboluyordu.
+-- Yeniden senkron eksik çıkış bacaklarını ekler.
+UPDATE fin_transactions t SET external_id = t.external_id || ':iade'
+FROM fin_accounts a
+WHERE a.id = t.account_id AND a.provider = 'wise' AND t.amount > 0
+  AND t.description LIKE 'Sent money to %' AND t.external_id NOT LIKE '%:iade';
 
 -- RLS açık, politika yok: Supabase anon/authenticated rolleri finans
 -- tablolarını okuyamaz; uygulama tablo sahibi olarak bağlanır.

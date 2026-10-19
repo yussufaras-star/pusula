@@ -31,6 +31,8 @@ from pusula.finance.providers.base import (
 BASE = "https://api.wise.com"
 SCA_WARNING = "Wise: hareketler için SCA gerekli, yalnız bakiye güncellendi"
 
+# Giden transferin iade bacağı: referans + bu ek (çıkış bacağı referansın kendisi).
+REFUND_SUFFIX = ":iade"
 
 def fetch(account: FinAccount, since: datetime, client: httpx.Client) -> AdapterResult:
     token = provider_secret(account, "WISE_TOKEN", "WISE_API_TOKEN")
@@ -82,11 +84,17 @@ def fetch(account: FinAccount, since: datetime, client: httpx.Client) -> Adapter
             or (details.get("recipient") or {}).get("name")
             or (details.get("merchant") or {}).get("name")
         )
+        value = num(amount["value"])  # işaretli
+        external_id = str(row["referenceNumber"])
+        if value > 0 and details.get("recipient"):
+            # Giden transferin iadesi (iptal / geri dönüş): Wise aynı referansı
+            # verir; ayrı kimlik yoksa çıkış ya da iade bacağı tekil kısıta takılır.
+            external_id += REFUND_SUFFIX
         txs.append(
             NormTx(
-                external_id=str(row["referenceNumber"]),
+                external_id=external_id,
                 booked_at=local_day(row["date"]),
-                amount=num(amount["value"]),  # işaretli
+                amount=value,
                 description=details.get("description") or counterparty or details.get("type") or "",
                 counterparty=counterparty,
                 currency=amount.get("currency"),

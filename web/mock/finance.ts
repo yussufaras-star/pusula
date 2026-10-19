@@ -42,6 +42,10 @@ const CATEGORIES: Category[] = [
   ["diger_cik", "Diğer çıkış", "out", 18],
   ["ic_transfer", "Şirketler arası transfer", "transfer", 20],
   ["hesap_arasi", "Kendi hesapları arası", "transfer", 21],
+  ["cuzdan", "Satıcı cüzdan yüklemesi", "in", 4],
+  ["uretici", "Üretici ödemesi", "out", 9],
+  ["ortak", "Ortak ödemesi (guaranteed payment)", "out", 12],
+  ["yuklenici", "Yüklenici (contractor)", "out", 12],
 ].map(([id, name, kind, sort]) => ({ id, name, kind, sort }) as Category);
 const KIND = Object.fromEntries(CATEGORIES.map((c) => [c.id, c.kind]));
 
@@ -605,6 +609,37 @@ export function mockFinance(method: string, url: string): unknown {
         { id: 4, company_id: "tr", direction: "out", match_type: "exact", pattern: "pos komisyon", category_id: "banka", source: "user", label: "POS komisyon", matched: 41 },
       ],
     };
+  }
+
+  if (path === "/api/finance/recurring") {
+    const [start, end] = range(q);
+    const it = (key: string, label: string, category_id: string | null, cadence: string, count: number, median: number, monthly: number, last: string, extra: Partial<{ rising: boolean; stopped: boolean; accounts: string[] }> = {}) => ({
+      key, label, category_id, company_id: "llc", accounts: extra.accounts ?? ["Wise USD"], count, months: 3, cadence, total_usd: r2(monthly * 3), median_usd: median, last_usd: extra.rising ? r2(median * 1.4) : median,
+      monthly_usd: monthly, yearly_usd: r2(monthly * 12), first: addDays(TODAY, -88), last, next_due: cadence === "düzensiz" ? null : addDays(last, cadence === "aylık" ? 30 : 14), rising: !!extra.rising, stopped: !!extra.stopped,
+    });
+    const items = [
+      it("aspol print inc", "ASPOL PRINT INC", "tedarikci", "iki haftalık", 6, 155_567, 315_899, addDays(TODAY, -12)),
+      it("atolye llc", "Atolye LLC", "tedarikci", "iki haftalık", 5, 86_187, 126_343, addDays(TODAY, -9)),
+      it("stamps.com", "Stamps.com", "kargo", "sık", 53, 1_000, 23_333, addDays(TODAY, -1), { accounts: ["Mercury IO kart"] }),
+      it("shipstation", "Shipstation", "kargo", "sık", 36, 600, 7_203, addDays(TODAY, -2), { accounts: ["Mercury IO kart"] }),
+      it("muhammet ibrahim guzelsoy", "muhammet ibrahim güzelsoy", "ortak", "aylık", 3, 6_258, 6_238, addDays(TODAY, -20)),
+      it("zoho corporation", "Zoho Corporation", "yazilim", "aylık", 3, 4_499, 4_499, addDays(TODAY, -6), { accounts: ["Mercury IO kart"], rising: true }),
+      it("zafer karakaya", "zafer karakaya", "yuklenici", "aylık", 3, 3_704, 4_052, addDays(TODAY, -20)),
+      it("google cloud", "Google Cloud", "yazilim", "aylık", 3, 1_068, 1_068, addDays(TODAY, -4), { accounts: ["Mercury IO kart"] }),
+      it("runpod", "RunPod", "yazilim", "sık", 32, 50, 685, addDays(TODAY, 0), { accounts: ["Mercury IO kart"] }),
+      it("openai", "OpenAI", "yazilim", "aylık", 4, 254, 339, addDays(TODAY, -11), { accounts: ["Mercury IO kart"] }),
+      it("x corp advertising", "X Corp Advertising", "reklam", "düzensiz", 3, 96, 96, addDays(TODAY, -1), { accounts: ["Mercury IO kart"] }),
+      it("my future education ltd", "My Future Education Ltd", null, "aylık", 3, 383, 186, addDays(TODAY, -45), { stopped: true }),
+    ];
+    const groups = new Map<string, { id: string; name: string; monthly_usd: number; count: number }>();
+    for (const i of items) {
+      const id = i.category_id ?? "_none";
+      const g = groups.get(id) ?? { id, name: CATEGORIES.find((c) => c.id === i.category_id)?.name ?? "Kategorisiz", monthly_usd: 0, count: 0 };
+      g.monthly_usd = r2(g.monthly_usd + i.monthly_usd);
+      g.count += 1;
+      groups.set(id, g);
+    }
+    return { start, end, monthly_usd: r2(items.reduce((s, i) => s + i.monthly_usd, 0)), groups: [...groups.values()].sort((a, b) => b.monthly_usd - a.monthly_usd), items, ...FX };
   }
 
   if (path === "/api/finance/tax") {

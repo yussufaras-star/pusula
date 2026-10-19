@@ -378,3 +378,34 @@ export interface TaxPayload extends FxMeta {
     top: { ref: string; name: string; usd: number; count: number; last: string | null }[];
   };
 }
+
+// --- düzenli ödemeler (/api/finance/recurring) ---
+
+export interface RecurringItem {
+  key: string;
+  label: string;
+  category_id: string | null;
+  company_id: CompanyId | null;
+  accounts: string[];
+  count: number;
+  months: number;
+  cadence: string;
+  total_usd: number;
+  median_usd: number;
+  last_usd: number;
+  monthly_usd: number;
+  yearly_usd: number;
+  first: string;
+  last: string;
+  next_due: string | null;
+  rising: boolean;
+  stopped: boolean;
+}
+
+export interface RecurringPayload extends FxMeta {
+  start: string;
+  end: string;
+  monthly_usd: number;
+  groups: { id: string; name: string; monthly_usd: number; count: number }[];
+  items: RecurringItem[];
+}

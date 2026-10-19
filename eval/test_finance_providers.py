@@ -116,6 +116,35 @@ def test_mercury_balance_pages_and_skips_pending(monkeypatch) -> None:
     assert result.transactions[1].counterparty == "Rexven GmbH"
 
 
+def test_mercury_credit_card_balance_from_credit_list(monkeypatch) -> None:
+    """IO kartı: GET /account/{id} yok (404); bakiye /credit listesinden, hareketler aynı uçtan."""
+    monkeypatch.setenv("MERCURY_TOKEN_LLC", "tok-secret")
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path.endswith("/credit"):
+            return httpx.Response(200, json={"accounts": [
+                {"id": "old", "status": "closed", "currentBalance": -1},
+                {"id": "cr-1", "status": "active", "currentBalance": -22968.62, "availableBalance": -22968.62},
+            ]})
+        if request.url.path.endswith("/account/cr-1/transactions"):
+            return httpx.Response(200, json={"transactions": [
+                {"id": "c1", "kind": "creditCardTransaction", "amount": -50.0, "status": "sent",
+                 "postedAt": "2026-10-19T03:26:11Z", "counterpartyName": "RunPod", "bankDescription": "RUNPOD.IO"},
+            ]})
+        return httpx.Response(404)
+
+    card = _account("mercury", type="card", provider_account_id="credit")
+    result = mercury(card, SINCE, _client(handler))
+    assert result.balance == D("-22968.62")
+    assert [(t.amount, t.counterparty, t.description) for t in result.transactions] == [(D("-50.0"), "RunPod", "RUNPOD.IO")]
+    assert not any(p.endswith("/account/cr-1") for p in paths)
+
+    with pytest.raises(ProviderError, match="kredi hesabı bulunamadı"):
+        mercury(_account("mercury", type="card", provider_account_id="nope"), SINCE, _client(handler))
+
+
 def test_http_error_message_is_short_and_has_no_token(monkeypatch) -> None:
     monkeypatch.setenv("MERCURY_TOKEN_LLC", "tok-secret")
     handler = lambda r: httpx.Response(401, json={"errors": {"message": "bad"}, "message": "Unauthorized token"})
@@ -155,6 +184,24 @@ def test_wise_statement(monkeypatch) -> None:
     assert result.balance == D("1500.25") and result.warning is None
     [tx] = result.transactions
     assert (tx.external_id, tx.amount, tx.counterparty, tx.currency) == ("TRANSFER-1", D("-200"), "Rexven LLC", "EUR")
+
+
+def test_wise_refunded_transfer_keeps_both_legs(monkeypatch) -> None:
+    """İptal edilen transfer: çıkış ve iade aynı referansla gelir; iade ':iade' ekiyle ayrılır."""
+    monkeypatch.setenv("WISE_TOKEN_GMBH", "w")
+    leg = {"type": "TRANSFER", "description": "Sent money to güzelsoy", "recipient": {"name": "güzelsoy"}}
+    statement = httpx.Response(200, json={"transactions": [
+        {"referenceNumber": "TRANSFER-9", "date": "2026-08-29T10:00:00Z", "amount": {"value": 50509.57, "currency": "EUR"}, "details": leg},
+        {"referenceNumber": "TRANSFER-9", "date": "2026-08-29T09:00:00Z", "amount": {"value": -50509.57, "currency": "EUR"}, "details": leg},
+        {"referenceNumber": "TRANSFER-8", "date": "2026-08-29T08:00:00Z", "amount": {"value": 100, "currency": "EUR"},
+         "details": {"type": "TRANSFER", "description": "Received money from X", "senderName": "X"}},
+    ]})
+    account = _account("wise", company_id="gmbh", currency="EUR", credential_key="GMBH", provider_account_id="12:77")
+    result = wise(account, SINCE, _client(_wise_handler(statement)))
+    assert [(t.external_id, t.amount) for t in result.transactions] == [
+        ("TRANSFER-9:iade", D("50509.57")), ("TRANSFER-9", D("-50509.57")), ("TRANSFER-8", D("100")),
+    ]
+    assert sum(t.amount for t in result.transactions if t.external_id.startswith("TRANSFER-9")) == 0
 
 
 def test_wise_sca_keeps_balance_and_warns(monkeypatch) -> None:
