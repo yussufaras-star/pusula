@@ -1,9 +1,24 @@
-"""Gelen lead akışı: Zoho Created_Time'ın güne sayımı ve içe aktarım günleri."""
+"""Gelen lead akışı: güne sayım, tekil kişi, içe aktarım günleri."""
 
 from collections import Counter
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
-from pusula.ingest.lead_inflow import IMPORT_DAYS, _month_chunks, bucket, day_rows
+from pusula.ingest.lead_inflow import (
+    IMPORT_DAYS,
+    LeadRec,
+    _month_chunks,
+    bucket,
+    day_rows,
+    mark_unique,
+    norm_phone,
+    person_keys,
+)
+
+TR = timezone(timedelta(hours=3))
+
+
+def rec(lead_id: str, day: int, hour: int, *keys: str, month: int = 1, converted: bool = False) -> LeadRec:
+    return LeadRec(lead_id, datetime(2026, month, day, hour, tzinfo=TR), keys, converted)
 
 
 def test_bucket_uses_istanbul_day() -> None:
@@ -17,15 +32,47 @@ def test_bucket_uses_istanbul_day() -> None:
     assert counts == Counter({date(2026, 1, 5): 1, date(2026, 1, 6): 2})
 
 
-def test_day_rows_fill_zeros_and_flag_import() -> None:
-    total = Counter({date(2026, 4, 1): 4210, date(2026, 4, 3): 80})
-    converted = Counter({date(2026, 4, 3): 2})
-    rows = day_rows(date(2026, 3, 31), date(2026, 4, 3), total, converted)
+def test_person_keys_normalize_email_and_phone() -> None:
+    assert norm_phone("+90 (532) 111 22 33") == "5321112233"
+    assert norm_phone("05321112233") == "5321112233"
+    assert norm_phone("12345") is None
+    keys = person_keys({"Email": " Ali@Mail.com ", "Mobile": "0532 111 22 33", "Phone": "+905321112233"})
+    assert keys == ("e:ali@mail.com", "p:5321112233")
+    assert person_keys({"Email": "yok", "Phone": None}) == ()
+
+
+def test_mark_unique_counts_first_appearance_of_person() -> None:
+    records = [
+        rec("a", 5, 9, "e:x@y.com"),
+        rec("b", 5, 9, "e:x@y.com"),  # aynı saniye: id sırası
+        rec("c", 6, 10, "p:5321112233", "e:x@y.com"),  # telefon yeni ama e-posta eski → ikili
+        rec("d", 7, 11, "p:5321112233"),  # c üzerinden aynı kişi
+        rec("e", 7, 12),  # kimliksiz → yeni sayılır
+    ]
+    flags, changed = mark_unique(records, {})
+    assert flags == {"a": True, "b": False, "c": False, "d": False, "e": True}
+    assert changed["e:x@y.com"][1] == "a" and changed["p:5321112233"][1] == "c"
+    # Yeniden sayım (önceki anahtarlar saklı) aynı sonucu verir
+    again, changed2 = mark_unique(records, changed)
+    assert again == flags and changed2 == {}
+    # Önceki çalışmada daha erken görülmüş kişi bugün ikilidir
+    later = [rec("z", 9, 9, "e:x@y.com")]
+    assert mark_unique(later, changed)[0] == {"z": False}
+
+
+def test_day_rows_fill_zeros_and_zero_import_days() -> None:
+    records = [
+        rec("a", 1, 10, "e:a@a.com", month=4),
+        rec("b", 3, 10, "e:b@b.com", month=4, converted=True),
+        rec("c", 3, 11, "e:b@b.com", month=4),
+    ]
+    unique = {"b": True, "c": False}
+    rows = day_rows(date(2026, 3, 31), date(2026, 4, 3), records, unique)
     assert rows == [
-        (date(2026, 3, 31), 0, 0, False),
-        (date(2026, 4, 1), 4210, 0, True),
-        (date(2026, 4, 2), 0, 0, True),
-        (date(2026, 4, 3), 80, 2, False),
+        (date(2026, 3, 31), 0, 0, 0, False),
+        (date(2026, 4, 1), 1, 0, 0, True),
+        (date(2026, 4, 2), 0, 0, 0, True),
+        (date(2026, 4, 3), 2, 1, 1, False),
     ]
     assert date(2026, 4, 2) in IMPORT_DAYS
 
