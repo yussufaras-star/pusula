@@ -251,7 +251,7 @@ def test_board_scopes_rep_view(env, monkeypatch) -> None:
     objectives.append({"id": 4, "year": 2026, "quarter": 4, "owner": "r2", "title": "Başkası", "kind": "taahhut", "parent_id": None})
     monkeypatch.setattr(okr, "load_year", lambda year: {"objectives": objectives, "krs": krs, "checkins": checkins, "cfr": cfr})
     monkeypatch.setattr(web_okr, "load_reps", lambda: [Rep("r1", "Ayşe Kar"), Rep("r2", "Serkan Şahin")])
-    monkeypatch.setattr(web_okr, "period_values", lambda year, quarter, now: {"team": {"ciro": 1_000_000}})
+    monkeypatch.setattr(web_okr, "period_values", lambda year, quarter, now: ({"team": {"ciro": 1_000_000}}, {}))
     body = client(REP).get("/api/okr?year=2026&quarter=4").json()
     assert [o["id"] for o in body["objectives"]] == [2, 3]
     assert [c["id"] for c in body["cfr"]] == [1]
@@ -261,3 +261,51 @@ def test_board_scopes_rep_view(env, monkeypatch) -> None:
     assert [o["id"] for o in admin["objectives"]] == [2, 3, 4]
     assert admin["can_edit_team"] and not admin["template_available"]  # yılda hedef var
     assert client(ADMIN).get("/api/okr?year=2026&quarter=7").status_code == 400
+
+
+def test_phased_share_follows_monthly_plan() -> None:
+    first, last = okr.period_bounds(2026, 4)
+    weights = [3_148_330, 5_920_740, 4_370_070]
+    # 31 Ekim sonu: yalnız Ekim'in payı (%23), takvim oranı %34 olurdu
+    assert okr.phased_share(first, last, date(2026, 11, 1), weights) < 0.25
+    assert okr.phased_share(first, last, date(2026, 10, 16), weights) == round(3_148_330 * 15.5 / 31 / sum(weights), 4)
+    assert okr.phased_share(first, last, date(2026, 10, 16), [1, 2]) == okr.elapsed_share(first, last, date(2026, 10, 16))
+    assert okr.phased_share(first, last, date(2027, 1, 2), weights) == 1.0
+
+
+def test_auto_kr_falls_back_to_checkin_and_annual_rolls_up() -> None:
+    objectives = [
+        {"id": 1, "year": 2026, "quarter": 0, "owner": "team", "title": "Yıl", "kind": "taahhut", "parent_id": None},
+        {"id": 2, "year": 2026, "quarter": 1, "owner": "team", "title": "Ç1", "kind": "taahhut", "parent_id": 1},
+    ]
+    krs = [
+        {"id": 10, "objective_id": 1, "title": "Ciro", "metric": "ciro", "start_value": 0, "target_value": 50_000_000},
+        {"id": 20, "objective_id": 2, "title": "Ç1 ciro", "metric": "ciro", "start_value": 0, "target_value": 13_000_000},
+    ]
+    checkins = [{"id": 1, "kr_id": 20, "value": 9_000_000.0, "confidence": None, "note": None,
+                 "created_at": datetime(2026, 10, 19, 9)}]
+    q1 = okr.build_board(year=2026, quarter=1, objectives=objectives, krs=krs, checkins=checkins,
+                         values={}, names={}, today=date(2026, 10, 19))
+    kr = q1["objectives"][0]["krs"][0]
+    assert kr["source"] == "yedek" and kr["current"] == 9_000_000.0
+    rollups = okr.annual_rollup(
+        objectives=objectives, krs=krs, checkins=checkins,
+        quarter_values={1: {"ciro": None}, 2: {"ciro": 10_000_000}, 3: {"ciro": None}, 4: {"ciro": 2_000_000}},
+    )
+    assert rollups["ciro"] == (21_000_000, [3])
+    year = okr.build_board(year=2026, quarter=0, objectives=objectives, krs=krs, checkins=checkins,
+                           values={"team": {"ciro": 1}}, names={}, today=date(2026, 10, 19), rollups=rollups)
+    annual = year["objectives"][0]["krs"][0]
+    assert annual["current"] == 21_000_000 and "Ç3 eksik" in annual["note"]
+
+
+def test_plan_2026_template_matches_sheet() -> None:
+    from pusula.okr_template import PLAN_2026, PLAN_2026_YEAR
+
+    assert sum(PLAN_2026["ciro"]) == PLAN_2026_YEAR["ciro"]
+    assert sum(PLAN_2026["satis"]) == PLAN_2026_YEAR["satis"] == 1075
+    year = template_for(2026)
+    q4 = [o for o in year if o["quarter"] == 4]
+    ciro = next(kr for o in q4 for kr in o["krs"] if kr["metric"] == "ciro")
+    assert ciro["target"] == 13_439_140 and ciro["phasing"] == [3_148_330, 5_920_740, 4_370_070]
+    assert len(q4) <= okr.MAX_OBJECTIVES

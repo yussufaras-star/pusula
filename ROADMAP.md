@@ -37,7 +37,7 @@ Streamlit bırakıldı; React + FastAPI, Vercel. KPI hesabı tek sorguda
 5. **Ekip Panosu** ✅ (2026-10-19: OKR) — John Doerr usulü OKR: yıllık ve
    çeyrek hedefler, 2-5 anahtar sonuç (Pusula verisinden otomatik ya da
    haftalık check-in ile), 0-1 puan, taahhüt/iddialı, hizalama, CFR ve TV
-   modu (`pusula/okr.py`, `/api/okr`). Önerilen taslak: 2026 Ç4 ve 2027
+   modu (`pusula/okr.py`, `/api/okr`). Önerilen taslak: 2026 yıl başı planı (yıl + 4 çeyrek, aylık dağılımlı tempo; ekip ciro/satışı tüm şirket, Ç1 CRM rakamı) ve 2027
    (`pusula/okr_template.py`). Önceki tanım: ekip hedefi, kişisel rekor ve TV modu. (Arena adı
    kullanılmaz: Arena ayrı üründür, bkz. "Arena köprüsü".) Küçük ekipte sıralama ters etki
    yapabilir (aşağıdaki not); varsayılan ekip hedefi ve kişisel rekor
