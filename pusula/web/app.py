@@ -65,6 +65,7 @@ from pusula.web.auth import (
 from pusula.sales_report import REPORT_START, SOURCE_DIMS, build_sales_report, source_yield
 from pusula.web.finance import cron_router as finance_cron_router
 from pusula.web.finance import router as finance_router
+from pusula.web.okr import router as okr_router
 from pusula.web.reports import build_reports, selected_rep
 
 load_dotenv()
@@ -80,6 +81,7 @@ PUBLIC_DIR = Path(__file__).resolve().parents[2] / "public"
 app = FastAPI(title="Pusula", docs_url=None, redoc_url=None)
 app.include_router(finance_router)
 app.include_router(finance_cron_router)
+app.include_router(okr_router)
 
 
 class LoginBody(BaseModel):

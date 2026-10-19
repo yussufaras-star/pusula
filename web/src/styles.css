@@ -2873,3 +2873,377 @@ textarea.f-input {
 .fin-desc .badge {
   margin-left: 6px;
 }
+
+/* --- Ekip Panosu (OKR) ------------------------------------------------------ */
+
+.okr-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.okr-page:fullscreen {
+  overflow: auto;
+  padding: 24px 32px;
+  background: var(--page);
+  font-size: 18px;
+}
+
+.okr-page:fullscreen .okr-actions,
+.okr-page:fullscreen .okr-kr-foot .btn,
+.okr-page:fullscreen .okr-cfr-form,
+.okr-page:fullscreen .okr-section-head .btn,
+.okr-page:fullscreen .okr-rep-head .btn {
+  display: none;
+}
+
+.okr-count {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.okr-tiles {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 760px) {
+  .okr-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.okr-period {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 18px;
+}
+
+.okr-warn {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.okr-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.okr-section-head,
+.okr-rep-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.okr-section-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.okr-section-head .spacer,
+.okr-rep-head .spacer,
+.okr-kr-foot .spacer {
+  flex: 1;
+}
+
+.okr-rep {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.okr-empty {
+  padding: 28px 18px;
+}
+
+.okr-obj {
+  padding: 16px 18px;
+}
+
+.okr-obj.draft {
+  border-style: dashed;
+}
+
+.okr-obj-head {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.okr-obj-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.okr-obj-main h3 {
+  margin: 4px 0 2px;
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.okr-obj-main p {
+  margin: 2px 0 0;
+}
+
+.okr-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.okr-parent {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.okr-reflection {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.okr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+  max-width: 260px;
+}
+
+.okr-score {
+  flex: none;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 3px solid var(--grid);
+  font-variant-numeric: tabular-nums;
+}
+
+.okr-score span {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.okr-score small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.okr-score.good {
+  border-color: var(--good);
+}
+
+.okr-score.warning {
+  border-color: var(--warning);
+}
+
+.okr-score.critical {
+  border-color: var(--critical);
+}
+
+.okr-krs {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.okr-kr {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.okr-kr-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.okr-kr-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.okr-src {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.okr-kr-score {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.okr-grade {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.okr-grade.good {
+  color: var(--good-ink);
+}
+
+.okr-grade.warning {
+  color: var(--ink-2);
+  background: var(--warning-wash);
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.okr-grade.critical {
+  color: var(--critical-ink);
+}
+
+.okr-meter {
+  height: 8px;
+}
+
+.okr-kr-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.okr-conf {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.okr-conf.good {
+  color: var(--good-ink);
+}
+
+.okr-conf.warning {
+  color: var(--ink-2);
+}
+
+.okr-conf.critical {
+  color: var(--critical-ink);
+}
+
+.okr-last {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.okr-history {
+  list-style: none;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.okr-history li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.okr-cfr-form {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+@media (max-width: 760px) {
+  .okr-cfr-form {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .okr-cfr-form .f-input:not(select) {
+    grid-column: 1 / -1;
+  }
+
+  .okr-obj-head {
+    flex-wrap: wrap;
+  }
+
+  .okr-actions {
+    max-width: none;
+    justify-content: flex-start;
+  }
+}
+
+.okr-cfr-filter {
+  margin-bottom: 8px;
+}
+
+.okr-cfr {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.okr-cfr li {
+  display: flex;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.okr-cfr-kind {
+  flex: none;
+  width: 96px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.okr-cfr li.takdir .okr-cfr-kind {
+  color: var(--good-ink);
+}
+
+.okr-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+  gap: 12px 24px;
+}
+
+.okr-guide h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.okr-guide p {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.okr-form-note {
+  margin: 0 0 12px;
+}

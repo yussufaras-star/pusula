@@ -552,3 +552,114 @@ export interface LeadCiroPayload {
   /** Toplu aktarım günleri: lead'leri sayılmaz. */
   toplu_aktarim?: { gun: string; lead: number }[];
 }
+
+// pusula/okr.py build_board + pusula/web/okr.py board çıktısı.
+export type OkrKind = "taahhut" | "iddiali";
+export type OkrStatus = "taslak" | "aktif" | "kapandi";
+export type OkrUnit = "tl" | "adet" | "yuzde" | "sn" | "gun" | "sayi";
+export type KrStatus = "baslamadi" | "veri_yok" | "yolunda" | "risk" | "geride" | "tamam" | "kacti";
+export type CfrKind = "konusma" | "geri_bildirim" | "takdir";
+
+export interface OkrCheckin {
+  id: number;
+  kr_id: number;
+  value: number | null;
+  confidence: number | null;
+  note: string | null;
+  author: string | null;
+  created_at: string;
+}
+
+export interface OkrKeyResult {
+  id: number;
+  objective_id: number;
+  title: string;
+  metric: string | null;
+  metric_label: string | null;
+  unit: OkrUnit;
+  direction: "up" | "down";
+  start_value: number;
+  target_value: number;
+  owner_rep_id: string | null;
+  owner_name: string | null;
+  sort: number;
+  source: "otomatik" | "elle";
+  current: number | null;
+  progress: number | null;
+  score: number | null;
+  expected: number | null;
+  status: KrStatus;
+  confidence: number | null;
+  checkin_due: boolean;
+  checkins: OkrCheckin[];
+}
+
+export interface OkrObjective {
+  id: number;
+  year: number;
+  quarter: number;
+  owner: string;
+  owner_name: string;
+  title: string;
+  description: string | null;
+  kind: OkrKind;
+  status: OkrStatus;
+  parent_id: number | null;
+  parent_title: string | null;
+  children: number;
+  final_score: number | null;
+  reflection: string | null;
+  sort: number;
+  krs: OkrKeyResult[];
+  score: number | null;
+  tone: "good" | "warning" | "critical" | "neutral";
+  bar: number;
+}
+
+export interface OkrCfr {
+  id: number;
+  kind: CfrKind;
+  rep_id: string | null;
+  rep_name: string | null;
+  objective_id: number | null;
+  text: string;
+  author: string | null;
+  created_at: string;
+}
+
+export interface OkrMetric {
+  key: string;
+  label: string;
+  unit: OkrUnit;
+  cumulative: boolean;
+  direction: "up" | "down";
+}
+
+export interface OkrBoard {
+  year: number;
+  quarter: number;
+  label: string;
+  first: string;
+  last: string;
+  share: number;
+  state: "gelecek" | "suruyor" | "bitti";
+  objectives: OkrObjective[];
+  annual: { id: number; title: string; owner: string }[];
+  aligned_parents: { id: number; title: string; owner: string; quarter: number }[];
+  counts: Record<string, number>;
+  summary: {
+    team_score: number | null;
+    objectives: number;
+    krs: number;
+    on_track: number;
+    at_risk: number;
+    checkin_due: number;
+  };
+  warnings: string[];
+  cfr: OkrCfr[];
+  reps: { rep_id: string; name: string }[];
+  metrics: OkrMetric[];
+  can_edit_team: boolean;
+  template_available: boolean;
+  today: string;
+}
