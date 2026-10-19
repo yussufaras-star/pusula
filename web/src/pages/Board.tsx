@@ -21,10 +21,10 @@ import type {
 
 const QUARTERS: { q: number; label: string }[] = [
   { q: 0, label: "Yıllık" },
-  { q: 1, label: "Ç1" },
-  { q: 2, label: "Ç2" },
-  { q: 3, label: "Ç3" },
-  { q: 4, label: "Ç4" },
+  { q: 1, label: "Q1" },
+  { q: 2, label: "Q2" },
+  { q: 3, label: "Q3" },
+  { q: 4, label: "Q4" },
 ];
 
 const KIND_LABEL: Record<OkrKind, string> = { taahhut: "Taahhüt", iddiali: "İddialı" };
