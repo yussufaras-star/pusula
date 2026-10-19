@@ -7,7 +7,7 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 
-from pusula.db.models import FinAccount, FinCompany, FinTaxScenario, FinTransaction, FinWallet
+from pusula.db.models import FinAccount, FinCompany, FinTaxSettings, FinTransaction, FinWallet, TaxPartner
 from pusula.finance import tax
 from pusula.finance.analytics import own_transfers
 from pusula.finance.fx import FxTable
@@ -40,13 +40,6 @@ def account(id_, name, balance, institution="Mercury", type_="fintech", company=
 
 def wallet(kind, name, balance, company="llc", active=True):
     return FinWallet(company_id=company, kind=kind, name=name, balance=D(balance), as_of=TODAY, active=active)
-
-
-def scenario(name="Federal %21", federal="0.21", state="0", extra="0", taxed="0", sort=1, id_=1):
-    return FinTaxScenario(
-        id=id_, company_id="llc", name=name, federal_rate=D(federal), state_rate=D(state),
-        extra_deductions=D(extra), taxed_base=D(taxed), sort=sort,
-    )
 
 
 @pytest.mark.parametrize(
@@ -104,7 +97,18 @@ def test_deposits_by_channel_and_customer() -> None:
     assert (ali.ref, ali.name, ali.usd, ali.count, ali.last) == ("REX-5", "Ali Veli", D("350"), 2, TODAY)
 
 
-def test_tax_base_and_scenarios() -> None:
+def settings(**kw):
+    base = dict(
+        company_id="llc",
+        year_start_net_assets=D("100000"),
+        partners=[TaxPartner(name="Ana", share=D("0.805")), TaxPartner(name="Ali", share=D("0.06")),
+                  TaxPartner(name="Veli", share=D("0.06")), TaxPartner(name="Can", share=D("0.03")),
+                  TaxPartner(name="Cem", share=D("0.03")), TaxPartner(name="Efe", share=D("0.015"))],
+    )
+    return FinTaxSettings(**{**base, **kw})
+
+
+def test_net_assets_and_payments() -> None:
     accounts = [account(2, "Mercury", "700000"), account(3, "Card", "-10000", type_="card"), account(4, "Off", "5", company="tr")]
     wallets = [
         wallet("seller", "Toplam", "300000"),
@@ -112,34 +116,72 @@ def test_tax_base_and_scenarios() -> None:
         wallet("producer", "Atolye", "-20000"),  # avans: borcu azaltır
         wallet("producer", "Eski", "50000", active=False),
     ]
-    paid = [
-        tx(1, "-19550", "IRS", category_id="vergi", day=date(2026, 4, 15)),
-        tx(2, "-5000", "IRS", category_id="vergi", day=date(2025, 12, 30)),  # geçen yıl
+    assets = tax.net_assets("llc", accounts, wallets, FX)
+    assert (assets.cash_usd, assets.seller_usd, assets.producer_usd, assets.net) == (
+        D("690000"), D("300000"), D("100000"), D("290000"))
+    rows = [
+        tx(1, "-5000", category_id="ortak", day=date(2026, 3, 31)),
+        tx(2, "1000", category_id="ortak", day=date(2026, 4, 2)),  # hatalı gönderim iadesi netleşir
+        tx(3, "-9000", category_id="ortak", day=date(2025, 12, 30)),  # geçen yıl
     ]
-    base = tax.tax_base("llc", accounts, wallets, paid, FX, date(2026, 1, 1))
-    assert (base.cash_usd, base.seller_usd, base.producer_usd, base.paid_usd) == (D("690000"), D("300000"), D("100000"), D("19550"))
-    assert base.net_assets == D("290000")
-
-    plain = tax.compute(base, scenario())
-    assert (plain.taxable, plain.state, plain.federal, plain.total) == (D("290000.00"), D("0.00"), D("60900.00"), D("60900.00"))
-    assert plain.remaining == D("41350.00")
-
-    # Eyalet önce, federal matrahtan düşülür; ek gider ve vergilenmiş birikim matrahı azaltır
-    mixed = tax.compute(base, scenario(state="0.05", extra="40000", taxed="50000"))
-    assert mixed.taxable == D("200000.00")
-    assert mixed.state == D("10000.00")
-    assert mixed.federal == D("39900.00")
-
-    # Matrah eksiye düşmez
-    assert tax.compute(base, scenario(taxed="1000000")).total == D("0.00")
-    assert tax.compute(base, scenario(taxed="1000000")).remaining == D("0")
+    assert tax.outflow_total(rows, "llc", "ortak", date(2026, 1, 1), FX) == D("4000")
 
 
-def test_primary_scenario() -> None:
-    a, b = scenario("A", sort=2, id_=1), scenario("B", sort=1, id_=2)
-    off = scenario("C", sort=0, id_=3).model_copy(update={"active": False})
-    assert tax.primary([a, b, off], "llc") == b
-    assert tax.primary([a], "tr") is None
+def test_profit_needs_year_start_and_annualizes() -> None:
+    assert tax.profit(D("500000"), FinTaxSettings(company_id="llc"), TODAY) is None
+    prof = tax.profit(D("500000"), settings(distributions=D("20000")), date(2026, 7, 2))  # 183. gün
+    assert prof.ytd == D("420000")
+    assert prof.elapsed_days == 183
+    assert prof.projected.quantize(D("1")) == D("837705")
+
+
+def test_individual_tax_2026_brackets() -> None:
+    assert tax.individual_tax(D("0")) == 0
+    assert tax.individual_tax(D("12400")) == D("1240")
+    assert tax.individual_tax(D("36000")) == D("4072")
+    assert tax.individual_tax(D("483000")) == D("137819.25")
+    assert tax.individual_tax(D("700000")) == tax.individual_tax(D("640600")) + D("59400") * D("0.37")
+
+
+def test_five_scenarios() -> None:
+    by = {s.key: s for s in tax.scenarios(D("600000"), settings(dividend_ratio=D("0.5")), D("0.6"))}
+    assert by["none"].tax == 0
+    part = by["partnership"]
+    assert [p.name for p in part.partners] == ["Ana", "Ali", "Veli", "Can", "Cem", "Efe"]
+    assert part.partners[0].income == D("483000.00") and part.partners[0].tax == D("137819.25")
+    assert part.tax == sum(p.tax for p in part.partners)
+    assert by["ccorp"].tax == D("126000.00")
+    # %60 yurtdışı: 360k × %14 + 240k × %21
+    assert by["ccorp_fdii"].tax == D("100800.00")
+    # vergi sonrası 499.200'ün yarısı dağıtılır, %20 kesinti
+    assert by["ccorp_dividend"].tax == D("100800.00") + D("49920.00")
+    assert all(s.tax == 0 for s in tax.scenarios(D("-5000"), settings(), D("0")))
+
+
+def test_unassigned_share_is_shown() -> None:
+    rows = tax.partner_rows(settings(partners=[TaxPartner(name="Ana", share=D("0.8"))]))
+    assert rows == [("Ana", D("0.8")), ("Atanmamış pay", D("0.2"))]
+    with pytest.raises(ValueError):
+        settings(partners=[TaxPartner(name="A", share=D("0.7")), TaxPartner(name="B", share=D("0.4"))])
+
+
+def test_structure_tax_follows_current_structure() -> None:
+    st = settings()
+    assert tax.structure_tax(D("600000"), st, D("0")) == next(
+        s.tax for s in tax.scenarios(D("600000"), st, D("0")) if s.key == "partnership")
+    assert tax.structure_tax(D("600000"), settings(structure="ccorp"), D("0")) == D("126000.00")
+    assert tax.structure_tax(D("600000"), settings(structure="none"), D("0")) == 0
+
+
+def test_foreign_share_estimate_excludes_us_entities() -> None:
+    dep = tax.Deposits(customers=[
+        tax.Customer("REX-1", "Betul Coban", D("300")),
+        tax.Customer("REX-2", "WEVRA LLC", D("100")),
+        tax.Customer("REX-3", "Lumesh Inc.", D("100")),
+        tax.Customer("REX-4", "Real Famous Ltd", D("500")),
+    ])
+    assert tax.foreign_share_estimate(dep) == D("0.8")
+    assert tax.foreign_share_estimate(tax.Deposits()) is None
 
 
 def test_week_lines_include_wallets_and_tax() -> None:
@@ -205,8 +247,17 @@ def test_wallet_balance_patch_restamps_date(client) -> None:
     assert set(client.updates[-1][1]) == {"name"}
 
 
-def test_scenario_rates_bounded(client) -> None:
-    ok = client.post("/api/finance/tax-scenarios", json={"company_id": "llc", "name": "Eyalet", "federal_rate": "0.21", "state_rate": "0.065"})
+def test_tax_settings_put_validates(client, monkeypatch) -> None:
+    saved: list = []
+    monkeypatch.setattr(web_finance.store, "save_tax_settings", lambda conn, st: saved.append(st))
+    ok = client.put("/api/finance/tax-settings/llc", json={
+        "year_start_net_assets": "250000", "structure": "partnership",
+        "partners": [{"name": "Ana", "share": "0.805"}, {"name": "Ali", "share": "0.06"}],
+    })
     assert ok.status_code == 200
-    bad = client.post("/api/finance/tax-scenarios", json={"company_id": "llc", "name": "Yanlış", "federal_rate": "21"})
-    assert bad.status_code == 400
+    assert saved[-1].company_id == "llc" and saved[-1].partners[0].share == D("0.805")
+    over = client.put("/api/finance/tax-settings/llc", json={"partners": [{"name": "A", "share": "0.9"}, {"name": "B", "share": "0.2"}]})
+    assert over.status_code == 400
+    assert client.put("/api/finance/tax-settings/llc", json={"structure": "scorp"}).status_code == 400
+    assert client.put("/api/finance/tax-settings/xx", json={}).status_code == 422
+    assert client.put("/api/finance/tax-settings/llc", json={"company_id": "tr"}).status_code == 400

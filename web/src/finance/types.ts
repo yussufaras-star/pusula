@@ -330,30 +330,27 @@ export interface Wallet {
   updated_at: string | null;
 }
 
-export interface TaxResult {
-  taxable_usd: number;
-  state_usd: number;
-  federal_usd: number;
-  total_usd: number;
-  paid_usd: number;
-  remaining_usd: number;
-  after_tax_usd: number;
-  effective_rate: number | null;
+export type TaxStructure = "none" | "partnership" | "ccorp";
+
+export interface TaxSettings {
+  year_start_net_assets: number | null;
+  distributions: number;
+  contributions: number;
+  structure: TaxStructure;
+  dividend_ratio: number;
+  fdii_share: number | null;
+  partners: { name: string; share: number }[];
+  updated_at: string | null;
 }
 
 export interface TaxScenario {
-  id: number;
-  company_id: CompanyId;
-  name: string;
-  federal_rate: number;
-  state_rate: number;
-  extra_deductions: number;
-  taxed_base: number;
-  notes: string | null;
-  active: boolean;
-  sort: number;
-  primary: boolean;
-  result: TaxResult;
+  key: "none" | "partnership" | "ccorp" | "ccorp_fdii" | "ccorp_dividend";
+  title: string;
+  note: string;
+  tax_usd: number;
+  rate: number | null;
+  current: boolean;
+  partners: { name: string; share: number; income_usd: number; tax_usd: number }[];
 }
 
 export interface TaxPayload extends FxMeta {
@@ -362,7 +359,12 @@ export interface TaxPayload extends FxMeta {
   year: number;
   start: string;
   end: string;
-  base: { cash_usd: number; seller_usd: number; producer_usd: number; net_assets_usd: number; paid_usd: number };
+  base: { cash_usd: number; seller_usd: number; producer_usd: number; net_assets_usd: number };
+  profit: { ytd_usd: number; projected_usd: number; elapsed_days: number } | null;
+  payments: { since: string; partners_usd: number; contractors_usd: number; irs_usd: number };
+  settings: TaxSettings;
+  foreign_share: number;
+  foreign_share_estimate: number | null;
   accounts: { id: number; name: string; currency: string; balance: number; balance_usd: number; balance_at: string | null }[];
   wallets: Wallet[];
   scenarios: TaxScenario[];

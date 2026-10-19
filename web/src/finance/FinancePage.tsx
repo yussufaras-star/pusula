@@ -21,7 +21,7 @@ const TITLES: Record<FinanceTab, [string, string]> = {
   projeksiyon: ["Projeksiyon", "Planlı alacak ve borçlarla kasa seyri"],
   "sirketler-arasi": ["Şirketler arası", "Transferler ve net pozisyon"],
   bilanco: ["Haftalık bilanço", "Şirket başına aktif ve pasif"],
-  vergi: ["Cüzdan ve vergi", "LLC: satıcı ve üretici cüzdanları düşülünce kalan varlık ve ABD vergisi"],
+  vergi: ["Cüzdan ve vergi", "LLC: satıcı ve üretici cüzdanları, yılın kârı ve yapıya göre ABD vergisi"],
   kararlar: ["Kararlar", "Stratejik kararlar ve takibi"],
   hesaplar: ["Hesaplar", "Banka bağlantıları ve ekstre yükleme"],
 };

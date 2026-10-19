@@ -33,7 +33,7 @@ from pusula.db.models import (
     FinPlannedItem,
     FinSnapshot,
     FinSnapshotLine,
-    FinTaxScenario,
+    FinTaxSettings,
     FinWallet,
     Money,
     SnapshotSection,
@@ -465,8 +465,8 @@ def tax_screen(company: str = "llc", start: str | None = None, end: str | None =
         # Ödenen vergi yıl başından; yüklemeler seçili aralıktan
         bundle = _bundle(conn, min(first, date(now.year, 1, 1)), max(last, now.date()))
         wallets = store.load_wallets(conn)
-        scenarios = store.load_tax_scenarios(conn)
-    return jsonable_encoder(views.tax_view(bundle, wallets, scenarios, company, first, last, now))
+        settings = store.load_tax_settings(conn, company)
+    return jsonable_encoder(views.tax_view(bundle, wallets, settings, company, first, last, now))
 
 
 @router.get("/decisions")
@@ -738,19 +738,15 @@ def delete_wallet(wallet_id: int) -> Any:
     return _delete("fin_wallets", wallet_id)
 
 
-@router.post("/tax-scenarios")
-def create_scenario(payload: dict[str, Any] = Body(...)) -> Any:
-    return _create("fin_tax_scenarios", FinTaxScenario, payload)
-
-
-@router.patch("/tax-scenarios/{scenario_id}")
-def patch_scenario(scenario_id: int, payload: dict[str, Any] = Body(...)) -> Any:
-    return _patch("fin_tax_scenarios", FinTaxScenario, scenario_id, payload)
-
-
-@router.delete("/tax-scenarios/{scenario_id}")
-def delete_scenario(scenario_id: int) -> Any:
-    return _delete("fin_tax_scenarios", scenario_id)
+@router.put("/tax-settings/{company_id}")
+def put_tax_settings(company_id: CompanyId, payload: dict[str, Any] = Body(...)) -> Any:
+    """Vergi ayarının tamamı (yıl başı net varlık, yapı, ortaklar)."""
+    if "company_id" in payload or "updated_at" in payload:
+        raise HTTPException(status_code=400, detail="Yazılamaz alan")
+    settings = merged(FinTaxSettings, None, {**payload, "company_id": company_id})
+    with connect() as conn, db_errors():
+        store.save_tax_settings(conn, settings)
+    return {"company_id": company_id}
 
 
 # --- yazma: haftalık bilanço ---------------------------------------------------------
@@ -789,9 +785,7 @@ def create_week(body: NewWeekBody) -> Any:
         ic_txs = store.load_transactions(conn, None, week_end(body.week_date)) if body.include_intercompany else []
         names = {c.id: c.name for c in companies}
         wallets = store.load_wallets(conn)
-        scenarios = store.load_tax_scenarios(conn)
-        year_start = date(body.week_date.year, 1, 1)
-        tax_txs = store.load_transactions(conn, year_start, week_end(body.week_date)) if scenarios else []
+        tax_settings = {c: store.load_tax_settings(conn, c) for c in ids}
         created: list[int] = []
         for company_id in ids:
             previous: list[FinSnapshotLine] = []
@@ -809,7 +803,7 @@ def create_week(body: NewWeekBody) -> Any:
                 body.week_date,
                 ic,
                 wallets=wallets,
-                tax_due=_tax_due(company_id, accounts_, wallets, scenarios, tax_txs, fx_table, year_start),
+                tax_due=_tax_due(tax_settings[company_id], accounts_, wallets, fx_table, body.week_date),
             )
             for line in lines:
                 store.insert_line(conn, snapshot_id, line.__dict__)
@@ -818,20 +812,22 @@ def create_week(body: NewWeekBody) -> Any:
 
 
 def _tax_due(
-    company_id: str,
+    settings: FinTaxSettings,
     accounts_: list[FinAccount],
     wallets: list[FinWallet],
-    scenarios: list[FinTaxScenario],
-    txs: list[Any],
     fx_table: Any,
-    year_start: date,
+    week: date,
 ) -> list[tuple[str, Decimal]]:
-    """Şirketin ana senaryosuyla ödenecek kalan vergi (USD); senaryo yoksa boş."""
-    main = tax.primary(scenarios, company_id)
-    if main is None:
+    """Bugünkü yapıyla yıl başından bu haftaya kârın tahmini vergisi (USD).
+
+    Yıl başı net varlık girilmemiş şirkette boş. FDII payı girilmediyse 0.
+    """
+    net = tax.net_assets(settings.company_id, accounts_, wallets, fx_table).net
+    prof = tax.profit(net, settings, week_end(week))
+    if prof is None:
         return []
-    base = tax.tax_base(company_id, accounts_, wallets, txs, fx_table, year_start)
-    return [(f"Tahmini ABD vergisi ({main.name})", tax.compute(base, main).remaining)]
+    due = tax.structure_tax(prof.ytd, settings, settings.fdii_share or Decimal("0"))
+    return [(f"Tahmini ABD vergisi ({tax.STRUCTURE_LABEL[settings.structure]})", due)]
 
 
 class SnapshotPatch(BaseModel):
