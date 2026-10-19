@@ -293,6 +293,7 @@ def test_auto_kr_falls_back_to_checkin_and_annual_rolls_up() -> None:
         quarter_values={1: {"ciro": None}, 2: {"ciro": 10_000_000}, 3: {"ciro": None}, 4: {"ciro": 2_000_000}},
     )
     assert rollups["ciro"] == (21_000_000, [3])
+    assert "satis" not in rollups  # hiçbir çeyrekte yok → veri yok
     year = okr.build_board(year=2026, quarter=0, objectives=objectives, krs=krs, checkins=checkins,
                            values={"team": {"ciro": 1}}, names={}, today=date(2026, 10, 19), rollups=rollups)
     annual = year["objectives"][0]["krs"][0]
