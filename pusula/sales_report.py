@@ -52,6 +52,25 @@ def won_by_rep(start: date, end: date) -> dict[str, dict[str, Any]]:
     return {str(r): {"satis": n, "ciro": c} for r, n, c in rows}
 
 
+def new_customers_by_owner(start: date, end: date) -> dict[str, int]:
+    """Yeni müşteri: kazanılan Premium / Plus / Premium-Kamp deal'i (prim
+    kuralıyla aynı paketler; Re-Co yenileme ve geçişler sayılmaz). Sahip →
+    adet, sahipsiz deal 'None' anahtarında."""
+    from pusula.commission import COUNTED_PACKAGES
+
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT owner_rep_id, count(*)::int FROM deal_packages
+            WHERE org_id = %s AND stage = %s AND package = ANY(%s)
+              AND {_WON_DAY} BETWEEN %s AND %s
+            GROUP BY 1
+            """,
+            (get_org_id(), WON_STAGE, list(COUNTED_PACKAGES), start, end),
+        ).fetchall()
+    return {str(r): int(n) for r, n in rows}
+
+
 def won_team_monthly(rep_ids: list[str], today: date, months: int = 12) -> list[dict[str, Any]]:
     # Nisan 2026 öncesi CRM taşıma dönemi; satış verisi güvenilir değil (panel_ciro ile aynı).
     first = max(add_months(month_first(today), -(months - 1)), REAL_SALES_START)

@@ -24,7 +24,8 @@ from pusula.okr_template import template_for
 from pusula.panel_auth import AuthUser
 from pusula.panel_data import load_reps
 from pusula.panel_ciro import REAL_SALES_START
-from pusula.sales_report import REPORT_START, _assigned, build_sales_report, won_by_rep
+from pusula.metrics import ratio
+from pusula.sales_report import REPORT_START, _assigned, build_sales_report, new_customers_by_owner, won_by_rep
 from pusula.web import cache
 from pusula.web.auth import admin_user, current_user
 
@@ -101,8 +102,11 @@ def _can_write_owner(user: AuthUser, owner: str) -> bool:
 SALES_KEYS = ("ciro", "satis", "ort_satis", "atanan", "gelen_lead")
 # Yönetici kararı (19 Ekim): OKR'da ekip cirosu ve satışı tüm şirkettir
 # (yönetim ve diğer sahipler, ayrılanlar dahil); Q1 2026 CRM rakamı sayılır.
+# Satış adedi yeni müşteridir: kazanılan Premium / Plus / Premium-Kamp
+# (yönetici, 19 Ekim; plan yeni müşteri üzerinden kuruldu). Take da buna
+# göre: yeni müşteri / ulaşılan lead. Ciro tüm kazanılan deal'lerdir.
 # Lead ataması Nisan 2026'dan önce eksiktir. Gelen lead (ekip) Zoho Leads
-# modülünün günlük sayımıdır (lead_inflow_daily, yıl başından beri).
+# modülüne yıl içinde ilk kez gelen kişidir (lead_inflow_daily).
 OKR_SALES_START = date(2026, 1, 1)
 LEAD_START = REAL_SALES_START
 
@@ -119,6 +123,7 @@ def sales_values(first: date, end: date, now: datetime) -> tuple[dict[str, dict[
 
     def build() -> tuple[dict[str, dict[str, Any]], dict[str, date]]:
         won = won_by_rep(sales_first, end) if end >= sales_first else None
+        new = new_customers_by_owner(sales_first, end) if end >= sales_first else {}
         assigned = _assigned(Span.days(lead_first, end)) if end >= lead_first else None
         inflow = load_inflow(first, end)
         out: dict[str, dict[str, Any]] = {}
@@ -129,11 +134,14 @@ def sales_values(first: date, end: date, now: datetime) -> tuple[dict[str, dict[
             if won is not None:
                 if owner == okr.TEAM:
                     row["ciro"] = sum(float(v["ciro"]) for v in won.values())
-                    row["satis"] = sum(int(v["satis"]) for v in won.values())
+                    deals = sum(int(v["satis"]) for v in won.values())
+                    row["satis"] = sum(new.values())
                 else:
                     row["ciro"] = float((won.get(owner) or {}).get("ciro") or 0)
-                    row["satis"] = int((won.get(owner) or {}).get("satis") or 0)
-                row["ort_satis"] = round(row["ciro"] / row["satis"], 2) if row["satis"] else None
+                    deals = int((won.get(owner) or {}).get("satis") or 0)
+                    row["satis"] = new.get(owner, 0)
+                # Ortalama satış tutarı tüm kazanılan deal'ler üzerinden.
+                row["ort_satis"] = round(row["ciro"] / deals, 2) if deals else None
             if assigned is not None:
                 row["atanan"] = sum(assigned.values()) if owner == okr.TEAM else assigned.get(owner, 0)
             if owner == okr.TEAM and inflow is not None:
@@ -186,7 +194,21 @@ def period_values(year: int, quarter: int, now: datetime) -> tuple[dict[str, dic
         for owner, row in sales.items():
             values.setdefault(owner, {}).update(row)
         coverage.update(sales_cov)
+    if end >= act_first:
+        # Take'in payı paydayla (ulaşılan lead, act_first'ten beri) aynı aralıktan.
+        retake(values, new_customers_by_owner(act_first, end))
     return values, coverage
+
+
+def retake(values: dict[str, dict[str, Any]], new: dict[str, int]) -> None:
+    """Take = yeni müşteri / ulaşılan lead (yerinde). Ekipte pay satış
+    temsilcilerinin yeni müşterisidir; payda onların ulaştığı lead."""
+    reps = [owner for owner, row in values.items() if owner != okr.TEAM and "lead_pay" in row]
+    for owner in reps:
+        values[owner]["satis_orani"] = ratio(new.get(owner, 0), values[owner].get("lead_pay"))
+    team = values.get(okr.TEAM)
+    if team and "lead_pay" in team:
+        team["satis_orani"] = ratio(sum(new.get(o, 0) for o in reps), team.get("lead_pay"))
 
 
 def quarter_totals(year: int, now: datetime) -> dict[int, dict[str, float | None]]:

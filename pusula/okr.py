@@ -55,7 +55,7 @@ class Metric:
 # Anahtarlar pusula.sales_report satır alanlarıdır.
 METRICS: dict[str, Metric] = {
     "ciro": Metric("Ciro", "tl", True),
-    "satis": Metric("Satış adedi", "adet", True),
+    "satis": Metric("Yeni müşteri (Premium / Plus)", "adet", True),
     "gelen_lead": Metric("Gelen lead (Zoho Leads)", "adet", True),
     "atanan": Metric("Atanan lead", "adet", True),
     "arama": Metric("Arama", "adet", True),
@@ -66,7 +66,7 @@ METRICS: dict[str, Metric] = {
     "ulasma_orani": Metric("Ulaşma oranı", "yuzde", False),
     "katilim_orani": Metric("Toplantı katılım oranı", "yuzde", False),
     "toplanti_donus": Metric("Toplantıya dönüş", "yuzde", False),
-    "satis_orani": Metric("Satış oranı (satış / ulaşılan lead)", "yuzde", False),
+    "satis_orani": Metric("Take (yeni müşteri / ulaşılan lead)", "yuzde", False),
     "doluluk": Metric("Doluluk", "yuzde", False),
     "sure_ort": Metric("Ort. görüşme süresi", "sn", False),
     "gunluk_arama": Metric("Günlük arama", "sayi", False),

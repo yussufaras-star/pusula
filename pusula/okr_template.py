@@ -57,7 +57,7 @@ def _plan_krs(months: slice, *, leads: float | None = None) -> list[dict[str, An
 def _funnel_krs() -> list[dict[str, Any]]:
     return [
         _kr(f"Ulaşma oranı en az %{REACH_PLAN:.0f}", "ulasma_orani", 0, REACH_PLAN, "yuzde"),
-        _kr("Take oranı (satış / ulaşılan lead) en az %3,2", "satis_orani", 0, TAKE_PLAN, "yuzde"),
+        _kr("Take oranı (yeni müşteri / ulaşılan lead) en az %3,2", "satis_orani", 0, TAKE_PLAN, "yuzde"),
     ]
 
 
