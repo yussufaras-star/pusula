@@ -934,6 +934,14 @@ CREATE TABLE IF NOT EXISTS fin_tax_settings (
 -- Geçiş: ilk sürümün oran senaryoları (varlık üzerinden) kaldırıldı.
 DROP TABLE IF EXISTS fin_tax_scenarios;
 
+-- Geçiş: Wise'ta iptal edilen giden transferin iade bacağı ayrı kimlik alır
+-- (referans + ':iade'); eskiden çıkış bacağı aynı referansa takılıp kayboluyordu.
+-- Yeniden senkron eksik çıkış bacaklarını ekler.
+UPDATE fin_transactions t SET external_id = t.external_id || ':iade'
+FROM fin_accounts a
+WHERE a.id = t.account_id AND a.provider = 'wise' AND t.amount > 0
+  AND t.description LIKE 'Sent money to %' AND t.external_id NOT LIKE '%:iade';
+
 -- RLS açık, politika yok: Supabase anon/authenticated rolleri finans
 -- tablolarını okuyamaz; uygulama tablo sahibi olarak bağlanır.
 DO $$

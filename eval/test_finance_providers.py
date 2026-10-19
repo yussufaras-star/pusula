@@ -186,6 +186,24 @@ def test_wise_statement(monkeypatch) -> None:
     assert (tx.external_id, tx.amount, tx.counterparty, tx.currency) == ("TRANSFER-1", D("-200"), "Rexven LLC", "EUR")
 
 
+def test_wise_refunded_transfer_keeps_both_legs(monkeypatch) -> None:
+    """İptal edilen transfer: çıkış ve iade aynı referansla gelir; iade ':iade' ekiyle ayrılır."""
+    monkeypatch.setenv("WISE_TOKEN_GMBH", "w")
+    leg = {"type": "TRANSFER", "description": "Sent money to güzelsoy", "recipient": {"name": "güzelsoy"}}
+    statement = httpx.Response(200, json={"transactions": [
+        {"referenceNumber": "TRANSFER-9", "date": "2026-08-29T10:00:00Z", "amount": {"value": 50509.57, "currency": "EUR"}, "details": leg},
+        {"referenceNumber": "TRANSFER-9", "date": "2026-08-29T09:00:00Z", "amount": {"value": -50509.57, "currency": "EUR"}, "details": leg},
+        {"referenceNumber": "TRANSFER-8", "date": "2026-08-29T08:00:00Z", "amount": {"value": 100, "currency": "EUR"},
+         "details": {"type": "TRANSFER", "description": "Received money from X", "senderName": "X"}},
+    ]})
+    account = _account("wise", company_id="gmbh", currency="EUR", credential_key="GMBH", provider_account_id="12:77")
+    result = wise(account, SINCE, _client(_wise_handler(statement)))
+    assert [(t.external_id, t.amount) for t in result.transactions] == [
+        ("TRANSFER-9:iade", D("50509.57")), ("TRANSFER-9", D("-50509.57")), ("TRANSFER-8", D("100")),
+    ]
+    assert sum(t.amount for t in result.transactions if t.external_id.startswith("TRANSFER-9")) == 0
+
+
 def test_wise_sca_keeps_balance_and_warns(monkeypatch) -> None:
     monkeypatch.setenv("WISE_TOKEN_GMBH", "w")
     account = _account("wise", currency="EUR", credential_key="GMBH", provider_account_id="12:77")
