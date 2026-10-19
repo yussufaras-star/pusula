@@ -3,6 +3,7 @@
 Claude ses okumaz; kayıt önce bir konuşma-tanıma servisinden geçer. Sağlayıcı
 ortam değişkeniyle seçilir, anahtarı olan ilk sağlayıcı varsayılandır:
 
+- assemblyai ASSEMBLYAI_API_KEY  yükle → iş aç → bitene kadar sor; konuşmacı ayrımı var
 - openai     OPENAI_API_KEY      /audio/transcriptions (OPENAI_BASE_URL ile
                                  Groq gibi uyumlu servisler de olur)
 - elevenlabs ELEVENLABS_API_KEY  Scribe, konuşmacı ayrımı var
@@ -11,7 +12,7 @@ ortam değişkeniyle seçilir, anahtarı olan ilk sağlayıcı varsayılandır:
 PUSULA_STT_PROVIDER sağlayıcıyı, PUSULA_STT_MODEL modeli zorlar.
 
 Toplantı kaydı videodur: ffmpeg ile tek kanallı düşük bit hızlı mp3'e
-indirilir, sağlayıcının dosya sınırını aşarsa parçalara bölünür.
+indirilir; OpenAI'nin 25 MB sınırını aşarsa parçalara bölünür.
 """
 
 from __future__ import annotations
@@ -28,11 +29,14 @@ from typing import Any
 import httpx
 
 PROVIDERS: dict[str, str] = {
+    "assemblyai": "ASSEMBLYAI_API_KEY",
     "openai": "OPENAI_API_KEY",
     "elevenlabs": "ELEVENLABS_API_KEY",
     "deepgram": "DEEPGRAM_API_KEY",
 }
 DEFAULT_MODEL = {
+    # Boş: AssemblyAI kendi varsayılan modelini seçer (PUSULA_STT_MODEL ile değişir).
+    "assemblyai": "",
     "openai": "gpt-4o-transcribe",
     "elevenlabs": "scribe_v1",
     "deepgram": "nova-2",
@@ -40,6 +44,9 @@ DEFAULT_MODEL = {
 # OpenAI dosya sınırı 25 MB; pay bırakılır.
 MAX_UPLOAD_BYTES = 24 * 1024 * 1024
 SEGMENT_SEC = 20 * 60
+ASSEMBLYAI = "https://api.assemblyai.com/v2"
+ASSEMBLYAI_POLL_SEC = 5.0
+ASSEMBLYAI_MAX_WAIT_SEC = 30 * 60
 _TIMEOUT = httpx.Timeout(600.0, connect=20.0)
 
 
@@ -176,7 +183,39 @@ def _deepgram(path: Path, model: str) -> tuple[str, bool]:
     return str(alt.get("transcript") or "").strip(), False
 
 
-_CALLERS = {"openai": _openai, "elevenlabs": _elevenlabs, "deepgram": _deepgram}
+def _assemblyai(path: Path, model: str) -> tuple[str, bool]:
+    headers = {"authorization": os.environ["ASSEMBLYAI_API_KEY"]}
+    upload = _post(f"{ASSEMBLYAI}/upload", headers=headers, content=path.read_bytes())
+    request: dict[str, Any] = {"audio_url": upload["upload_url"], "language_code": "tr", "speaker_labels": True}
+    if model:
+        request["speech_model"] = model
+    job = _post(f"{ASSEMBLYAI}/transcript", headers=headers, json=request)
+    deadline = time.monotonic() + ASSEMBLYAI_MAX_WAIT_SEC
+    while True:
+        time.sleep(ASSEMBLYAI_POLL_SEC)
+        try:
+            resp = httpx.get(f"{ASSEMBLYAI}/transcript/{job['id']}", headers=headers, timeout=60)
+            body = resp.json() if resp.status_code == 200 else {}
+        except (httpx.TransportError, ValueError):
+            body = {}
+        if body.get("status") == "completed":
+            break
+        if body.get("status") == "error":
+            raise TranscribeError(f"AssemblyAI: {body.get('error')}")
+        if time.monotonic() > deadline:
+            raise TranscribeError("AssemblyAI yanıtı 30 dk içinde gelmedi")
+    utterances = body.get("utterances") or []
+    if utterances:
+        return speaker_lines([(u.get("speaker"), u.get("text")) for u in utterances]), True
+    return str(body.get("text") or "").strip(), False
+
+
+_CALLERS = {
+    "assemblyai": _assemblyai,
+    "openai": _openai,
+    "elevenlabs": _elevenlabs,
+    "deepgram": _deepgram,
+}
 
 
 def _ffmpeg() -> str:
@@ -186,15 +225,15 @@ def _ffmpeg() -> str:
     return exe
 
 
-def to_audio(src: Path, workdir: Path) -> list[Path]:
-    """Video/ses → tek kanallı 16 kHz mp3; sınırı aşarsa 20 dk'lık parçalar."""
+def to_audio(src: Path, workdir: Path, *, split: bool = True) -> list[Path]:
+    """Video/ses → tek kanallı 16 kHz mp3; split ve sınır aşılırsa 20 dk'lık parçalar."""
     out = workdir / "ses.mp3"
     subprocess.run(
         [_ffmpeg(), "-y", "-loglevel", "error", "-i", str(src), "-vn", "-ac", "1", "-ar", "16000",
          "-b:a", "32k", str(out)],
         check=True,
     )
-    if out.stat().st_size <= MAX_UPLOAD_BYTES:
+    if not split or out.stat().st_size <= MAX_UPLOAD_BYTES:
         return [out]
     pattern = workdir / "parca_%03d.mp3"
     subprocess.run(
@@ -211,10 +250,12 @@ def transcribe_file(path: Path, *, video: bool = False) -> Transcript:
         raise TranscribeError("konuşma-tanıma anahtarı yok")
     model = model_for(name)
     call = _CALLERS[name]
+    # Dosya boyutu sınırı yalnız OpenAI'de dar; diğerlerinde parçalama gerekmez.
+    limited = name == "openai"
     with tempfile.TemporaryDirectory(prefix="pusula-stt-") as tmp:
         parts = (
-            to_audio(path, Path(tmp))
-            if video or path.stat().st_size > MAX_UPLOAD_BYTES
+            to_audio(path, Path(tmp), split=limited)
+            if video or (limited and path.stat().st_size > MAX_UPLOAD_BYTES)
             else [path]
         )
         texts: list[str] = []
@@ -225,4 +266,6 @@ def transcribe_file(path: Path, *, video: bool = False) -> Transcript:
             speakers = speakers and diarized
     # Parçalar ayrı tanındığı için konuşmacı numaraları parçalar arasında tutarsız olabilir.
     joined = "\n".join(t for t in texts if t).strip()
-    return Transcript(text=joined, provider=name, model=model, speakers=speakers and len(parts) == 1)
+    return Transcript(
+        text=joined, provider=name, model=model or "varsayilan", speakers=speakers and len(parts) == 1
+    )
