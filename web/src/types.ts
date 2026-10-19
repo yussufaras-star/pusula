@@ -666,3 +666,111 @@ export interface OkrBoard {
   template_available: boolean;
   today: string;
 }
+
+// pusula/conversations.py — Görüşme Analizleri.
+export type ConvScoreKey = "acilis" | "ihtiyac_analizi" | "deger_sunumu" | "itiraz_karsilama" | "kapanis";
+export type ConvStatus = "bekliyor" | "yazildi" | "analiz_edildi" | "hata" | "atlandi";
+
+export interface ConvObjectionStat {
+  adet: number;
+  karsilandi: number;
+  kismen: number;
+  oran: number;
+}
+
+export interface ConvStats {
+  gorusme: number;
+  analiz: number;
+  telefon: number;
+  toplanti: number;
+  dakika: number;
+  puanlar: Record<ConvScoreKey, number | null>;
+  puan_ort: number | null;
+  ilgi_ort: number | null;
+  sonraki_adim_orani: number | null;
+  tarihli_adim_orani: number | null;
+  itirazlar: Record<string, ConvObjectionStat>;
+  turler: Record<string, number>;
+  riskler: Record<string, number>;
+}
+
+export interface ConvRepNarrative {
+  ozet: string;
+  odak: { baslik: string; neden: string; alinti: string; nasil: string };
+  guclu: string[];
+  dikkat: string[];
+}
+
+export interface ConvTeamNarrative {
+  ozet: string;
+  musteri_sesi: string[];
+  itirazlar: string;
+  iyi_ornekler: string[];
+  aksiyonlar: string[];
+}
+
+export interface ConvItemSummary {
+  id: number;
+  kind: "call" | "meeting";
+  rep_id: string | null;
+  rep_name: string | null;
+  customer: string | null;
+  occurred_at: string;
+  duration_sec: number | null;
+  crm_outcome: string | null;
+  status: ConvStatus;
+  error: string | null;
+  analiz_edilebilir: boolean | null;
+  tur: string | null;
+  ozet: string | null;
+  puan: number | null;
+  ilgi: number | null;
+  sonraki_adim: boolean | null;
+  itirazlar: string[];
+  risk: number;
+}
+
+export interface ConvWeek {
+  week_start: string;
+  week_end: string;
+  durum: Record<ConvStatus, number>;
+  team: { stats: ConvStats; narrative: ConvTeamNarrative | null; created_at: string } | null;
+  reps: { rep_id: string; name: string; stats: ConvStats; narrative: ConvRepNarrative | null }[];
+  items: ConvItemSummary[];
+  score_labels: Record<ConvScoreKey, string>;
+}
+
+export interface ConvWeeks {
+  weeks: { week_start: string; gorusme: number; analiz: number }[];
+  setup: { son_calisma: string | null; rapor?: Record<string, unknown> };
+}
+
+interface ConvQuoted {
+  madde: string;
+  alinti: string;
+}
+
+export interface ConvAnalysis {
+  analiz_edilebilir: boolean;
+  neden: string;
+  ozet: string;
+  tur: string;
+  temsilci_konusmaci: string;
+  musteri: { ihtiyaclar: string[]; ilgi: number; duygu: "olumlu" | "notr" | "olumsuz" };
+  itirazlar: { tip: string; alinti: string; karsilandi: "evet" | "kismen" | "hayir" }[];
+  puanlar: Record<ConvScoreKey, number>;
+  guclu: ConvQuoted[];
+  gelisim: ConvQuoted[];
+  sonraki_adim: { var: boolean; tarih_net: boolean; aciklama: string };
+  riskler: { tip: string; aciklama: string; alinti: string }[];
+  sozler: string[];
+}
+
+export interface ConvItemDetail extends Omit<ConvItemSummary, "itirazlar" | "puan" | "ilgi" | "sonraki_adim" | "risk" | "tur" | "ozet" | "analiz_edilebilir"> {
+  analysis: ConvAnalysis | null;
+  transcript: string | null;
+  speakers: boolean | null;
+  stt_provider: string | null;
+  ai_model: string | null;
+  lead_id: string | null;
+}
