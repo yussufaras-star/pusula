@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 import psycopg
@@ -31,7 +31,7 @@ from pusula.db.models import (
     FinTransaction,
     FinWallet,
 )
-from pusula.finance.analytics import OWN_CATEGORY, auto_intercompany, categorize, own_transfers
+from pusula.finance.analytics import OWN_CATEGORY, OWN_MATCH_DAYS, auto_intercompany, categorize, own_transfers
 from pusula.finance.statement import Parsed
 from pusula.finance.tax import WALLET_CATEGORY, WALLET_COMPANY, is_wallet_deposit
 
@@ -280,22 +280,29 @@ def stamp_sync_run(conn: psycopg.Connection, now: datetime) -> None:
 
 
 def apply_own_transfers(conn: psycopg.Connection, since: date) -> int:
-    """Kendi hesapları arası aktarımları 'hesap_arasi' yapar; güncellenen sayı.
+    """Kendi hesapları arası aktarımları 'hesap_arasi' yapar; değişen sayı.
 
     Kategorisi boş ya da kuralla verilmiş, şirketler arası işaretsiz ve
     kullanıcının düzeltmediği satırlar değişir (SQL koşulu da zorlar).
+    Eşleşme her çalıştırmada yeniden hesaplanır: artık eşleşmeyen otomatik
+    işaret kaldırılır (sonraki adımlar yeniden kategorize eder). Pencere
+    başındaki satırlara dokunulmaz; karşılığı pencere dışında kalmış olabilir.
     """
     ids = own_transfers(load_transactions(conn, since), load_accounts(conn), load_companies(conn))
-    if not ids:
-        return 0
-    rows = conn.execute(
+    marked = conn.execute(
         "UPDATE fin_transactions SET category_id = %s, category_rule_id = NULL"
         " WHERE id = ANY(%s) AND user_edited_at IS NULL AND counterparty_company_id IS NULL"
         " AND (category_id IS NULL OR category_rule_id IS NOT NULL)"
         " AND category_id IS DISTINCT FROM %s RETURNING id",
         (OWN_CATEGORY, sorted(ids), OWN_CATEGORY),
     ).fetchall()
-    return len(rows)
+    cleared = conn.execute(
+        "UPDATE fin_transactions SET category_id = NULL"
+        " WHERE category_id = %s AND category_rule_id IS NULL AND user_edited_at IS NULL"
+        " AND booked_at >= %s AND NOT (id = ANY(%s)) RETURNING id",
+        (OWN_CATEGORY, since + timedelta(days=OWN_MATCH_DAYS), sorted(ids)),
+    ).fetchall()
+    return len(marked) + len(cleared)
 
 
 def apply_wallet_deposits(conn: psycopg.Connection, since: date | None = None) -> int:
