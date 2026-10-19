@@ -25,7 +25,7 @@ from pusula.db.models import (
     FinTransaction,
     FinWallet,
 )
-from pusula.finance import analytics, tax
+from pusula.finance import analytics, recurring, tax
 from pusula.finance.fx import FxTable
 from pusula.finance.snapshot import SECTIONS, BalanceSheet, balance_sheet, section_of
 
@@ -658,6 +658,57 @@ def tax_view(
             ],
         },
         **_fx_meta(fx),
+    }
+
+
+# --- düzenli ödemeler -----------------------------------------------------------
+
+
+def recurring_view(bundle: Bundle, scope: Sequence[str], start: date, end: date) -> dict[str, Any]:
+    """Düzenli çıkışlar + kategori toplamları (aylık USD)."""
+    kinds = analytics.category_kinds(bundle.categories)
+    names = {c.id: c.name for c in bundle.categories}
+    accounts = {a.id: a for a in bundle.accounts if a.id is not None}
+    txs = [t for t in bundle.transactions if t.company_id in scope]
+    rows = recurring.recurring(txs, bundle.fx, kinds, start, end)
+    groups: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        key = r.category_id or "_none"
+        g = groups.setdefault(key, {"id": key, "name": names.get(r.category_id or "", "Kategorisiz"), "monthly_usd": Decimal("0"), "count": 0})
+        g["monthly_usd"] += r.monthly_usd
+        g["count"] += 1
+    return {
+        "start": start,
+        "end": end,
+        "monthly_usd": money(sum((r.monthly_usd for r in rows), Decimal("0"))),
+        "groups": [
+            {**g, "monthly_usd": money(g["monthly_usd"])}
+            for g in sorted(groups.values(), key=lambda g: g["monthly_usd"], reverse=True)
+        ],
+        "items": [
+            {
+                "key": r.key,
+                "label": r.label,
+                "category_id": r.category_id,
+                "company_id": accounts[r.accounts[0]].company_id if r.accounts and r.accounts[0] in accounts else None,
+                "accounts": [accounts[a].name for a in r.accounts if a in accounts],
+                "count": r.count,
+                "months": r.months,
+                "cadence": r.cadence,
+                "total_usd": money(r.total_usd),
+                "median_usd": money(r.median_usd),
+                "last_usd": money(r.last_usd),
+                "monthly_usd": money(r.monthly_usd),
+                "yearly_usd": money(r.monthly_usd * 12),
+                "first": r.first,
+                "last": r.last,
+                "next_due": r.next_due,
+                "rising": r.rising,
+                "stopped": r.stopped,
+            }
+            for r in rows
+        ],
+        **_fx_meta(bundle.fx),
     }
 
 

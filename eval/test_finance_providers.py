@@ -116,6 +116,35 @@ def test_mercury_balance_pages_and_skips_pending(monkeypatch) -> None:
     assert result.transactions[1].counterparty == "Rexven GmbH"
 
 
+def test_mercury_credit_card_balance_from_credit_list(monkeypatch) -> None:
+    """IO kartı: GET /account/{id} yok (404); bakiye /credit listesinden, hareketler aynı uçtan."""
+    monkeypatch.setenv("MERCURY_TOKEN_LLC", "tok-secret")
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path.endswith("/credit"):
+            return httpx.Response(200, json={"accounts": [
+                {"id": "old", "status": "closed", "currentBalance": -1},
+                {"id": "cr-1", "status": "active", "currentBalance": -22968.62, "availableBalance": -22968.62},
+            ]})
+        if request.url.path.endswith("/account/cr-1/transactions"):
+            return httpx.Response(200, json={"transactions": [
+                {"id": "c1", "kind": "creditCardTransaction", "amount": -50.0, "status": "sent",
+                 "postedAt": "2026-10-19T03:26:11Z", "counterpartyName": "RunPod", "bankDescription": "RUNPOD.IO"},
+            ]})
+        return httpx.Response(404)
+
+    card = _account("mercury", type="card", provider_account_id="credit")
+    result = mercury(card, SINCE, _client(handler))
+    assert result.balance == D("-22968.62")
+    assert [(t.amount, t.counterparty, t.description) for t in result.transactions] == [(D("-50.0"), "RunPod", "RUNPOD.IO")]
+    assert not any(p.endswith("/account/cr-1") for p in paths)
+
+    with pytest.raises(ProviderError, match="kredi hesabı bulunamadı"):
+        mercury(_account("mercury", type="card", provider_account_id="nope"), SINCE, _client(handler))
+
+
 def test_http_error_message_is_short_and_has_no_token(monkeypatch) -> None:
     monkeypatch.setenv("MERCURY_TOKEN_LLC", "tok-secret")
     handler = lambda r: httpx.Response(401, json={"errors": {"message": "bad"}, "message": "Unauthorized token"})

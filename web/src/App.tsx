@@ -18,6 +18,7 @@ type SalesRoute = "canli" | "karsilastir" | "pano" | "raporlar";
 type FinanceRoute =
   | "finans/genel"
   | "finans/akis"
+  | "finans/duzenli"
   | "finans/projeksiyon"
   | "finans/sirketler-arasi"
   | "finans/bilanco"
@@ -40,12 +41,13 @@ const NAV: Record<Area, NavItem[]> = {
     { route: "raporlar", label: "Raporlar" },
   ],
   finans: [
-    { route: "finans/genel", label: "Genel bakış" },
+    { route: "finans/genel", label: "Genel" },
     { route: "finans/akis", label: "Nakit akışı" },
+    { route: "finans/duzenli", label: "Düzenli" },
     { route: "finans/projeksiyon", label: "Projeksiyon" },
     { route: "finans/sirketler-arasi", label: "Şirketler arası" },
-    { route: "finans/bilanco", label: "Haftalık bilanço" },
-    { route: "finans/vergi", label: "Cüzdan ve vergi" },
+    { route: "finans/bilanco", label: "Bilanço" },
+    { route: "finans/vergi", label: "Vergi" },
     { route: "finans/kararlar", label: "Kararlar" },
     { route: "finans/hesaplar", label: "Hesaplar" },
   ],

@@ -821,7 +821,14 @@ FROM (VALUES
     ('out', 'bank fee', 'banka'), ('out', 'komisyon', 'banka'), ('out', 'commission', 'banka'),
     ('out', 'law ', 'danismanlik'), ('out', 'legal', 'danismanlik'), ('out', 'hukuk', 'danismanlik'),
     ('out', 'avukat', 'danismanlik'), ('out', 'consult', 'danismanlik'), ('out', 'muhasebe', 'danismanlik'),
-    ('out', 'accounting', 'danismanlik'), ('out', 'cpa ', 'danismanlik'), ('out', 'noter', 'danismanlik')
+    ('out', 'accounting', 'danismanlik'), ('out', 'cpa ', 'danismanlik'), ('out', 'noter', 'danismanlik'),
+    -- Mercury IO kart satıcıları
+    ('out', 'stamps.com', 'kargo'), ('out', 'shipstation', 'kargo'), ('out', 'auctane', 'kargo'),
+    ('out', '17track', 'kargo'), ('out', '17returns', 'kargo'), ('out', 'nestshipper', 'kargo'),
+    ('out', 'shiphunt', 'kargo'), ('out', 'runpod', 'yazilim'), ('out', 'oxylabs', 'yazilim'),
+    ('out', 'erank', 'yazilim'), ('out', 'imyfone', 'yazilim'), ('out', 'manychat', 'yazilim'),
+    ('out', 'openrouter', 'yazilim'), ('out', 'google cloud', 'yazilim'), ('out', 'x corp', 'reklam'),
+    ('out', 'intl. transaction fee', 'banka'), ('in', 'mercury io cashback', 'diger_gir')
 ) AS v(direction, pattern, category_id)
 ON CONFLICT DO NOTHING;
 

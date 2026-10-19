@@ -3251,4 +3251,6 @@ textarea.f-input {
   grid-template-columns: minmax(0, 1fr) 110px auto;
   align-items: center;
   margin-bottom: 8px;
+.fin-desc .co-tag {
+  margin-left: 6px;
 }
