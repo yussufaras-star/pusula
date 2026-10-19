@@ -619,24 +619,40 @@ export function mockFinance(method: string, url: string): unknown {
     const seller = 412_300;
     const producer = 96_400 + 41_250 - 8_000;
     const net = llcCash - seller - producer;
-    const paid = 19_550;
-    const sc = (id: number, name: string, federal: number, state: number, extra: number, taxed: number, sort: number) => {
-      const taxable = Math.max(net - extra - taxed, 0);
-      const st = taxable * state;
-      const fed = (taxable - st) * federal;
-      const total = st + fed;
-      return {
-        id, company_id: "llc", name, federal_rate: federal, state_rate: state, extra_deductions: extra, taxed_base: taxed, notes: null, active: true, sort, primary: id === 1,
-        result: { taxable_usd: r2(taxable), state_usd: r2(st), federal_usd: r2(fed), total_usd: r2(total), paid_usd: paid, remaining_usd: r2(Math.max(total - paid, 0)), after_tax_usd: r2(net - total), effective_rate: net > 0 ? Math.round((total / net) * 10000) / 10000 : null },
-      };
-    };
+    const yearStart = r2(net - 410_000); // örnek: yıl başından 410 B$ kâr
+    const elapsed = Math.round((Date.parse(TODAY) - Date.parse(`${TODAY.slice(0, 4)}-01-01`)) / 86_400_000) + 1;
+    const ytd = net - yearStart;
+    const projected = (ytd * 365) / elapsed;
+    const partners = [
+      { name: "Ana ortak", share: 0.805 }, { name: "yusuf aras", share: 0.06 }, { name: "muhammet ibrahim güzelsoy", share: 0.06 },
+      { name: "mustafa eren tuna", share: 0.03 }, { name: "mehmet tek", share: 0.03 }, { name: "yusuf ali nazlum", share: 0.015 },
+    ];
+    const brackets: [number, number][] = [[12_400, 0.1], [50_400, 0.12], [105_700, 0.22], [201_775, 0.24], [256_225, 0.32], [640_600, 0.35], [Infinity, 0.37]];
+    const indiv = (x: number) => { let t = 0, lo = 0; for (const [top, r] of brackets) { if (x <= lo) break; t += (Math.min(x, top) - lo) * r; lo = top; } return r2(t); };
+    const p = Math.max(projected, 0);
+    const prows = partners.map((x) => ({ name: x.name, share: x.share, income_usd: r2(p * x.share), tax_usd: indiv(p * x.share) }));
+    const foreign = 0.62;
+    const fdii = p * foreign * 0.14 + p * (1 - foreign) * 0.21;
+    const sc = (key: string, title: string, note: string, tax: number, current = false, rows: typeof prows = []) =>
+      ({ key, title, note, tax_usd: r2(tax), rate: p > 0 ? Math.round((tax / p) * 10000) / 10000 : null, current, partners: rows });
     const names = ["Betul Coban", "TEKALP LLC", "SOVEREIGN SPARKLE", "Ali Tozun", "Real Famous Ltd", "MUSTAFA SARI"];
     return {
       company_id: "llc", as_of: new Date().toISOString(), year: Number(TODAY.slice(0, 4)), start, end,
-      base: { cash_usd: r2(llcCash), seller_usd: seller, producer_usd: producer, net_assets_usd: r2(net), paid_usd: paid },
+      base: { cash_usd: r2(llcCash), seller_usd: seller, producer_usd: producer, net_assets_usd: r2(net) },
+      profit: { ytd_usd: r2(ytd), projected_usd: r2(projected), elapsed_days: elapsed },
+      payments: { since: "2026-07-18", partners_usd: 56_382.99, contractors_usd: 26_401.62, irs_usd: 19_550 },
+      settings: { year_start_net_assets: yearStart, distributions: 0, contributions: 0, structure: "partnership", dividend_ratio: 0.2, fdii_share: null, partners, updated_at: ago(3) },
+      foreign_share: foreign,
+      foreign_share_estimate: foreign,
       accounts: ACCOUNTS.filter((a) => a.company_id === "llc" && a.active).map((a) => ({ id: a.id, name: a.name, currency: a.currency, balance: a.balance, balance_usd: r2(toUsd(a.balance, a.currency)), balance_at: a.balance_at })),
       wallets,
-      scenarios: [sc(1, "Federal %21", 0.21, 0, 0, 0, 1), sc(2, "Federal %21 + eyalet %6,5", 0.21, 0.065, 0, 0, 2), sc(3, "Yıl sonu 60 B$ ek gider", 0.21, 0, 60_000, 0, 3)],
+      scenarios: [
+        sc("none", "Ortaklık · ABD'de faaliyet yok", "ABD'de çalışan, ofis, depo, acente yok; vergi Türkiye'de", 0),
+        sc("partnership", "Ortaklık · ABD faaliyetine bağlı", "bugünkü beyan şekli: her ortak payı kadar 1040-NR, kademeli %10–37", prows.reduce((s, r) => s + r.tax_usd, 0), true, prows),
+        sc("ccorp", "C-Corp · kâr şirkette", "%21, dağıtım yok", p * 0.21),
+        sc("ccorp_fdii", "C-Corp + FDII", "yurtdışı müşteri payı %62 → %14, kalanı %21", fdii),
+        sc("ccorp_dividend", "C-Corp + FDII + kâr dağıtımı", "vergi sonrası kârın %20'i dağıtılır, %20 kesinti", fdii + (p - fdii) * 0.2 * 0.2),
+      ],
       deposits: {
         usd: 1_752_649.68, count: 5_541, refunds_usd: 3_224.82, without_ref: 2_866, customers: 1_284,
         channels: [{ account_id: 9, name: "Wise USD", usd: 1_032_567.89, count: 3_840 }, { account_id: 2, name: "Mercury ••4259", usd: 720_081.79, count: 1_701 }, { account_id: 11, name: "Stripe", usd: 452_888.55, count: 2_866 }],
@@ -699,7 +715,7 @@ function mockWrite(method: string, path: string): unknown {
   }
   if (path.endsWith("/statement/import")) return { inserted: 12, duplicates: 30, skipped: 1, balance: 2_940_000 };
   if (path === "/api/finance/rules") return { id: 9, applied: 12 };
-  if (path.startsWith("/api/finance/wallets") || path.startsWith("/api/finance/tax-scenarios")) return { id: 1 };
+  if (path.startsWith("/api/finance/wallets") || path.startsWith("/api/finance/tax-settings")) return { id: 1 };
   if (path.startsWith("/api/finance/rules/")) return { id: 9, reverted: 6, reapplied: 0 };
   if (path.startsWith("/api/finance/transactions/")) return { id: 1, similar: 4 };
   if (method === "DELETE") return { id: 1 };

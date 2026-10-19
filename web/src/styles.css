@@ -3247,3 +3247,8 @@ textarea.f-input {
 .okr-form-note {
   margin: 0 0 12px;
 }
+.f-grid.fin-partner {
+  grid-template-columns: minmax(0, 1fr) 110px auto;
+  align-items: center;
+  margin-bottom: 8px;
+}

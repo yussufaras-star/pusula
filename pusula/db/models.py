@@ -359,17 +359,30 @@ class FinWallet(BaseModel):
     updated_at: datetime | None = None
 
 
-class FinTaxScenario(BaseModel):
-    """fin_tax_scenarios tablosu: kalan net varlık üzerinden vergi senaryosu."""
+TaxStructure = Literal["none", "partnership", "ccorp"]
 
-    id: int | None = None
-    company_id: CompanyId
+
+class TaxPartner(BaseModel):
     name: Annotated[str, Field(min_length=1, max_length=120)]
-    federal_rate: Rate = Decimal("0.21")
-    state_rate: Rate = Decimal("0")
-    extra_deductions: Money = Decimal("0")
-    taxed_base: Money = Decimal("0")
-    notes: str | None = None
-    active: bool = True
-    sort: int = 0
-    created_at: datetime | None = None
+    share: Rate
+
+
+class FinTaxSettings(BaseModel):
+    """fin_tax_settings tablosu: şirket başına vergi ayarı (kâr ve ortaklar)."""
+
+    company_id: CompanyId
+    # Yılın kârı için başlangıç: 1 Ocak'taki net varlık (hesaplar − cüzdanlar)
+    year_start_net_assets: Money | None = None
+    distributions: Money = Decimal("0")  # yıl içi kâr dağıtımı (guaranteed payment değil)
+    contributions: Money = Decimal("0")  # yıl içi konulan sermaye
+    structure: TaxStructure = "partnership"
+    dividend_ratio: Rate = Decimal("0")  # C-Corp'ta dağıtılacak vergi sonrası kâr payı
+    fdii_share: Rate | None = None  # boşsa yüklemelerden tahmin
+    partners: list[TaxPartner] = Field(default_factory=list)
+    updated_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def _shares_fit(self) -> "FinTaxSettings":
+        if sum((p.share for p in self.partners), Decimal("0")) > 1:
+            raise ValueError("Ortak payları toplamı %100'ü geçemez")
+        return self

@@ -834,6 +834,39 @@ INSERT INTO fin_categories (id, name, kind, sort) VALUES
     ('uretici', 'Üretici ödemesi',         'out',  9)
 ON CONFLICT (id) DO NOTHING;
 
+-- Ortaklara operating agreement ile ödenen guaranteed payment (gider) ve
+-- serbest çalışan / contractor ödemeleri.
+INSERT INTO fin_categories (id, name, kind, sort) VALUES
+    ('ortak',     'Ortak ödemesi (guaranteed payment)', 'out', 12),
+    ('yuklenici', 'Yüklenici (contractor)',             'out', 12)
+ON CONFLICT (id) DO NOTHING;
+
+-- LLC ortakları ve yüklenicileri: karşı taraf adı birebir (her iki yön: iade
+-- girişi de aynı kategoride netleşir). Kullanıcının verdiği liste.
+INSERT INTO fin_category_rules (company_id, direction, match_type, pattern, category_id, source, label)
+SELECT 'llc', 'any', 'exact', v.pattern, v.category_id, 'user', v.label
+FROM (VALUES
+    ('yusuf aras', 'ortak', 'yusuf aras'),
+    ('muhammet ibrahim guzelsoy', 'ortak', 'muhammet ibrahim güzelsoy'),
+    ('mustafa eren tuna', 'ortak', 'mustafa eren tuna'),
+    ('yusuf ali nazlum', 'ortak', 'yusuf ali nazlum'),
+    ('mehmet tek', 'ortak', 'mehmet tek'),
+    ('zafer karakaya', 'yuklenici', 'zafer karakaya'),
+    ('murat fatih yilmaz', 'yuklenici', 'Murat Fatih YILMAZ'),
+    ('muhammed erkam guzel', 'yuklenici', 'MUHAMMED ERKAM GÜZEL')
+) AS v(pattern, category_id, label)
+ON CONFLICT DO NOTHING;
+
+-- Geçiş: kurallar mevcut hareketlere uygulanır (elle düzeltilmişler hariç).
+-- Ad sadeleştirme pusula.finance.analytics.rule_key ile aynı.
+UPDATE fin_transactions t SET category_id = r.category_id, category_rule_id = r.id
+FROM fin_category_rules r
+WHERE r.company_id = 'llc' AND r.match_type = 'exact' AND r.category_id IN ('ortak', 'yuklenici')
+  AND t.company_id = 'llc' AND t.user_edited_at IS NULL AND t.counterparty_company_id IS NULL
+  AND (t.category_id IS NULL OR t.category_rule_id IS NOT NULL)
+  AND regexp_replace(btrim(lower(translate(t.counterparty, 'çğıİIöşüÇĞÖŞÜâîû', 'cgiiiosucgosuaiu'))), '\s+', ' ', 'g')
+      = r.pattern;
+
 -- LLC'de Stripe tahsilatı satıcı cüzdan yüklemesidir (genel 'stripe' → satış
 -- kuralından önce gelir: şirkete özel kural).
 INSERT INTO fin_category_rules (company_id, direction, match_type, pattern, category_id, source)
@@ -875,26 +908,24 @@ CREATE TRIGGER fin_wallets_touch
     BEFORE UPDATE ON fin_wallets
     FOR EACH ROW EXECUTE FUNCTION fin_touch_updated_at();
 
--- Vergi senaryoları. Matrah = hesaplar − satıcı cüzdanları − üretici
--- bakiyeleri − ek gider − daha önce vergilenmiş birikim (en az 0).
--- Eyalet vergisi federal matrahtan düşülür. Tutarlar USD.
-CREATE TABLE IF NOT EXISTS fin_tax_scenarios (
-    id                bigserial PRIMARY KEY,
-    company_id        text NOT NULL REFERENCES fin_companies (id),
-    name              text NOT NULL CHECK (length(name) BETWEEN 1 AND 120),
-    federal_rate      numeric(6, 4) NOT NULL DEFAULT 0.21 CHECK (federal_rate BETWEEN 0 AND 1),
-    state_rate        numeric(6, 4) NOT NULL DEFAULT 0 CHECK (state_rate BETWEEN 0 AND 1),
-    extra_deductions  numeric(18, 2) NOT NULL DEFAULT 0,
-    taxed_base        numeric(18, 2) NOT NULL DEFAULT 0,
-    notes             text,
-    active            boolean NOT NULL DEFAULT true,
-    sort              int NOT NULL DEFAULT 0,
-    created_at        timestamptz NOT NULL DEFAULT now()
+-- Vergi ayarı (şirket başına). Kâr = bugünkü net varlık − yıl başı net
+-- varlık + kâr dağıtımı − konulan sermaye; senaryolar bu kârı ortaklık /
+-- C-Corp olarak vergiler. partners: [{"name": "...", "share": "0.06"}].
+CREATE TABLE IF NOT EXISTS fin_tax_settings (
+    company_id             text PRIMARY KEY REFERENCES fin_companies (id),
+    year_start_net_assets  numeric(18, 2),
+    distributions          numeric(18, 2) NOT NULL DEFAULT 0,
+    contributions          numeric(18, 2) NOT NULL DEFAULT 0,
+    structure              text NOT NULL DEFAULT 'partnership'
+        CHECK (structure IN ('none', 'partnership', 'ccorp')),
+    dividend_ratio         numeric(6, 4) NOT NULL DEFAULT 0 CHECK (dividend_ratio BETWEEN 0 AND 1),
+    fdii_share             numeric(6, 4) CHECK (fdii_share BETWEEN 0 AND 1),
+    partners               jsonb NOT NULL DEFAULT '[]',
+    updated_at             timestamptz NOT NULL DEFAULT now()
 );
 
-INSERT INTO fin_tax_scenarios (company_id, name, federal_rate, state_rate, sort)
-SELECT 'llc', 'Federal %21', 0.21, 0, 1
-WHERE NOT EXISTS (SELECT 1 FROM fin_tax_scenarios WHERE company_id = 'llc');
+-- Geçiş: ilk sürümün oran senaryoları (varlık üzerinden) kaldırıldı.
+DROP TABLE IF EXISTS fin_tax_scenarios;
 
 -- RLS açık, politika yok: Supabase anon/authenticated rolleri finans
 -- tablolarını okuyamaz; uygulama tablo sahibi olarak bağlanır.
@@ -904,7 +935,7 @@ BEGIN
     FOREACH t IN ARRAY ARRAY[
         'fin_companies', 'fin_accounts', 'fin_categories', 'fin_transactions', 'fin_fx_rates',
         'fin_planned_items', 'fin_snapshots', 'fin_snapshot_lines', 'fin_decisions',
-        'fin_category_rules', 'fin_wallets', 'fin_tax_scenarios'
+        'fin_category_rules', 'fin_wallets', 'fin_tax_settings'
     ]
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);

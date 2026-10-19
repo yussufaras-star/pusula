@@ -21,7 +21,7 @@ from pusula.db.models import (
     FinPlannedItem,
     FinSnapshot,
     FinSnapshotLine,
-    FinTaxScenario,
+    FinTaxSettings,
     FinTransaction,
     FinWallet,
 )
@@ -546,58 +546,52 @@ def decisions_view(decisions: Sequence[FinDecision], scope: Sequence[str], today
 TOP_CUSTOMERS = 15
 
 
-def _rate_out(value: Decimal) -> float:
-    return float(value.quantize(Decimal("0.0001")))
+def _rate_out(value: Decimal | None) -> float | None:
+    return None if value is None else float(value.quantize(Decimal("0.0001")))
 
 
-def result_out(result: tax.TaxResult, base: tax.TaxBase) -> dict[str, Any]:
-    net = base.net_assets
+def settings_out(st: FinTaxSettings) -> dict[str, Any]:
     return {
-        "taxable_usd": money(result.taxable),
-        "state_usd": money(result.state),
-        "federal_usd": money(result.federal),
-        "total_usd": money(result.total),
-        "paid_usd": money(result.paid),
-        "remaining_usd": money(result.remaining),
-        "after_tax_usd": money(net - result.total),
-        # Toplam vergi / net varlık: matrah düzeltmeleriyle birlikte gerçek yük
-        "effective_rate": _rate_out(result.total / net) if net > 0 else None,
-    }
-
-
-def scenario_out(s: FinTaxScenario) -> dict[str, Any]:
-    return {
-        **s.model_dump(),
-        "federal_rate": _rate_out(s.federal_rate),
-        "state_rate": _rate_out(s.state_rate),
-        "extra_deductions": money(s.extra_deductions),
-        "taxed_base": money(s.taxed_base),
+        "year_start_net_assets": money(st.year_start_net_assets),
+        "distributions": money(st.distributions),
+        "contributions": money(st.contributions),
+        "structure": st.structure,
+        "dividend_ratio": _rate_out(st.dividend_ratio),
+        "fdii_share": _rate_out(st.fdii_share),
+        "partners": [{"name": p.name, "share": _rate_out(p.share)} for p in st.partners],
+        "updated_at": st.updated_at,
     }
 
 
 def tax_view(
     bundle: Bundle,
     wallets: Sequence[FinWallet],
-    scenarios: Sequence[FinTaxScenario],
+    settings: FinTaxSettings,
     company_id: str,
     start: date,
     end: date,
     now: datetime,
 ) -> dict[str, Any]:
-    """Kalan net varlık (hesaplar − satıcı cüzdanları − üretici bakiyeleri) ve vergi senaryoları.
+    """Net varlık, yılın kârı ve beş yapıda ABD vergisi.
 
-    Yüklemeler [start, end] aralığındaki cüzdan kategorisi hareketleridir;
-    ödenen vergi yıl başından bugüne. Bakiyeler güncel (son kur).
+    Kâr yıl başı net varlık girilmeden hesaplanamaz (profit None, senaryo
+    yok). Senaryolar yıl sonu tahmini kâr üzerinden; ortak ve yüklenici
+    ödemeleri yıl başından (kayıtlı hareketlerden) bilgi amaçlı.
+    Yüklemeler [start, end] aralığından.
     """
     fx = bundle.fx
     today = now.date()
     year_start = date(today.year, 1, 1)
-    base = tax.tax_base(company_id, bundle.accounts, wallets, bundle.transactions, fx, year_start)
-    own_scenarios = [s for s in scenarios if s.company_id == company_id]
-    main = tax.primary(own_scenarios, company_id)
-    in_range = [t for t in bundle.transactions if t.company_id == company_id and start <= t.booked_at <= end]
-    dep = tax.deposits(in_range, bundle.accounts, fx)
+    assets = tax.net_assets(company_id, bundle.accounts, wallets, fx)
+    own = [t for t in bundle.transactions if t.company_id == company_id]
+    dep = tax.deposits([t for t in own if start <= t.booked_at <= end], bundle.accounts, fx)
+    estimate = tax.foreign_share_estimate(dep)
+    foreign = settings.fdii_share if settings.fdii_share is not None else (estimate or Decimal("0"))
+    prof = tax.profit(assets.net, settings, today)
+    scenarios = tax.scenarios(prof.projected, settings, foreign) if prof else []
+    current = tax.STRUCTURE_SCENARIO[settings.structure]
     accounts = [a for a in bundle.accounts if a.company_id == company_id and a.active]
+    first_tx = min((t.booked_at for t in own), default=None)
     return {
         "company_id": company_id,
         "as_of": now,
@@ -605,12 +599,40 @@ def tax_view(
         "start": start,
         "end": end,
         "base": {
-            "cash_usd": money(base.cash_usd),
-            "seller_usd": money(base.seller_usd),
-            "producer_usd": money(base.producer_usd),
-            "net_assets_usd": money(base.net_assets),
-            "paid_usd": money(base.paid_usd),
+            "cash_usd": money(assets.cash_usd),
+            "seller_usd": money(assets.seller_usd),
+            "producer_usd": money(assets.producer_usd),
+            "net_assets_usd": money(assets.net),
         },
+        "profit": (
+            {"ytd_usd": money(prof.ytd), "projected_usd": money(prof.projected), "elapsed_days": prof.elapsed_days}
+            if prof
+            else None
+        ),
+        "payments": {
+            "since": max(year_start, first_tx) if first_tx else year_start,
+            "partners_usd": money(tax.outflow_total(own, company_id, tax.PARTNER_CATEGORY, year_start, fx)),
+            "contractors_usd": money(tax.outflow_total(own, company_id, tax.CONTRACTOR_CATEGORY, year_start, fx)),
+            "irs_usd": money(tax.outflow_total(own, company_id, "vergi", year_start, fx)),
+        },
+        "settings": settings_out(settings),
+        "foreign_share": _rate_out(foreign),
+        "foreign_share_estimate": _rate_out(estimate),
+        "scenarios": [
+            {
+                "key": sc.key,
+                "title": sc.title,
+                "note": sc.note,
+                "tax_usd": money(sc.tax),
+                "rate": _rate_out(sc.tax / prof.projected) if prof and prof.projected > 0 else None,
+                "current": sc.key == current,
+                "partners": [
+                    {"name": r.name, "share": _rate_out(r.share), "income_usd": money(r.income), "tax_usd": money(r.tax)}
+                    for r in sc.partners
+                ],
+            }
+            for sc in scenarios
+        ],
         "accounts": [
             {"id": a.id, "name": a.name, "currency": a.currency, "balance": money(a.current_balance),
              "balance_usd": money(fx.to_usd(a.current_balance, a.currency)), "balance_at": a.balance_at}
@@ -620,10 +642,6 @@ def tax_view(
             {**w.model_dump(), "balance": money(w.balance), "balance_usd": money(fx.to_usd(w.balance, w.currency))}
             for w in wallets
             if w.company_id == company_id
-        ],
-        "scenarios": [
-            {**scenario_out(s), "result": result_out(tax.compute(base, s), base), "primary": main is not None and s.id == main.id}
-            for s in own_scenarios
         ],
         "deposits": {
             "usd": money(dep.usd),

@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 
 import { api, ApiError } from "../api";
 import { StatTile } from "../components/StatTile";
 import { day, istanbulToday, money, short, usd } from "./format";
-import type { TaxPayload, TaxScenario, Wallet, WalletKind } from "./types";
+import type { TaxPayload, TaxStructure, Wallet, WalletKind } from "./types";
 import { Field, FxNote, Loading, Modal, useFin, type TabProps } from "./ui";
 
 // Şimdilik yalnız Rexven LLC: GmbH ve TR sonra.
@@ -28,7 +28,7 @@ export function pct(v: number | null | undefined): string {
 export function TaxTab({ scope, start, end, tick }: TabProps) {
   const [local, setLocal] = useState(0);
   const [wallet, setWallet] = useState<Wallet | WalletKind | null>(null);
-  const [scenario, setScenario] = useState<TaxScenario | "new" | null>(null);
+  const [editing, setEditing] = useState(false);
   const { data, error } = useFin<TaxPayload>(`/api/finance/tax?company=${COMPANY}&start=${start}&end=${end}`, tick + local);
   const refresh = () => setLocal((n) => n + 1);
   if (!data) return <Loading error={error} />;
@@ -37,6 +37,10 @@ export function TaxTab({ scope, start, end, tick }: TabProps) {
   const sellers = data.wallets.filter((w) => w.kind === "seller");
   const noSeller = !sellers.some((w) => w.active);
   const dep = data.deposits;
+  const prof = data.profit;
+  const pay = data.payments;
+  const st = data.settings;
+  const shareGap = 1 - st.partners.reduce((s, p) => s + p.share, 0);
 
   return (
     <>
@@ -59,90 +63,91 @@ export function TaxTab({ scope, start, end, tick }: TabProps) {
           label="= Kalan net varlık"
           value={short(b.net_assets_usd)}
           tone={b.net_assets_usd < 0 ? "critical" : "neutral"}
-          expected="vergi bunun üzerinden"
+          expected="kâr bunun değişiminden"
           title={usd(b.net_assets_usd)}
         />
       </div>
 
       <section className="card">
         <div className="card-head">
-          <h2>Vergi senaryoları · {data.year}</h2>
-          <button className="btn primary" onClick={() => setScenario("new")}>
-            Senaryo ekle
+          <h2>Yılın kârı ve ABD vergisi · {data.year}</h2>
+          <button className="btn primary" onClick={() => setEditing(true)}>
+            Vergi ayarları
           </button>
         </div>
         <div className="card-body">
-          <p className="muted fin-note">
-            Matrah = kalan net varlık − yıl sonuna kadar ek gider − daha önce vergilenmiş birikim. Eyalet vergisi önce hesaplanır ve
-            federal matrahtan düşülür. Yıl içinde IRS'e ödenen {usd(b.paid_usd)} ("Vergi / KDV" kategorisi) kalandan düşülür.
-          </p>
-          {data.scenarios.length ? (
-            <div className="table-wrap">
-              <table className="board fin-table">
-                <thead>
-                  <tr>
-                    <th>Senaryo</th>
-                    <th className="num">Federal</th>
-                    <th className="num">Eyalet</th>
-                    <th className="num">Matrah</th>
-                    <th className="num">Toplam vergi</th>
-                    <th className="num">Ödenen</th>
-                    <th className="num">Kalan ödenecek</th>
-                    <th className="num">Vergi sonrası</th>
-                    <th className="num">Efektif</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.scenarios.map((s) => (
-                    <tr key={s.id} style={{ opacity: s.active ? 1 : 0.55 }}>
-                      <td className="fin-desc">
-                        <b>{s.name}</b>
-                        {s.primary ? <span className="badge good">bilançoda</span> : null}
-                        {!s.active ? <span className="badge">pasif</span> : null}
-                        {s.extra_deductions || s.taxed_base ? (
-                          <div className="sub">
-                            {s.extra_deductions ? `ek gider ${usd(s.extra_deductions)}` : ""}
-                            {s.extra_deductions && s.taxed_base ? " · " : ""}
-                            {s.taxed_base ? `vergilenmiş ${usd(s.taxed_base)}` : ""}
-                          </div>
-                        ) : null}
-                        {s.notes ? <div className="sub">{s.notes}</div> : null}
-                      </td>
-                      <td className="num">
-                        {pct(s.federal_rate)}
-                        <div className="sub">{usd(s.result.federal_usd)}</div>
-                      </td>
-                      <td className="num">
-                        {pct(s.state_rate)}
-                        <div className="sub">{usd(s.result.state_usd)}</div>
-                      </td>
-                      <td className="num">{usd(s.result.taxable_usd)}</td>
-                      <td className="num">
-                        <b>{usd(s.result.total_usd)}</b>
-                      </td>
-                      <td className="num">{usd(s.result.paid_usd)}</td>
-                      <td className="num">
-                        <b>{usd(s.result.remaining_usd)}</b>
-                      </td>
-                      <td className="num">{usd(s.result.after_tax_usd)}</td>
-                      <td className="num">{pct(s.result.effective_rate)}</td>
-                      <td>
-                        <button className="btn sm" onClick={() => setScenario(s)}>
-                          Düzenle
-                        </button>
-                      </td>
+          {prof ? (
+            <>
+              <div className="tiles fin-tiles">
+                <StatTile label="Kâr (yıl başından)" value={short(prof.ytd_usd)} title={usd(prof.ytd_usd)} expected={`${prof.elapsed_days}. gün`} />
+                <StatTile label="Yıl sonu tahmini kâr" value={short(prof.projected_usd)} title={usd(prof.projected_usd)} expected="aynı hızla devam ederse" />
+                <StatTile label="Ortak ödemeleri" value={short(pay.partners_usd)} title={usd(pay.partners_usd)} expected="guaranteed payment, gider" />
+                <StatTile label="Yüklenici ödemeleri" value={short(pay.contractors_usd)} title={usd(pay.contractors_usd)} expected="contractor, gider" />
+              </div>
+              <p className="muted fin-note">
+                Kâr = bugünkü net varlık − 1 Ocak net varlığı ({usd(st.year_start_net_assets)})
+                {st.distributions ? ` + kâr dağıtımı ${usd(st.distributions)}` : ""}. Ortak ve yüklenici ödemeleri gider olduğu için net
+                varlığı zaten düşürür, geri eklenmez. Ödeme toplamları {day(pay.since)} sonrası kayıtlı hareketlerden.
+                {pay.irs_usd ? ` Bu yıl IRS'e ödenen ${usd(pay.irs_usd)} geçen yılın vergisi; bu yılın hesabına girmez.` : ""}
+              </p>
+              <div className="table-wrap">
+                <table className="board fin-table">
+                  <thead>
+                    <tr>
+                      <th>Yapı</th>
+                      <th className="num">ABD federal vergisi</th>
+                      <th className="num">Kâra oranı</th>
+                      <th className="num">Vergi sonrası</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {data.scenarios.map((s) => (
+                      <Fragment key={s.key}>
+                        <tr>
+                          <td className="fin-desc">
+                            <b>{s.title}</b>
+                            {s.current ? <span className="badge good">bugünkü yapı</span> : null}
+                            <div className="sub">{s.note}</div>
+                          </td>
+                          <td className="num">
+                            <b>{usd(s.tax_usd)}</b>
+                          </td>
+                          <td className="num">{pct(s.rate)}</td>
+                          <td className="num">{usd(Math.max(prof.projected_usd, 0) - s.tax_usd)}</td>
+                        </tr>
+                        {s.partners.map((p) => (
+                          <tr key={`${s.key}-${p.name}`} className="fin-sub">
+                            <td>
+                              {p.name} <span className="muted">· pay {pct(p.share)} · kâr payı {usd(p.income_usd)}</span>
+                            </td>
+                            <td className="num">{usd(p.tax_usd)}</td>
+                            <td className="num">{p.income_usd > 0 ? pct(p.tax_usd / p.income_usd) : "—"}</td>
+                            <td />
+                          </tr>
+                        ))}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {shareGap > 0.0001 ? (
+                <div className="banner">Ortak payları toplamı {pct(1 - shareGap)}; kalan {pct(shareGap)} "Atanmamış pay" olarak hesaplandı.</div>
+              ) : null}
+              <p className="muted fin-note">
+                Yıl sonu tahmini kâr üzerinden, 2026 tarifesiyle. Eyalet vergisi yok (Delaware, eyalette faaliyet yok; yıllık 300 $ LLC
+                vergisi ayrı). FDII oranı{" "}
+                {st.fdii_share === null ? `REX yüklemelerinden tahmin (ABD şirketi görünmeyen satıcılar ${pct(data.foreign_share)})` : `elle ${pct(st.fdii_share)}`}
+                . Rakamlar karar desteğidir; uygulamadan önce CPA ile doğrulayın.
+              </p>
+            </>
           ) : (
-            <div className="empty">Senaryo yok. Örneğin federal %21 ile başla.</div>
+            <div className="empty">
+              Kâr hesabı için 1 Ocak {data.year}'teki net varlık gerekli (hesaplar − satıcı cüzdanları − üretici bakiyeleri).{" "}
+              <button className="btn sm" onClick={() => setEditing(true)}>
+                Vergi ayarlarını gir
+              </button>
+            </div>
           )}
-          <p className="muted fin-note">
-            Yeni haftalık bilançoda ilk aktif senaryonun kalan vergisi "Ödenecek vergi" satırı, cüzdanlar da borç satırı olarak gelir.
-          </p>
         </div>
       </section>
 
@@ -238,12 +243,12 @@ export function TaxTab({ scope, start, end, tick }: TabProps) {
           }}
         />
       ) : null}
-      {scenario ? (
-        <ScenarioForm
-          scenario={scenario === "new" ? null : scenario}
-          onClose={() => setScenario(null)}
+      {editing ? (
+        <SettingsForm
+          data={data}
+          onClose={() => setEditing(false)}
           onSaved={() => {
-            setScenario(null);
+            setEditing(false);
             refresh();
           }}
         />
@@ -410,80 +415,92 @@ function WalletForm({ wallet, kind, onClose, onSaved }: { wallet: Wallet | null;
   );
 }
 
-const toPct = (v: number) => String(Math.round(v * 10000) / 100);
+const STRUCTURE_LABEL: Record<TaxStructure, string> = {
+  partnership: "Ortaklık · ABD faaliyetine bağlı (bugünkü beyan)",
+  none: "Ortaklık · ABD'de faaliyet yok",
+  ccorp: "C-Corp",
+};
+const toPct = (v: number | null) => (v === null ? "" : String(Math.round(v * 10000) / 100));
+const fromPct = (v: string) => (Number(v) / 100).toFixed(4);
+const badPct = (v: string) => v !== "" && (Number.isNaN(Number(v)) || Number(v) < 0 || Number(v) > 100);
 
-function ScenarioForm({ scenario, onClose, onSaved }: { scenario: TaxScenario | null; onClose: () => void; onSaved: () => void }) {
+function SettingsForm({ data, onClose, onSaved }: { data: TaxPayload; onClose: () => void; onSaved: () => void }) {
+  const st = data.settings;
   const [f, setF] = useState({
-    name: scenario?.name ?? "",
-    federal: scenario ? toPct(scenario.federal_rate) : "21",
-    state: scenario ? toPct(scenario.state_rate) : "0",
-    extra: scenario ? String(scenario.extra_deductions) : "0",
-    taxed: scenario ? String(scenario.taxed_base) : "0",
-    notes: scenario?.notes ?? "",
-    sort: scenario ? String(scenario.sort) : "10",
-    active: scenario?.active ?? true,
+    start: st.year_start_net_assets === null ? "" : String(st.year_start_net_assets),
+    distributions: String(st.distributions),
+    structure: st.structure,
+    dividend: toPct(st.dividend_ratio),
+    fdii: toPct(st.fdii_share),
   });
+  const [partners, setPartners] = useState(st.partners.map((p) => ({ name: p.name, share: toPct(p.share) })));
   const { busy, err, setErr, run } = useSave(onSaved);
-  const set = (k: keyof typeof f, v: string | boolean) => setF({ ...f, [k]: v });
-  const rate = (v: string) => (Number(v) / 100).toFixed(4);
+  const set = (k: keyof typeof f, v: string) => setF({ ...f, [k]: v });
+  const total = partners.reduce((s, p) => s + (Number(p.share) || 0), 0);
 
   function save() {
-    if (!f.name.trim()) return setErr("Senaryo adı gerekli.");
-    const bad = [f.federal, f.state].some((v) => v === "" || Number(v) < 0 || Number(v) > 100);
-    if (bad) return setErr("Oranlar 0 ile 100 arasında olmalı.");
-    const body = {
-      name: f.name.trim(),
-      federal_rate: rate(f.federal),
-      state_rate: rate(f.state),
-      extra_deductions: f.extra || "0",
-      taxed_base: f.taxed || "0",
-      notes: f.notes.trim() || null,
-      sort: Number(f.sort) || 0,
-      active: f.active,
-    };
-    void run(scenario ? `/api/finance/tax-scenarios/${scenario.id}` : "/api/finance/tax-scenarios", scenario ? "PATCH" : "POST", scenario ? body : { ...body, company_id: COMPANY });
-  }
-
-  function remove() {
-    if (scenario && window.confirm(`${scenario.name} silinsin mi?`)) void run(`/api/finance/tax-scenarios/${scenario.id}`, "DELETE");
+    if (f.start !== "" && Number.isNaN(Number(f.start))) return setErr("1 Ocak net varlığı sayı olmalı.");
+    if (badPct(f.dividend) || badPct(f.fdii) || partners.some((p) => badPct(p.share))) return setErr("Oranlar 0 ile 100 arasında olmalı.");
+    if (total > 100.0001) return setErr("Ortak payları toplamı %100'ü geçemez.");
+    if (partners.some((p) => !p.name.trim())) return setErr("Ortak adı boş olamaz.");
+    void run(`/api/finance/tax-settings/${COMPANY}`, "PUT", {
+      year_start_net_assets: f.start === "" ? null : f.start,
+      distributions: f.distributions || "0",
+      contributions: "0",
+      structure: f.structure,
+      dividend_ratio: fromPct(f.dividend || "0"),
+      fdii_share: f.fdii === "" ? null : fromPct(f.fdii),
+      partners: partners.map((p) => ({ name: p.name.trim(), share: fromPct(p.share || "0") })),
+    });
   }
 
   return (
-    <Modal title={scenario ? "Senaryoyu düzenle" : "Senaryo ekle"} onClose={onClose} wide>
+    <Modal title="Vergi ayarları · Rexven LLC" onClose={onClose} wide>
       <div className="f-grid">
-        <Field label="Ad">
-          <input className="f-input" value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="ör. Federal %21 + eyalet" />
+        <Field label={`1 Ocak ${data.year} net varlık (USD)`} hint="o günkü hesaplar − satıcı cüzdanları − üretici bakiyeleri">
+          <input className="f-input num" type="number" step={1000} value={f.start} onChange={(e) => set("start", e.target.value)} />
         </Field>
-        <Field label="Sıra" hint="en küçük sıradaki aktif senaryo bilançoya girer">
-          <input className="f-input num" type="number" value={f.sort} onChange={(e) => set("sort", e.target.value)} />
+        <Field label="Yıl içi kâr dağıtımı (USD)" hint="guaranteed payment değil; yalnız kâr payı dağıtımı">
+          <input className="f-input num" type="number" step={1000} value={f.distributions} onChange={(e) => set("distributions", e.target.value)} />
         </Field>
-        <Field label="Federal oran (%)">
-          <input className="f-input num" type="number" step="0.1" min={0} max={100} value={f.federal} onChange={(e) => set("federal", e.target.value)} />
+        <Field label="Bugünkü yapı" hint="bilançodaki tahmini vergi satırı buna göre">
+          <select className="f-input" value={f.structure} onChange={(e) => set("structure", e.target.value)}>
+            {(Object.keys(STRUCTURE_LABEL) as TaxStructure[]).map((k) => (
+              <option key={k} value={k}>
+                {STRUCTURE_LABEL[k]}
+              </option>
+            ))}
+          </select>
         </Field>
-        <Field label="Eyalet oranı (%)">
-          <input className="f-input num" type="number" step="0.1" min={0} max={100} value={f.state} onChange={(e) => set("state", e.target.value)} />
+        <Field label="C-Corp'ta dağıtılacak kâr (%)" hint="vergi sonrası kârın ortaklara kâr payı olarak dağıtılan kısmı">
+          <input className="f-input num" type="number" step={5} min={0} max={100} value={f.dividend} onChange={(e) => set("dividend", e.target.value)} />
         </Field>
-        <Field label="Yıl sonuna kadar ek gider (USD)" hint="matrahtan düşülür">
-          <input className="f-input num" type="number" step={1000} value={f.extra} onChange={(e) => set("extra", e.target.value)} />
-        </Field>
-        <Field label="Daha önce vergilenmiş birikim (USD)" hint="geçmiş yıllarda vergisi ödenmiş varlık">
-          <input className="f-input num" type="number" step={1000} value={f.taxed} onChange={(e) => set("taxed", e.target.value)} />
+        <Field
+          label="Yurtdışı müşteri payı, FDII (%)"
+          hint={`boş bırakılırsa REX yüklemelerinden tahmin${data.foreign_share_estimate === null ? "" : `: ${pct(data.foreign_share_estimate)}`}`}
+        >
+          <input className="f-input num" type="number" step={5} min={0} max={100} value={f.fdii} onChange={(e) => set("fdii", e.target.value)} />
         </Field>
       </div>
-      <Field label="Not">
-        <input className="f-input" value={f.notes} onChange={(e) => set("notes", e.target.value)} />
-      </Field>
-      <label className="check">
-        <input type="checkbox" checked={f.active} onChange={(e) => set("active", e.target.checked)} />
-        Aktif
-      </label>
+
+      <div className="fin-h3">
+        Ortaklar <span className="muted">· toplam %{new Intl.NumberFormat("tr-TR", { maximumFractionDigits: 2 }).format(total)}</span>
+      </div>
+      {partners.map((p, i) => (
+        <div key={i} className="f-grid fin-partner">
+          <input className="f-input" value={p.name} placeholder="Ad soyad" aria-label="Ortak adı" onChange={(e) => setPartners(partners.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />
+          <input className="f-input num" type="number" step={0.5} min={0} max={100} value={p.share} placeholder="pay %" aria-label="Pay yüzdesi" onChange={(e) => setPartners(partners.map((x, j) => (j === i ? { ...x, share: e.target.value } : x)))} />
+          <button className="btn sm" onClick={() => setPartners(partners.filter((_, j) => j !== i))}>
+            Kaldır
+          </button>
+        </div>
+      ))}
+      <button className="btn sm" onClick={() => setPartners([...partners, { name: "", share: "" }])}>
+        Ortak ekle
+      </button>
+
       {err ? <div className="banner error">{err}</div> : null}
       <div className="f-actions">
-        {scenario ? (
-          <button className="btn danger" onClick={remove} disabled={busy}>
-            Sil
-          </button>
-        ) : null}
         <div className="spacer" />
         <button className="btn" onClick={onClose}>
           Vazgeç

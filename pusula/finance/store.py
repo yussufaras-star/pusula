@@ -27,7 +27,7 @@ from pusula.db.models import (
     FinPlannedItem,
     FinSnapshot,
     FinSnapshotLine,
-    FinTaxScenario,
+    FinTaxSettings,
     FinTransaction,
     FinWallet,
 )
@@ -344,9 +344,9 @@ DECISION_COLUMNS = (
 SNAPSHOT_COLUMNS = "id, company_id, week_date, locked, locked_at, fx, notes, created_at"
 LINE_COLUMNS = "id, snapshot_id, side, section, group_name, label, amount, currency, origin, sort"
 WALLET_COLUMNS = "id, company_id, kind, name, balance, currency, as_of, notes, active, sort, updated_at"
-SCENARIO_COLUMNS = (
-    "id, company_id, name, federal_rate, state_rate, extra_deductions, taxed_base, notes, active, sort,"
-    " created_at"
+SETTINGS_COLUMNS = (
+    "company_id, year_start_net_assets, distributions, contributions, structure, dividend_ratio,"
+    " fdii_share, partners, updated_at"
 )
 
 
@@ -416,7 +416,6 @@ def load_row(conn: psycopg.Connection, table: str, row_id: int) -> dict | None:
         "fin_decisions": DECISION_COLUMNS,
         "fin_accounts": ACCOUNT_COLUMNS,
         "fin_wallets": WALLET_COLUMNS,
-        "fin_tax_scenarios": SCENARIO_COLUMNS,
     }[table]
     rows = _rows(conn, f"SELECT {columns} FROM {table} WHERE id = %s", (row_id,))
     return rows[0] if rows else None
@@ -427,9 +426,29 @@ def load_wallets(conn: psycopg.Connection) -> list[FinWallet]:
     return [FinWallet(**r) for r in rows]
 
 
-def load_tax_scenarios(conn: psycopg.Connection) -> list[FinTaxScenario]:
-    rows = _rows(conn, f"SELECT {SCENARIO_COLUMNS} FROM fin_tax_scenarios ORDER BY company_id, sort, id")
-    return [FinTaxScenario(**r) for r in rows]
+def load_tax_settings(conn: psycopg.Connection, company_id: str) -> FinTaxSettings:
+    """Kayıt yoksa varsayılan (ortaklık, yıl başı net varlık girilmemiş)."""
+    rows = _rows(conn, f"SELECT {SETTINGS_COLUMNS} FROM fin_tax_settings WHERE company_id = %s", (company_id,))
+    return FinTaxSettings(**rows[0]) if rows else FinTaxSettings(company_id=company_id)
+
+
+def save_tax_settings(conn: psycopg.Connection, settings: FinTaxSettings) -> None:
+    data = settings.model_dump(exclude={"updated_at"})
+    data["partners"] = Json([{"name": p["name"], "share": str(p["share"])} for p in data["partners"]])
+    columns = list(data)
+    conn.execute(
+        sql.SQL(
+            "INSERT INTO fin_tax_settings ({cols}) VALUES ({vals})"
+            " ON CONFLICT (company_id) DO UPDATE SET {sets}, updated_at = now()"
+        ).format(
+            cols=sql.SQL(", ").join(sql.Identifier(c) for c in columns),
+            vals=sql.SQL(", ").join(sql.Placeholder() for _ in columns),
+            sets=sql.SQL(", ").join(
+                sql.SQL("{c} = EXCLUDED.{c}").format(c=sql.Identifier(c)) for c in columns if c != "company_id"
+            ),
+        ),
+        [data[c] for c in columns],
+    )
 
 
 def load_snapshot_lines(conn: psycopg.Connection, snapshot_ids: Sequence[int]) -> list[FinSnapshotLine]:
@@ -475,15 +494,9 @@ WRITABLE: dict[str, frozenset[str]] = {
     "fin_wallets": frozenset(
         {"company_id", "kind", "name", "balance", "currency", "as_of", "notes", "active", "sort"}
     ),
-    "fin_tax_scenarios": frozenset(
-        {
-            "company_id", "name", "federal_rate", "state_rate", "extra_deductions", "taxed_base",
-            "notes", "active", "sort",
-        }
-    ),
 }
 DELETABLE = frozenset(
-    {"fin_planned_items", "fin_decisions", "fin_snapshots", "fin_snapshot_lines", "fin_wallets", "fin_tax_scenarios"}
+    {"fin_planned_items", "fin_decisions", "fin_snapshots", "fin_snapshot_lines", "fin_wallets"}
 )
 
 
