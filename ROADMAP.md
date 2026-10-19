@@ -43,6 +43,17 @@ Streamlit bırakıldı; React + FastAPI, Vercel. KPI hesabı tek sorguda
    yapabilir (aşağıdaki not); varsayılan ekip hedefi ve kişisel rekor
    odaklı, sıralama yöneticinin açabileceği bir seçenek.
 
+6. **Görüşme Analizleri** (kod ✅, 2026-10-19; anahtarlar bekleniyor) — haftanın
+   telefon görüşmeleri ve toplantıları. Çağrılar CRM'den (temsilci, lead, sonuç),
+   ses Verimor'dan (CRM kayıt adresindeki call_uuid); toplantı videoları Zoho
+   Meeting'den. Konuşma-tanıma (OpenAI / ElevenLabs / Deepgram) → Claude ile
+   görüşme başına özet, itiraz, beş başlıkta puan, sonraki adım, alıntılı
+   güçlü/gelişim maddesi; haftalık sayılar koddan, temsilci başına tek odak
+   maddesi (`pusula/conversations.py`, `/api/conversations`, gece işi
+   `gorusme-analizi.yml`). Toplantı kayıtları için Meeting token'ına
+   `ZohoMeeting.recording.READ`, `ZohoMeeting.meetinguds.READ`,
+   `ZohoFiles.files.READ` kapsamları gerekir.
+
 ## Katmanlar
 
 ### Ingestion

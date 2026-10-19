@@ -63,6 +63,7 @@ from pusula.web.auth import (
     require_cron,
 )
 from pusula.sales_report import REPORT_START, SOURCE_DIMS, build_sales_report, source_yield
+from pusula.web.conversations import router as conversations_router
 from pusula.web.finance import cron_router as finance_cron_router
 from pusula.web.finance import router as finance_router
 from pusula.web.okr import router as okr_router
@@ -82,6 +83,7 @@ app = FastAPI(title="Pusula", docs_url=None, redoc_url=None)
 app.include_router(finance_router)
 app.include_router(finance_cron_router)
 app.include_router(okr_router)
+app.include_router(conversations_router)
 
 
 class LoginBody(BaseModel):

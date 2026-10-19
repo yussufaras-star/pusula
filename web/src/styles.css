@@ -3254,3 +3254,142 @@ textarea.f-input {
 .fin-desc .co-tag {
   margin-left: 6px;
 }
+
+/* --- Görüşme Analizleri ---------------------------------------------------- */
+
+.board td.cv-wrap {
+  white-space: normal;
+  min-width: 220px;
+}
+
+.board td.cv-summary {
+  max-width: 420px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.cv-detail-row td {
+  background: var(--surface-2);
+  white-space: normal;
+}
+
+.cv-lead {
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+.cv-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+  gap: 12px 24px;
+}
+
+.cv-team h3,
+.cv-rep h3,
+.cv-detail h3 {
+  margin: 12px 0 6px;
+  font-size: 13px;
+  font-weight: 620;
+  color: var(--ink-2);
+}
+
+.cv-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  line-height: 1.45;
+}
+
+.cv-quote {
+  margin: 4px 0 0;
+  padding: 2px 0 2px 10px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+  font-style: italic;
+  font-size: 13px;
+}
+
+.cv-focus {
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+
+.cv-focus .label {
+  font-weight: 650;
+  margin-bottom: 4px;
+}
+
+.cv-focus p {
+  margin: 6px 0 0;
+}
+
+.cv-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cv-detail p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.cv-scores {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
+  gap: 8px;
+}
+
+.cv-score {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 13px;
+}
+
+.cv-transcript {
+  margin: 10px 0 0;
+  max-height: 420px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.cv-risk {
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+
+.cv-foot {
+  font-size: 12px;
+}
+
+.cv-page tr.clickable {
+  cursor: pointer;
+}
+
+.cv-page .caret {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.cv-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}

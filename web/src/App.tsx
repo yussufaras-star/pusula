@@ -5,6 +5,7 @@ import { Logo } from "./components/Logo";
 import { FinancePage, type FinanceTab } from "./finance/FinancePage";
 import { BoardPage } from "./pages/Board";
 import { ComparePage } from "./pages/Compare";
+import { ConversationsPage } from "./pages/Conversations";
 import { LivePage } from "./pages/Live";
 import { LoginPage } from "./pages/Login";
 import { ReportsPage } from "./pages/Reports";
@@ -14,7 +15,7 @@ import type { Me } from "./types";
 // Finans yalnız me.finance true olan yöneticide görünür; sunucu da ayrıca korur.
 type Area = "satis" | "finans";
 
-type SalesRoute = "canli" | "karsilastir" | "pano" | "raporlar";
+type SalesRoute = "canli" | "karsilastir" | "pano" | "raporlar" | "gorusmeler";
 type FinanceRoute =
   | "finans/genel"
   | "finans/akis"
@@ -39,6 +40,7 @@ const NAV: Record<Area, NavItem[]> = {
     { route: "karsilastir", label: "Karşılaştır" },
     { route: "pano", label: "Ekip Panosu" },
     { route: "raporlar", label: "Raporlar" },
+    { route: "gorusmeler", label: "Görüşme Analizleri" },
   ],
   finans: [
     { route: "finans/genel", label: "Genel" },
@@ -142,6 +144,8 @@ export function App() {
           <ComparePage me={me} />
         ) : route === "raporlar" ? (
           <ReportsPage me={me} />
+        ) : route === "gorusmeler" ? (
+          <ConversationsPage me={me} />
         ) : route === "pano" ? (
           <BoardPage me={me} />
         ) : (
