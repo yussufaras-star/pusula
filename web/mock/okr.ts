@@ -1,4 +1,4 @@
-// Yalnız `npm run dev:mock`: Ekip Panosu örnek verisi (2026 Ç4 taslağına benzer).
+// Yalnız `npm run dev:mock`: Ekip Panosu örnek verisi (2026 Q4 taslağına benzer).
 import type { OkrBoard, OkrKeyResult, OkrObjective } from "../src/types";
 
 const at = (d: number) => new Date(Date.UTC(2026, 9, d, 9)).toISOString();
@@ -97,7 +97,7 @@ export function mockOkr(): OkrBoard {
   return {
     year: 2026,
     quarter: 4,
-    label: "2026 4. çeyrek",
+    label: "2026 Q4",
     first: "2026-10-01",
     last: "2026-12-31",
     share: 0.2,

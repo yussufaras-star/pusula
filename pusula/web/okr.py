@@ -99,7 +99,7 @@ def _can_write_owner(user: AuthUser, owner: str) -> bool:
 
 SALES_KEYS = ("ciro", "satis", "ort_satis", "atanan")
 # Yönetici kararı (19 Ekim): OKR'da ekip cirosu ve satışı tüm şirkettir
-# (yönetim ve diğer sahipler, ayrılanlar dahil); Ç1 2026 CRM rakamı sayılır.
+# (yönetim ve diğer sahipler, ayrılanlar dahil); Q1 2026 CRM rakamı sayılır.
 # Lead ataması Nisan 2026'dan önce eksiktir; o dönem check-in ile girilir.
 OKR_SALES_START = date(2026, 1, 1)
 LEAD_START = REAL_SALES_START

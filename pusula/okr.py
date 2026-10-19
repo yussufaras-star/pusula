@@ -39,7 +39,7 @@ MIN_KRS, MAX_KRS = 2, 5
 # İddialı hedefte 0,7 başarıdır (Doerr: "aspirational OKR'lar %70'te tatmin eder").
 BAR = {"taahhut": 1.0, "iddiali": 0.7}
 STALE_DAYS = 7
-QUARTER_LABEL = {0: "Yıllık", 1: "1. çeyrek", 2: "2. çeyrek", 3: "3. çeyrek", 4: "4. çeyrek"}
+QUARTER_LABEL = {0: "Yıllık", 1: "Q1", 2: "Q2", 3: "Q3", 4: "Q4"}
 
 
 @dataclass(frozen=True)
@@ -397,7 +397,7 @@ def build_board(
                 override, missing = rollups[metric]
                 note = "Çeyreklerin toplamı"
                 if missing:
-                    quarters = ", ".join(f"Ç{q}" for q in missing)
+                    quarters = ", ".join(f"Q{q}" for q in missing)
                     note += f"; {quarters} eksik — o çeyreğin sonucuna check-in ile gir"
             elif metric and coverage and coverage.get(metric) and coverage[metric] > first:
                 note = f"{tr_day(coverage[metric])} tarihinden beri ölçülüyor"

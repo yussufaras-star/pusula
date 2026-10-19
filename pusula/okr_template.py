@@ -1,8 +1,8 @@
 """Önerilen OKR taslağı: 2026 (yıl başı planı) ve 2027 yılı + dört çeyrek.
 
-2026 rakamları yöneticinin yıl başı planıdır (PLAN_2026). 2027 ve 2026 Ç4
+2026 rakamları yöneticinin yıl başı planıdır (PLAN_2026). 2027 ve 2026 Q4
 kaldıraç hedefleri 2026 gerçekleşmesinden türetildi (pusula.sales_report, 19 Ekim):
-Ç3 ciro 6,92 M TL, 190 satış, ort. satış 36,4 bin TL, ulaşma %66,3,
+Q3 ciro 6,92 M TL, 190 satış, ort. satış 36,4 bin TL, ulaşma %66,3,
 katılım %36,3, toplantıya dönüş %15,6, satış oranı %4,4, doluluk %38,5,
 ort. görüşme 236 sn, döngü 8,6 gün. Ekim'in ilk 15 iş günü 1,95 M TL
 (çeyreklik koşu ~10 M). Taslaktır: yönetici panelden değiştirir.
@@ -77,7 +77,7 @@ def _year_2026() -> list[dict[str, Any]]:
             "title": "2026 planını teslim et: 50,5 M TL ciro, 1.075 yeni müşteri",
             "description": (
                 "Ocak'ta koyduğumuz yıllık plan. Ciro, satış ve lead çeyreklerin toplamıdır; "
-                "Ç1 CRM taşıma döneminde ölçülmedi, gerçekleşeni Ç1 sonuçlarına check-in ile girilir."
+                "Q1 CRM taşıma döneminde ölçülmedi, gerçekleşeni Q1 sonuçlarına check-in ile girilir."
             ),
             "krs": [
                 {**_kr("Ciro 50,51 M TL", "ciro", 0, PLAN_2026_YEAR["ciro"], "tl"), "phasing": PLAN_2026["ciro"]},
@@ -93,7 +93,7 @@ def _year_2026() -> list[dict[str, Any]]:
         out.append(
             {
                 "quarter": q, "kind": "taahhut", "status": status, "parent": "y2026",
-                "title": f"{q}. çeyrek planı: {_mn(sum(PLAN_2026['ciro'][months]))} ciro, {sum(PLAN_2026['satis'][months])} yeni müşteri",
+                "title": f"Q{q} planı: {_mn(sum(PLAN_2026['ciro'][months]))} ciro, {sum(PLAN_2026['satis'][months])} yeni müşteri",
                 "description": _month_note(q),
                 "krs": _plan_krs(months, leads=PLAN_2026_QUARTER_LEADS[q]),
             }
@@ -106,7 +106,7 @@ def _year_2026() -> list[dict[str, Any]]:
                 "krs": _funnel_krs(),
             }
         )
-    # Ç4: planın üstüne kaldıraçlar (iddialı). Bazlar 2026 Ç3 gerçekleşmesi.
+    # Q4: planın üstüne kaldıraçlar (iddialı). Bazlar 2026 Q3 gerçekleşmesi.
     out += [
         {
             "quarter": 4, "kind": "iddiali", "status": "aktif", "parent": "y2026",
@@ -154,7 +154,7 @@ def _year_2027() -> list[dict[str, Any]]:
                 _kr("Her temsilcinin her çeyrek en az 1 kişisel OKR'ı (5 temsilci × 4 çeyrek = 20)", None, 0, 20, "adet"),
             ],
         },
-        # --- 1. çeyrek ---
+        # --- Q1 ---
         {
             "quarter": 1, "kind": "taahhut", "status": draft, "parent": "y_buyume",
             "title": "Yıla güçlü başla: ilk çeyrekte yıllık planın %22'si",
@@ -173,10 +173,10 @@ def _year_2027() -> list[dict[str, Any]]:
                 _kr("Ortalama görüşme süresi 300 sn", "sure_ort", 260, 300, "sn"),
             ],
         },
-        # --- 2. çeyrek ---
+        # --- Q2 ---
         {
             "quarter": 2, "kind": "taahhut", "status": draft, "parent": "y_buyume",
-            "title": "Büyümeyi hızlandır: 2. çeyrekte 12 M TL",
+            "title": "Büyümeyi hızlandır: Q2'de 12 M TL",
             "krs": [
                 _kr("Çeyrek cirosu 12 M TL", "ciro", 0, 12_000_000, "tl"),
                 _kr("310 satış", "satis", 0, 310, "adet"),
@@ -192,10 +192,10 @@ def _year_2027() -> list[dict[str, Any]]:
                 _kr("Satış oranı %6,5", "satis_orani", 5, 6.5, "yuzde"),
             ],
         },
-        # --- 3. çeyrek ---
+        # --- Q3 ---
         {
             "quarter": 3, "kind": "taahhut", "status": draft, "parent": "y_buyume",
-            "title": "Yaz durgunluğunu kır: 3. çeyrekte 13 M TL",
+            "title": "Yaz durgunluğunu kır: Q3'te 13 M TL",
             "description": "2026'da Ağustos en zayıf ayımızdı (1,69 M TL). 2027'de yaz çukuru olmayacak.",
             "krs": [
                 _kr("Çeyrek cirosu 13 M TL", "ciro", 0, 13_000_000, "tl"),
@@ -212,10 +212,10 @@ def _year_2027() -> list[dict[str, Any]]:
                 _kr("Satış oranı %7", "satis_orani", 6, 7, "yuzde"),
             ],
         },
-        # --- 4. çeyrek ---
+        # --- Q4 ---
         {
             "quarter": 4, "kind": "taahhut", "status": draft, "parent": "y_buyume",
-            "title": "Yılı rekorla kapat: 4. çeyrekte 14 M TL",
+            "title": "Yılı rekorla kapat: Q4'te 14 M TL",
             "krs": [
                 _kr("Çeyrek cirosu 14 M TL", "ciro", 0, 14_000_000, "tl"),
                 _kr("360 satış", "satis", 0, 360, "adet"),

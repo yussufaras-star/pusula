@@ -61,7 +61,7 @@ def test_status_paces_by_time_and_bar() -> None:
 def _rows():
     objectives = [
         {"id": 1, "year": 2026, "quarter": 0, "owner": "team", "title": "Yıllık", "kind": "iddiali", "parent_id": None},
-        {"id": 2, "year": 2026, "quarter": 4, "owner": "team", "title": "Ç4 ciro", "kind": "taahhut", "parent_id": 1},
+        {"id": 2, "year": 2026, "quarter": 4, "owner": "team", "title": "Q4 ciro", "kind": "taahhut", "parent_id": 1},
         {"id": 3, "year": 2026, "quarter": 4, "owner": "r1", "title": "Kişisel", "kind": "iddiali", "parent_id": 2},
     ]
     krs = [
@@ -276,11 +276,11 @@ def test_phased_share_follows_monthly_plan() -> None:
 def test_auto_kr_falls_back_to_checkin_and_annual_rolls_up() -> None:
     objectives = [
         {"id": 1, "year": 2026, "quarter": 0, "owner": "team", "title": "Yıl", "kind": "taahhut", "parent_id": None},
-        {"id": 2, "year": 2026, "quarter": 1, "owner": "team", "title": "Ç1", "kind": "taahhut", "parent_id": 1},
+        {"id": 2, "year": 2026, "quarter": 1, "owner": "team", "title": "Q1", "kind": "taahhut", "parent_id": 1},
     ]
     krs = [
         {"id": 10, "objective_id": 1, "title": "Ciro", "metric": "ciro", "start_value": 0, "target_value": 50_000_000},
-        {"id": 20, "objective_id": 2, "title": "Ç1 ciro", "metric": "ciro", "start_value": 0, "target_value": 13_000_000},
+        {"id": 20, "objective_id": 2, "title": "Q1 ciro", "metric": "ciro", "start_value": 0, "target_value": 13_000_000},
     ]
     checkins = [{"id": 1, "kr_id": 20, "value": 9_000_000.0, "confidence": None, "note": None,
                  "created_at": datetime(2026, 10, 19, 9)}]
@@ -296,7 +296,7 @@ def test_auto_kr_falls_back_to_checkin_and_annual_rolls_up() -> None:
     year = okr.build_board(year=2026, quarter=0, objectives=objectives, krs=krs, checkins=checkins,
                            values={"team": {"ciro": 1}}, names={}, today=date(2026, 10, 19), rollups=rollups)
     annual = year["objectives"][0]["krs"][0]
-    assert annual["current"] == 21_000_000 and "Ç3 eksik" in annual["note"]
+    assert annual["current"] == 21_000_000 and "Q3 eksik" in annual["note"]
 
 
 def test_plan_2026_template_matches_sheet() -> None:
