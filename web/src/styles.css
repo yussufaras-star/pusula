@@ -3393,3 +3393,12 @@ textarea.f-input {
   gap: 20px;
   min-width: 0;
 }
+
+.cv-share {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 12px;
+  font-size: 13px;
+}

@@ -286,6 +286,15 @@ export function ConversationsPage({ me }: { me: Me }) {
                                 <tr className="cv-detail-row">
                                   <td colSpan={SCORE_KEYS.length + 5}>
                                     <RepNarrative n={r.narrative} />
+                                    {isAdmin ? (
+                                      <ShareToCliq
+                                        week={data.week_start}
+                                        repId={r.rep_id}
+                                        name={r.name}
+                                        sentAt={r.sent_at}
+                                        onSent={refresh}
+                                      />
+                                    ) : null}
                                   </td>
                                 </tr>
                               ) : null}
@@ -469,6 +478,48 @@ function RepNarrative({ n }: { n: NonNullable<ConvWeek["reps"][number]["narrativ
           </ul>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ShareToCliq({
+  week,
+  repId,
+  name,
+  sentAt,
+  onSent,
+}: {
+  week: string;
+  repId: string;
+  name: string;
+  sentAt: string | null;
+  onSent: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  async function send() {
+    const again = sentAt ? " Bu hafta zaten gönderildi; yeniden gönderilsin mi?" : "";
+    if (!window.confirm(`${name} için haftalık değerlendirme Cliq'ten yalnız kendisine gönderilecek.${again}`)) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await api("/api/conversations/share", { method: "POST", body: JSON.stringify({ week, rep_id: repId }) });
+      onSent();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="cv-share">
+      <button className="btn" onClick={send} disabled={busy}>
+        {busy ? "Gönderiliyor…" : sentAt ? "Cliq'e yeniden gönder" : "Cliq'e gönder"}
+      </button>
+      <span className="muted">
+        {sentAt ? `${dateTime.format(new Date(sentAt))} gönderildi · ` : ""}yalnız {name.split(" ")[0]} görür
+      </span>
+      {err ? <span className="warn-text">{err}</span> : null}
     </div>
   );
 }

@@ -122,3 +122,20 @@ def test_aggregate_scores_skip_not_applicable_and_unusable() -> None:
 def test_aggregate_empty_week() -> None:
     s = cv.aggregate([])
     assert s["analiz"] == 0 and s["puan_ort"] is None and s["sonraki_adim_orani"] is None
+
+
+def test_share_text_has_focus_quote_scores_and_link() -> None:
+    stats = cv.aggregate([analysed(), analysed()])
+    narrative = {
+        "ozet": "İki görüşme.",
+        "odak": {"baslik": "Tarihli adım", "neden": "Takip yok.", "alinti": "nasıl isterseniz", "nasil": "Saat sor."},
+        "guclu": ["Açılış iyi."],
+        "dikkat": [],
+    }
+    text = cv.share_text("Serkan Şahin", date(2026, 10, 19), stats, narrative)
+    assert text.startswith("*Görüşme değerlendirmen · 19.10 – 25.10.2026*")
+    assert "Merhaba Serkan, bu hafta analiz edilen 2 görüşmenin" in text
+    assert "*Bu haftanın odağı: Tarihli adım*" in text and "> “nasıl isterseniz”" in text
+    assert "• Açılış iyi." in text and "*Dikkat*" not in text
+    assert "Açılış 4,0" in text and "İtiraz karşılama" not in text  # 0 = uygulanmaz, gösterilmez
+    assert "\n\n\n" not in text
