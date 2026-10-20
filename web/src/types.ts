@@ -668,7 +668,8 @@ export interface OkrBoard {
 }
 
 // pusula/conversations.py — Görüşme Analizleri.
-export type ConvScoreKey = "acilis" | "ihtiyac_analizi" | "deger_sunumu" | "itiraz_karsilama" | "kapanis";
+// SONAR-41 boyutları (K1-K5); etiketler API'den gelir.
+export type ConvScoreKey = string;
 export type ConvStatus = "bekliyor" | "yazildi" | "analiz_edildi" | "hata" | "atlandi";
 
 export interface ConvObjectionStat {
@@ -686,6 +687,8 @@ export interface ConvStats {
   dakika: number;
   puanlar: Record<ConvScoreKey, number | null>;
   puan_ort: number | null;
+  davranislar: Record<string, { ort: number | null; adet: number; zayif: number }>;
+  crm: { notlu: number; oran: number | null; puanlar: Record<string, number | null> };
   ilgi_ort: number | null;
   sonraki_adim_orani: number | null;
   tarihli_adim_orani: number | null;
@@ -696,7 +699,7 @@ export interface ConvStats {
 
 export interface ConvRepNarrative {
   ozet: string;
-  odak: { baslik: string; neden: string; alinti: string; nasil: string };
+  odak: { kod?: string; baslik: string; neden: string; alinti: string; nasil: string };
   guclu: string[];
   dikkat: string[];
 }
@@ -726,8 +729,14 @@ export interface ConvItemSummary {
   puan: number | null;
   ilgi: number | null;
   sonraki_adim: boolean | null;
+  crm_not: boolean | null;
   itirazlar: string[];
   risk: number;
+}
+
+export interface ConvSonarRef {
+  behaviors: Record<string, { dim: string; name: string }>;
+  crm: Record<string, string>;
 }
 
 export interface ConvWeek {
@@ -744,6 +753,7 @@ export interface ConvWeek {
   }[];
   items: ConvItemSummary[];
   score_labels: Record<ConvScoreKey, string>;
+  sonar: ConvSonarRef;
 }
 
 export interface ConvWeeks {
@@ -752,6 +762,7 @@ export interface ConvWeeks {
 }
 
 interface ConvQuoted {
+  kod?: string;
   madde: string;
   alinti: string;
 }
@@ -764,7 +775,8 @@ export interface ConvAnalysis {
   temsilci_konusmaci: string;
   musteri: { ihtiyaclar: string[]; ilgi: number; duygu: "olumlu" | "notr" | "olumsuz" };
   itirazlar: { tip: string; alinti: string; karsilandi: "evet" | "kismen" | "hayir" }[];
-  puanlar: Record<ConvScoreKey, number>;
+  sonar?: { kod: string; puan: number; alinti: string }[];
+  crm?: { not_var: boolean; puanlar: Record<string, number>; yorum: string };
   guclu: ConvQuoted[];
   gelisim: ConvQuoted[];
   sonraki_adim: { var: boolean; tarih_net: boolean; aciklama: string };
@@ -772,7 +784,12 @@ export interface ConvAnalysis {
   sozler: string[];
 }
 
-export interface ConvItemDetail extends Omit<ConvItemSummary, "itirazlar" | "puan" | "ilgi" | "sonraki_adim" | "risk" | "tur" | "ozet" | "analiz_edilebilir"> {
+export interface ConvItemDetail
+  extends Omit<
+    ConvItemSummary,
+    "itirazlar" | "puan" | "ilgi" | "sonraki_adim" | "crm_not" | "risk" | "tur" | "ozet" | "analiz_edilebilir"
+  > {
+  notes?: { bu: string[]; onceki: string[] };
   analysis: ConvAnalysis | null;
   transcript: string | null;
   speakers: boolean | null;

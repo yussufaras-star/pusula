@@ -4,8 +4,10 @@ Akış (scripts/conversation_analysis.py, GitHub Actions):
 1. topla      CRM çağrıları (events, kanal call) → Verimor call_uuid; Zoho
               Meeting kayıtları → meeting_sessions ile temsilci. conv_items.
 2. yazıya dök kaydı indir, konuşma-tanımadan geçir (pusula/transcribe.py).
-3. analiz     her görüşme için Claude: özet, itirazlar, beş başlıkta puan,
-              sonraki adım, kanıt alıntısıyla güçlü/gelişim maddeleri.
+3. analiz     her görüşme için Claude, SONAR-41 ile (pusula/sonar41.py): fırsatı
+              doğan davranışlara 1-5 puan + alıntı, CRM notuna C1-C6, özet,
+              itirazlar, sonraki adım. CRM notları (Zoho Notes) lead ve
+              zamanla görüşmeye bağlanır.
 4. haftalık   sayılar koddan (aggregate); Claude yalnız temsilci başına tek
               odak maddesini ve ekip özetini cümleye döker.
 
@@ -18,19 +20,22 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 from collections import Counter, defaultdict
 from collections.abc import Iterable
 from datetime import date, datetime, timedelta
+from html import unescape
 from pathlib import Path
 from typing import Any
 
-from pusula import llm, recordings, transcribe
+from pusula import llm, recordings, sonar41, transcribe
 from pusula.config import get_org_id
 from pusula.metrics import TZ
 from pusula.occupancy import MATCH_MIN
 from pusula.panel_data import connect
+from pusula.zoho.crm import coql
 
 logger = logging.getLogger(__name__)
 
@@ -43,14 +48,13 @@ MIN_WORDS = 25
 MAX_ATTEMPTS = 3
 TEAM = "team"
 
-SCORE_KEYS = ("acilis", "ihtiyac_analizi", "deger_sunumu", "itiraz_karsilama", "kapanis")
-SCORE_LABELS = {
-    "acilis": "Açılış",
-    "ihtiyac_analizi": "İhtiyaç analizi",
-    "deger_sunumu": "Değer sunumu",
-    "itiraz_karsilama": "İtiraz karşılama",
-    "kapanis": "Kapanış / sonraki adım",
-}
+# Puan başlıkları SONAR-41 boyutlarıdır (K1-K5).
+SCORE_KEYS = sonar41.DIM_KEYS
+SCORE_LABELS = dict(sonar41.DIMS)
+# Görüşmeden sonra bu süre içinde aynı temsilcinin lead'e yazdığı not o görüşmenindir.
+NOTE_WINDOW = timedelta(hours=3)
+# Önceki notlar için geriye bakış.
+NOTE_LOOKBACK = timedelta(days=60)
 TYPES = ("kesif", "sunum", "takip", "kapanis", "itiraz", "destek", "diger")
 OBJECTIONS = ("fiyat", "zaman", "guven", "ihtiyac_yok", "rakip", "karar_verici", "odeme", "diger")
 RISKS = ("yanlis_bilgi", "baski", "olmayan_soz", "uslup", "diger")
@@ -99,6 +103,18 @@ CREATE TABLE IF NOT EXISTS conv_weekly (
 );
 ALTER TABLE conv_weekly ADD COLUMN IF NOT EXISTS sent_at timestamptz;
 ALTER TABLE conv_weekly ADD COLUMN IF NOT EXISTS sent_by text;
+CREATE TABLE IF NOT EXISTS conv_notes (
+    org_id         text NOT NULL DEFAULT 'rexven',
+    note_id        text NOT NULL,
+    parent_module  text,
+    parent_id      text,
+    rep_id         text,
+    author         text,
+    created_at     timestamptz NOT NULL,
+    content        text,
+    PRIMARY KEY (org_id, note_id)
+);
+CREATE INDEX IF NOT EXISTS idx_conv_notes_parent ON conv_notes (org_id, parent_id, created_at);
 CREATE TABLE IF NOT EXISTS conv_runs (
     id           bigserial PRIMARY KEY,
     org_id       text NOT NULL DEFAULT 'rexven',
@@ -272,9 +288,71 @@ def _customer_from_topic(topic: str | None) -> str | None:
     return topic.split(" with ", 1)[1].strip() or None
 
 
+def note_row(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Zoho Notes kaydı → conv_notes satırı (saf)."""
+    created = record.get("Created_Time")
+    if not record.get("id") or not created:
+        return None
+    parent = record.get("Parent_Id") or {}
+    module = parent.get("module")
+    module = module.get("api_name") if isinstance(module, dict) else module
+    author = record.get("Created_By") or {}
+    content = _clean_note(record.get("Note_Content"))
+    title = (record.get("Note_Title") or "").strip()
+    return {
+        "note_id": str(record["id"]),
+        "parent_module": module,
+        "parent_id": str(parent.get("id")) if parent.get("id") else None,
+        "rep_id": str(author.get("id")) if author.get("id") else None,
+        "author": author.get("name"),
+        "created_at": datetime.fromisoformat(str(created)),
+        "content": f"{title}: {content}" if title and title not in content else content,
+    }
+
+
+def _collect_notes(conn: Any, start: datetime, end: datetime) -> dict[str, Any]:
+    """Haftanın ve önceki 60 günün CRM notları (önceki notlar bağlam için)."""
+    added = 0
+    cursor = start - NOTE_LOOKBACK
+    try:
+        while cursor < end:
+            stop = min(cursor + timedelta(days=7), end)
+            query = (
+                "select id, Note_Title, Note_Content, Parent_Id, Created_By, Created_Time from Notes "
+                f"where Created_Time between '{cursor.isoformat(timespec='seconds')}' "
+                f"and '{stop.isoformat(timespec='seconds')}'"
+            )
+            for record in coql(query):
+                row = note_row(record)
+                if row is None:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO conv_notes (org_id, note_id, parent_module, parent_id, rep_id, author,
+                                            created_at, content)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (org_id, note_id) DO UPDATE SET content = EXCLUDED.content
+                    """,
+                    (get_org_id(), row["note_id"], row["parent_module"], row["parent_id"], row["rep_id"],
+                     row["author"], row["created_at"], row["content"]),
+                )
+                added += 1
+            conn.commit()
+            cursor = stop
+    except Exception as exc:  # noqa: BLE001 — not çekilemezse analiz notsuz sürer
+        conn.rollback()
+        logger.warning("CRM notları alınamadı: %s", exc)
+        return {"hata": str(exc)[:200], "not": added}
+    return {"not": added}
+
+
 def collect(conn: Any, week_start: date) -> dict[str, Any]:
     start, end = week_bounds(week_start)
-    return {"telefon": _collect_calls(conn, start, end), "toplanti": _collect_meetings(conn, start, end)}
+    return {
+        "telefon": _collect_calls(conn, start, end),
+        "toplanti": _collect_meetings(conn, start, end),
+        "crm_notlari": _collect_notes(conn, start, end),
+    }
 
 
 # --- 2. yazıya dök --------------------------------------------------------------
@@ -284,8 +362,9 @@ def _pending(conn: Any, week_start: date, status: str, limit: int | None) -> lis
     start, end = week_bounds(week_start)
     cur = conn.execute(
         f"""
-        SELECT c.*, r.full_name AS rep_name FROM conv_items c
+        SELECT c.*, r.full_name AS rep_name, e.body AS event_body FROM conv_items c
         LEFT JOIN reps r ON r.org_id = c.org_id AND r.rep_id = c.rep_id
+        LEFT JOIN events e ON e.id = c.event_id
         WHERE c.org_id = %s AND c.occurred_at >= %s AND c.occurred_at < %s
           AND (c.status = %s OR (c.status = 'hata' AND c.attempts < %s
                AND (%s = 'bekliyor') = (c.transcript IS NULL)))
@@ -366,6 +445,20 @@ def transcribe_pending(
 # --- 3. analiz ------------------------------------------------------------------
 
 _QUOTE = {"type": "string", "description": "Transkriptten birebir, en fazla 15 kelime"}
+_CODE = {"type": "string", "enum": list(sonar41.CODES)}
+
+
+def _quoted_items() -> dict[str, Any]:
+    return {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {"kod": _CODE, "madde": {"type": "string"}, "alinti": _QUOTE},
+            "required": ["kod", "madde", "alinti"],
+            "additionalProperties": False,
+        },
+    }
+
 
 ANALYSIS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -398,30 +491,32 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
             },
         },
-        "puanlar": {
+        "sonar": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"kod": _CODE, "puan": {"type": "integer"}, "alinti": _QUOTE},
+                "required": ["kod", "puan", "alinti"],
+                "additionalProperties": False,
+            },
+        },
+        "crm": {
             "type": "object",
-            "properties": {k: {"type": "integer"} for k in SCORE_KEYS},
-            "required": list(SCORE_KEYS),
+            "properties": {
+                "not_var": {"type": "boolean"},
+                "puanlar": {
+                    "type": "object",
+                    "properties": {k: {"type": "integer"} for k in sonar41.CRM_KEYS},
+                    "required": list(sonar41.CRM_KEYS),
+                    "additionalProperties": False,
+                },
+                "yorum": {"type": "string"},
+            },
+            "required": ["not_var", "puanlar", "yorum"],
             "additionalProperties": False,
         },
-        "guclu": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {"madde": {"type": "string"}, "alinti": _QUOTE},
-                "required": ["madde", "alinti"],
-                "additionalProperties": False,
-            },
-        },
-        "gelisim": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {"madde": {"type": "string"}, "alinti": _QUOTE},
-                "required": ["madde", "alinti"],
-                "additionalProperties": False,
-            },
-        },
+        "guclu": _quoted_items(),
+        "gelisim": _quoted_items(),
         "sonraki_adim": {
             "type": "object",
             "properties": {
@@ -449,30 +544,49 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
     },
     "required": [
         "analiz_edilebilir", "neden", "ozet", "tur", "temsilci_konusmaci", "musteri", "itirazlar",
-        "puanlar", "guclu", "gelisim", "sonraki_adim", "riskler", "sozler",
+        "sonar", "crm", "guclu", "gelisim", "sonraki_adim", "riskler", "sozler",
     ],
     "additionalProperties": False,
 }
 
-ANALYSIS_SYSTEM = """Rexven'in satış ekibinin müşteri görüşmelerini inceleyen bir satış koçusun.
-Rexven, e-ticaret (Amazon, Etsy, Shopify vb.) eğitim ve danışmanlık paketleri satar; ekip telefonda
-ve Zoho Meeting'de görüşür. Sana tek görüşmenin otomatik transkripti verilir. Transkript
-konuşma-tanımadan geldiği için yazım hataları ve yanlış konuşmacı ayrımı olabilir; anlamdan çıkar.
+ANALYSIS_SYSTEM = f"""Rexven'in satış ekibinin müşteri görüşmelerini SONAR-41 çerçevesiyle inceleyen bir
+satış koçusun. Rexven, e-ticaret (Amazon, Etsy, Shopify vb.) eğitim, mentorluk ve stoksuz üretim
+(print on demand) paketleri satar (Plus, Premium, Pro); ekip telefonda ve Zoho Meeting'de görüşür.
+Sana tek görüşmenin otomatik transkripti, temsilcinin bu görüşme için CRM'e yazdığı not ve aynı
+müşteriye daha önce yazılmış notlar verilir. Transkript konuşma-tanımadan geldiği için yazım
+hataları ve yanlış konuşmacı ayrımı olabilir ("Reksan", "Rexmen" = Rexven); anlamdan çıkar.
 
-Kurallar:
-- Kanıtsız iddia yazma. Her itiraz, güçlü yön, gelişim maddesi ve riskin yanında transkriptten
-  birebir en fazla 15 kelimelik alıntı olsun. Alıntı bulamıyorsan maddeyi yazma.
+SONAR-41 davranışları (kod · ad: tanım):
+{sonar41.rubric_text()}
+
+Puanlama ("sonar"):
+- Görüşmede fırsatı doğan her davranışı bir kez puanla. Fırsatı hiç doğmayan davranışı listeye
+  koyma (ör. itiraz gelmediyse K3; görüşme ödeme sonrası destekse K1 teşhis davranışları).
+- 1: fırsat vardı, yapılmadı ya da tersi yapıldı · 2: zayıf · 3: yeterli · 4: iyi · 5: örnek alınacak.
+- Her puana transkriptten birebir en fazla 15 kelimelik alıntı ekle. Davranış yapılmadıysa
+  fırsatın doğduğu cümleyi (çoğunlukla müşterinin) alıntıla.
+- B35 için önceki notları kullan: takip, önceki görüşmeden somut bir referansla mı başladı.
+- B39 CRM notudur: not yoksa (ve görüşme analiz edilebilirse) B39 = 1, alıntı olarak görüşmenin
+  son cümlesini ver. Not varsa notun içeriğine göre puanla; alıntı transkriptten.
+
+CRM notu ("crm"):
+- Temsilcinin bu görüşme için notu yoksa not_var=false, C1-C6 hepsi 0, yorum kısa.
+- Not varsa C1-C6'yı 1-5 puanla: notu transkriptle karşılaştır (C1 durum doğruluğu: notta yazan
+  görüşmede gerçekten oldu mu). yorum: notta eksik olan en önemli şey, tek cümle.
+
+Diğer kurallar:
+- Kanıtsız iddia yazma; güçlü/gelişim/risk maddelerinin her birine alıntı ekle ve ilgili SONAR
+  kodunu yaz. Alıntı bulamıyorsan maddeyi yazma.
 - "Şunu yapsaydı satış %X artardı" gibi karşı-olgusal tahmin ve yüzde yazma.
-- Transkript satış görüşmesi değilse (sesli mesaj, yanlış numara, yalnız selamlaşma, teknik
-  destek dışı kısa konuşma) analiz_edilebilir=false yap, nedeni yaz, diğer alanları boş/0 bırak.
-- Puanlar 1-5 tam sayı: 1 zayıf, 3 yeterli, 5 örnek alınacak. Görüşmede o aşama hiç yoksa
-  (ör. itiraz gelmedi) 0 yaz; 0 ortalamaya girmez.
+- Transkript satış görüşmesi değilse (sesli mesaj, yanlış numara, yalnız selamlaşma, çok kısa)
+  analiz_edilebilir=false yap, nedeni yaz; diğer listeleri boş, sayıları 0 bırak.
 - musteri.ilgi 1-5: müşterinin satın alma ilgisi.
 - temsilci_konusmaci: transkriptteki temsilci etiketi (ör. "Konuşmacı 1"); ayrım yoksa "belirsiz".
-- sonraki_adim.var: görüşme net bir sonraki adımla bitti mi (randevu, ödeme, geri arama saati).
-  tarih_net: gün/saat konuşuldu mu.
-- sozler: temsilcinin müşteriye verdiği somut sözler (geri arama, belge gönderme vb.).
-- riskler: yanlış/abartılı bilgi, baskıcı satış, verilemeyecek söz, kaba üslup. Yoksa boş.
+- sonraki_adim.var: görüşme net bir sonraki adımla bitti mi; tarih_net: gün/saat konuşuldu mu.
+- sozler: temsilcinin müşteriye verdiği somut sözler.
+- riskler: kanıtsız kazanç/başarı iddiası, garanti, kesin vergi/hukuk yanıtı, baskıcı satış,
+  verilemeyecek söz, kaba üslup. Doğruluğunu bilemediğin şirket bilgilerini (fiyat, paket içeriği)
+  risk sayma.
 - Türkçe, kısa ve somut yaz. özet en fazla 3 cümle; madde başına bir cümle."""
 
 
@@ -487,7 +601,20 @@ def _clamp(value: Any, low: int, high: int) -> int:
 def normalize_analysis(raw: dict[str, Any]) -> dict[str, Any]:
     """Model çıktısını sınırlar içine alır (şema aralık kısıtı taşımaz)."""
     out = dict(raw)
-    out["puanlar"] = {k: _clamp((raw.get("puanlar") or {}).get(k), 0, 5) for k in SCORE_KEYS}
+    seen: dict[str, dict[str, Any]] = {}
+    for row in raw.get("sonar") or []:
+        code = row.get("kod")
+        score = _clamp(row.get("puan"), 0, 5)
+        if code in sonar41.BEHAVIORS and code not in seen and score > 0:
+            seen[code] = {"kod": code, "puan": score, "alinti": str(row.get("alinti") or "")}
+    out["sonar"] = [seen[c] for c in sonar41.CODES if c in seen]
+    crm = dict(raw.get("crm") or {})
+    has_note = bool(crm.get("not_var"))
+    scores = crm.get("puanlar") or {}
+    crm["not_var"] = has_note
+    crm["puanlar"] = {k: _clamp(scores.get(k), 0, 5) if has_note else 0 for k in sonar41.CRM_KEYS}
+    crm["yorum"] = str(crm.get("yorum") or "")
+    out["crm"] = crm
     musteri = dict(raw.get("musteri") or {})
     musteri["ilgi"] = _clamp(musteri.get("ilgi"), 0, 5)
     out["musteri"] = musteri
@@ -496,7 +623,52 @@ def normalize_analysis(raw: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _prompt(item: dict[str, Any]) -> str:
+def dim_scores(analysis: dict[str, Any]) -> dict[str, float]:
+    """Tek görüşmenin boyut puanları: o boyutta puanlanan davranışların ortalaması."""
+    rows: dict[str, list[float]] = defaultdict(list)
+    for row in analysis.get("sonar") or []:
+        b = sonar41.BEHAVIORS.get(row.get("kod") or "")
+        if b and (row.get("puan") or 0) > 0:
+            rows[b["dim"]].append(float(row["puan"]))
+    return {k: round(sum(v) / len(v), 2) for k, v in rows.items()}
+
+
+def _clean_note(html: str | None) -> str:
+    text = re.sub(r"<br\s*/?>|</p>|</div>", " / ", html or "", flags=re.IGNORECASE)
+    text = unescape(re.sub(r"<[^>]+>", "", text))
+    return re.sub(r"(\s*/\s*)+", " / ", re.sub(r"[ \t]+", " ", text)).strip(" /")
+
+
+def call_notes(conn: Any, item: dict[str, Any]) -> dict[str, list[str]]:
+    """Görüşmenin CRM notları: bu görüşmeye yazılan (temsilci, 3 saat içinde) ve öncekiler."""
+    out: dict[str, list[str]] = {"bu": [], "onceki": []}
+    body = (item.get("event_body") or "").strip()
+    if len(body) > 3:
+        out["bu"].append(f"(çağrı kaydı açıklaması) {body}")
+    if not item.get("lead_id"):
+        return out
+    start: datetime = item["occurred_at"]
+    end = start + timedelta(seconds=int(item.get("duration_sec") or 0)) + NOTE_WINDOW
+    rows = conn.execute(
+        """
+        SELECT created_at, author, rep_id, content FROM conv_notes
+        WHERE org_id = %s AND parent_id = %s AND created_at < %s
+        ORDER BY created_at
+        """,
+        (get_org_id(), str(item["lead_id"]), end),
+    ).fetchall()
+    for created_at, author, rep_id, content in rows:
+        line = f"{created_at.astimezone(TZ):%d.%m %H:%M} {author or ''}: {content}"
+        if created_at >= start - timedelta(minutes=5) and (rep_id == item.get("rep_id") or not rep_id):
+            out["bu"].append(line)
+        elif created_at < start - timedelta(minutes=5):
+            out["onceki"].append(line)
+    out["onceki"] = out["onceki"][-5:]
+    return out
+
+
+def _prompt(item: dict[str, Any], notes: dict[str, list[str]] | None = None) -> str:
+    notes = notes or {"bu": [], "onceki": []}
     kind = "Telefon görüşmesi" if item["kind"] == "call" else "Zoho Meeting toplantısı"
     direction = {"outbound": "giden", "inbound": "gelen"}.get(item.get("direction") or "", "")
     when = item["occurred_at"].astimezone(TZ).strftime("%d.%m.%Y %H:%M")
@@ -509,11 +681,32 @@ def _prompt(item: dict[str, Any]) -> str:
         f"Temsilcinin CRM'e girdiği sonuç: {item.get('crm_outcome') or 'girilmemiş'}",
         "Konuşmacı ayrımı: " + ("var" if item.get("speakers") else "yok, temsilciyi bağlamdan çıkar"),
         "",
+        "Temsilcinin bu görüşme için CRM notu:",
+        *(notes["bu"] or ["(not yok)"]),
+        "",
+        "Aynı müşteriye önceki CRM notları (eskiden yeniye):",
+        *(notes["onceki"] or ["(önceki not yok)"]),
+        "",
         "<transkript>",
         item.get("transcript") or "",
         "</transkript>",
     ]
     return "\n".join(lines)
+
+
+def reset_old_analyses(conn: Any, week_start: date) -> int:
+    """SONAR-41 öncesi biçimde analiz edilmiş görüşmeleri yeniden analize alır."""
+    start, end = week_bounds(week_start)
+    cur = conn.execute(
+        """
+        UPDATE conv_items SET status = 'yazildi'
+        WHERE org_id = %s AND occurred_at >= %s AND occurred_at < %s
+          AND status = 'analiz_edildi' AND NOT (analysis ? 'sonar')
+        """,
+        (get_org_id(), start, end),
+    )
+    conn.commit()
+    return cur.rowcount or 0
 
 
 def analyze_pending(
@@ -522,12 +715,12 @@ def analyze_pending(
     if not llm.enabled():
         return {"atlandi": "ANTHROPIC_API_KEY yok"}
     started = time.monotonic()
-    report: dict[str, Any] = {"analiz": 0, "hata": 0}
+    report: dict[str, Any] = {"analiz": 0, "hata": 0, "yeniden": reset_old_analyses(conn, week_start)}
     for item in _pending(conn, week_start, "yazildi", limit):
         if budget_sec is not None and time.monotonic() - started > budget_sec:
             report["durdu"] = "sure_doldu"
             break
-        raw = llm.complete_json(ANALYSIS_SYSTEM, _prompt(item), ANALYSIS_SCHEMA)
+        raw = llm.complete_json(ANALYSIS_SYSTEM, _prompt(item, call_notes(conn, item)), ANALYSIS_SCHEMA)
         if raw is None:
             _fail(conn, item["id"], "AI analizi alınamadı")
             report["hata"] += 1
@@ -555,18 +748,28 @@ def _avg(values: list[float]) -> float | None:
 def aggregate(items: list[dict[str, Any]]) -> dict[str, Any]:
     """Analiz edilmiş görüşmelerden haftalık sayılar (saf)."""
     usable = [i for i in items if (i.get("analysis") or {}).get("analiz_edilebilir")]
-    scores: dict[str, list[float]] = {k: [] for k in SCORE_KEYS}
+    dims: dict[str, list[float]] = {k: [] for k in SCORE_KEYS}
+    behaviors: dict[str, list[float]] = defaultdict(list)
+    crm_scores: dict[str, list[float]] = {k: [] for k in sonar41.CRM_KEYS}
     objections: dict[str, dict[str, int]] = defaultdict(lambda: {"adet": 0, "karsilandi": 0, "kismen": 0})
     types = Counter[str]()
     risks = Counter[str]()
     interest: list[float] = []
-    next_step = dated = 0
+    next_step = dated = noted = 0
     for item in usable:
         a = item["analysis"]
-        for key in SCORE_KEYS:
-            value = (a.get("puanlar") or {}).get(key) or 0
-            if value > 0:
-                scores[key].append(float(value))
+        for key, value in dim_scores(a).items():
+            dims[key].append(value)
+        for row in a.get("sonar") or []:
+            if (row.get("puan") or 0) > 0:
+                behaviors[row["kod"]].append(float(row["puan"]))
+        crm = a.get("crm") or {}
+        if crm.get("not_var"):
+            noted += 1
+            for key in sonar41.CRM_KEYS:
+                value = (crm.get("puanlar") or {}).get(key) or 0
+                if value > 0:
+                    crm_scores[key].append(float(value))
         for obj in a.get("itirazlar") or []:
             row = objections[obj.get("tip") or "diger"]
             row["adet"] += 1
@@ -585,8 +788,8 @@ def aggregate(items: list[dict[str, Any]]) -> dict[str, Any]:
             next_step += 1
             if step.get("tarih_net"):
                 dated += 1
-    score_avgs = {k: _avg(v) for k, v in scores.items()}
-    present = [v for v in score_avgs.values() if v is not None]
+    dim_avgs = {k: _avg(v) for k, v in dims.items()}
+    present = [v for v in dim_avgs.values() if v is not None]
     n = len(usable)
     return {
         "gorusme": len(items),
@@ -594,8 +797,19 @@ def aggregate(items: list[dict[str, Any]]) -> dict[str, Any]:
         "telefon": sum(1 for i in usable if i.get("kind") == "call"),
         "toplanti": sum(1 for i in usable if i.get("kind") == "meeting"),
         "dakika": round(sum((i.get("duration_sec") or 0) for i in usable) / 60, 1),
-        "puanlar": score_avgs,
+        "puanlar": dim_avgs,
         "puan_ort": _avg(present),
+        "davranislar": {
+            code: {"ort": _avg(behaviors[code]), "adet": len(behaviors[code]),
+                   "zayif": sum(1 for v in behaviors[code] if v <= 2)}
+            for code in sonar41.CODES
+            if behaviors.get(code)
+        },
+        "crm": {
+            "notlu": noted,
+            "oran": round(100.0 * noted / n, 1) if n else None,
+            "puanlar": {k: _avg(v) for k, v in crm_scores.items()},
+        },
         "ilgi_ort": _avg(interest),
         "sonraki_adim_orani": round(100.0 * next_step / n, 1) if n else None,
         "tarihli_adim_orani": round(100.0 * dated / n, 1) if n else None,
@@ -608,6 +822,17 @@ def aggregate(items: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def weakest(stats: dict[str, Any], limit: int = 5, min_count: int = 2) -> list[dict[str, Any]]:
+    """En düşük ortalamalı davranışlar ("bug"): en az min_count gözlem."""
+    rows = [
+        {"kod": code, "ad": sonar41.BEHAVIORS[code]["name"], **row}
+        for code, row in (stats.get("davranislar") or {}).items()
+        if row.get("adet", 0) >= min_count and row.get("ort") is not None
+    ]
+    rows.sort(key=lambda r: (r["ort"], -r["adet"]))
+    return rows[:limit]
+
+
 REP_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -615,12 +840,13 @@ REP_SCHEMA: dict[str, Any] = {
         "odak": {
             "type": "object",
             "properties": {
+                "kod": _CODE,
                 "baslik": {"type": "string"},
                 "neden": {"type": "string"},
                 "alinti": _QUOTE,
                 "nasil": {"type": "string"},
             },
-            "required": ["baslik", "neden", "alinti", "nasil"],
+            "required": ["kod", "baslik", "neden", "alinti", "nasil"],
             "additionalProperties": False,
         },
         "guclu": {"type": "array", "items": {"type": "string"}},
@@ -649,8 +875,11 @@ yalnız bunları ve görüşme notlarını okunur, eyleme dönük Türkçe cüml
 Kurallar:
 - Sayıları değiştirme, yeni sayı uydurma. Karşı-olgusal tahmin ve yüzde yazma.
 - Her iddia görüşme notlarındaki bir maddeye dayansın; alıntıları notlardan birebir al.
-- Temsilci için tek odak maddesi seç: haftada en sık tekrar eden ve satışa en yakın gelişim alanı.
-  "nasil": bir sonraki görüşmede söylenebilecek somut bir cümle ya da davranış.
+- Puanlar SONAR-41'dendir: K1-K5 boyut, B01-B41 davranış, C1-C6 CRM notu ölçütü; 1-5 ölçek,
+  2 ve altı "bug". "davranislar" her davranışın ortalamasını ve gözlem sayısını verir.
+- Temsilci için tek odak maddesi seç: en çok gözlenen ve düşük puanlı, satışa en yakın SONAR
+  davranışı; kodu "kod"a yaz. "nasil": bir sonraki görüşmede söylenebilecek somut bir cümle.
+- CRM notu oranı düşükse ya da C puanları zayıfsa bunu dikkat maddelerinden birine yaz.
 - Kısa yaz: özet en fazla 3 cümle, liste maddeleri en fazla 4, her biri tek cümle.
 - Ton: yargılamayan, saygılı, yapıcı. Temsilciyi başkasıyla kıyaslama."""
 
@@ -672,6 +901,12 @@ def _notes(items: list[dict[str, Any]], cap: int = 60) -> str:
             parts.append(f"  güçlü: {g.get('madde')} — \"{g.get('alinti')}\"")
         for need in (a.get("musteri") or {}).get("ihtiyaclar") or []:
             parts.append(f"  müşteri ihtiyacı: {need}")
+        for row in a.get("sonar") or []:
+            if (row.get("puan") or 0) <= 2:
+                name = sonar41.BEHAVIORS.get(row.get("kod") or "", {}).get("name", "")
+                parts.append(f"  bug {row.get('kod')} {name} ({row.get('puan')}): \"{row.get('alinti')}\"")
+        crm = a.get("crm") or {}
+        parts.append(f"  CRM notu: {'var · ' + crm.get('yorum', '') if crm.get('not_var') else 'yok'}")
         out.append("\n".join(parts))
     return "\n".join(out)
 
@@ -828,7 +1063,7 @@ def load_weeks(limit: int = 12) -> list[dict[str, Any]]:
 
 def _item_summary(row: dict[str, Any]) -> dict[str, Any]:
     a = row.get("analysis") or {}
-    scores = [v for v in (a.get("puanlar") or {}).values() if isinstance(v, int) and v > 0]
+    scores = [r["puan"] for r in a.get("sonar") or [] if isinstance(r.get("puan"), int) and r["puan"] > 0]
     return {
         "id": row["id"],
         "kind": row["kind"],
@@ -846,6 +1081,7 @@ def _item_summary(row: dict[str, Any]) -> dict[str, Any]:
         "puan": round(sum(scores) / len(scores), 1) if scores else None,
         "ilgi": (a.get("musteri") or {}).get("ilgi") or None,
         "sonraki_adim": (a.get("sonraki_adim") or {}).get("var"),
+        "crm_not": (a.get("crm") or {}).get("not_var"),
         "itirazlar": sorted({o.get("tip") for o in a.get("itirazlar") or [] if o.get("tip")}),
         "risk": len(a.get("riskler") or []),
     }
@@ -898,6 +1134,10 @@ def load_week(week_start: date, rep_id: str | None) -> dict[str, Any]:
         "reps": reps,
         "items": [_item_summary(r) for r in rows],
         "score_labels": SCORE_LABELS,
+        "sonar": {
+            "behaviors": {k: {"dim": b["dim"], "name": b["name"]} for k, b in sonar41.BEHAVIORS.items()},
+            "crm": {k: c["name"] for k, c in sonar41.CRM_CRITERIA.items()},
+        },
     }
 
 
@@ -908,8 +1148,9 @@ def load_item(item_id: int) -> dict[str, Any] | None:
             """
             SELECT c.id, c.kind, c.rep_id, r.full_name AS rep_name, c.customer, c.occurred_at,
                    c.duration_sec, c.crm_outcome, c.status, c.error, c.analysis, c.transcript,
-                   c.speakers, c.stt_provider, c.ai_model, c.lead_id
+                   c.speakers, c.stt_provider, c.ai_model, c.lead_id, e.body AS event_body
             FROM conv_items c LEFT JOIN reps r ON r.org_id = c.org_id AND r.rep_id = c.rep_id
+            LEFT JOIN events e ON e.id = c.event_id
             WHERE c.org_id = %s AND c.id = %s
             """,
             (get_org_id(), item_id),
@@ -918,7 +1159,10 @@ def load_item(item_id: int) -> dict[str, Any] | None:
         if not row:
             return None
         cols = [c.name for c in cur.description]
-    return dict(zip(cols, row))
+        out = dict(zip(cols, row))
+        out["notes"] = call_notes(conn, out)
+    out.pop("event_body", None)
+    return out
 
 
 # --- Cliq'e gönderim -------------------------------------------------------------
@@ -941,7 +1185,8 @@ def share_text(name: str, week_start: date, stats: dict[str, Any], narrative: di
         narrative.get("ozet") or "",
     ]
     if odak.get("baslik"):
-        lines += ["", f"*Bu haftanın odağı: {odak['baslik']}*", odak.get("neden") or ""]
+        code = f"{odak['kod']} · " if odak.get("kod") else ""
+        lines += ["", f"*Bu haftanın odağı: {code}{odak['baslik']}*", odak.get("neden") or ""]
         if odak.get("alinti"):
             lines.append(f"> “{odak['alinti']}”")
         if odak.get("nasil"):
@@ -955,7 +1200,8 @@ def share_text(name: str, week_start: date, stats: dict[str, Any], narrative: di
     )
     lines += [
         "",
-        f"Puanların (1-5): {score_line}" if score_line else "",
+        f"SONAR-41 puanların (1-5): {score_line}" if score_line else "",
+        f"CRM notu yazılan görüşme: %{_num((stats.get('crm') or {}).get('oran'))}",
         f"Net sonraki adım: %{_num(stats.get('sonraki_adim_orani'))} · tarihli: %{_num(stats.get('tarihli_adim_orani'))}",
         "Görüşme ayrıntıları ve alıntılar: Pusula → Görüşme Analizleri",
     ]
