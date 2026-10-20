@@ -735,7 +735,13 @@ export interface ConvWeek {
   week_end: string;
   durum: Record<ConvStatus, number>;
   team: { stats: ConvStats; narrative: ConvTeamNarrative | null; created_at: string } | null;
-  reps: { rep_id: string; name: string; stats: ConvStats; narrative: ConvRepNarrative | null }[];
+  reps: {
+    rep_id: string;
+    name: string;
+    stats: ConvStats;
+    narrative: ConvRepNarrative | null;
+    sent_at: string | null;
+  }[];
   items: ConvItemSummary[];
   score_labels: Record<ConvScoreKey, string>;
 }

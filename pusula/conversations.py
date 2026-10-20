@@ -97,6 +97,8 @@ CREATE TABLE IF NOT EXISTS conv_weekly (
     created_at  timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (org_id, week_start, scope)
 );
+ALTER TABLE conv_weekly ADD COLUMN IF NOT EXISTS sent_at timestamptz;
+ALTER TABLE conv_weekly ADD COLUMN IF NOT EXISTS sent_by text;
 CREATE TABLE IF NOT EXISTS conv_runs (
     id           bigserial PRIMARY KEY,
     org_id       text NOT NULL DEFAULT 'rexven',
@@ -869,17 +871,19 @@ def load_week(week_start: date, rep_id: str | None) -> dict[str, Any]:
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
         weekly = conn.execute(
             """
-            SELECT w.scope, r.full_name, w.stats, w.narrative, w.created_at
+            SELECT w.scope, r.full_name, w.stats, w.narrative, w.created_at, w.sent_at
             FROM conv_weekly w LEFT JOIN reps r ON r.org_id = w.org_id AND r.rep_id = w.scope
             WHERE w.org_id = %s AND w.week_start = %s
             """,
             (get_org_id(), week_start),
         ).fetchall()
     status = Counter(r["status"] for r in rows)
-    team = next(({"stats": s, "narrative": n, "created_at": c} for sc, _, s, n, c in weekly if sc == TEAM), None)
+    team = next(
+        ({"stats": s, "narrative": n, "created_at": c} for sc, _, s, n, c, _ in weekly if sc == TEAM), None
+    )
     reps = [
-        {"rep_id": sc, "name": name or sc, "stats": s, "narrative": n}
-        for sc, name, s, n, _ in weekly
+        {"rep_id": sc, "name": name or sc, "stats": s, "narrative": n, "sent_at": sent}
+        for sc, name, s, n, _, sent in weekly
         if sc != TEAM and (rep_id is None or sc == rep_id)
     ]
     reps.sort(key=lambda r: (-(r["stats"] or {}).get("analiz", 0), r["name"]))
@@ -915,3 +919,73 @@ def load_item(item_id: int) -> dict[str, Any] | None:
             return None
         cols = [c.name for c in cur.description]
     return dict(zip(cols, row))
+
+
+# --- Cliq'e gönderim -------------------------------------------------------------
+
+
+def _num(value: float | None) -> str:
+    return "—" if value is None else f"{value:.1f}".replace(".", ",")
+
+
+def share_text(name: str, week_start: date, stats: dict[str, Any], narrative: dict[str, Any]) -> str:
+    """Temsilciye gidecek haftalık değerlendirme (Cliq biçimi, saf)."""
+    end = week_start + timedelta(days=6)
+    first = name.split()[0] if name else ""
+    odak = narrative.get("odak") or {}
+    scores = stats.get("puanlar") or {}
+    lines = [
+        f"*Görüşme değerlendirmen · {week_start:%d.%m} – {end:%d.%m.%Y}*",
+        f"Merhaba {first}, bu hafta analiz edilen {stats.get('analiz', 0)} görüşmenin özeti:",
+        "",
+        narrative.get("ozet") or "",
+    ]
+    if odak.get("baslik"):
+        lines += ["", f"*Bu haftanın odağı: {odak['baslik']}*", odak.get("neden") or ""]
+        if odak.get("alinti"):
+            lines.append(f"> “{odak['alinti']}”")
+        if odak.get("nasil"):
+            lines.append(f"*Bir sonraki görüşmede:* {odak['nasil']}")
+    for title, key in (("Güçlü yönlerin", "guclu"), ("Dikkat", "dikkat")):
+        rows = [r for r in narrative.get(key) or [] if r]
+        if rows:
+            lines += ["", f"*{title}*", *[f"• {r}" for r in rows]]
+    score_line = " · ".join(
+        f"{SCORE_LABELS[k]} {_num(scores.get(k))}" for k in SCORE_KEYS if scores.get(k) is not None
+    )
+    lines += [
+        "",
+        f"Puanların (1-5): {score_line}" if score_line else "",
+        f"Net sonraki adım: %{_num(stats.get('sonraki_adim_orani'))} · tarihli: %{_num(stats.get('tarihli_adim_orani'))}",
+        "Görüşme ayrıntıları ve alıntılar: Pusula → Görüşme Analizleri",
+    ]
+    return "\n".join(line for line in lines if line is not None).replace("\n\n\n", "\n\n").strip()
+
+
+def load_share(week_start: date, rep_id: str) -> dict[str, Any] | None:
+    with connect() as conn:
+        _ready(conn)
+        row = conn.execute(
+            """
+            SELECT r.full_name, r.email, w.stats, w.narrative, w.sent_at
+            FROM conv_weekly w JOIN reps r ON r.org_id = w.org_id AND r.rep_id = w.scope
+            WHERE w.org_id = %s AND w.week_start = %s AND w.scope = %s
+            """,
+            (get_org_id(), week_start, rep_id),
+        ).fetchone()
+    if not row:
+        return None
+    name, email, stats, narrative, sent_at = row
+    return {"name": name, "email": email, "stats": stats, "narrative": narrative, "sent_at": sent_at}
+
+
+def mark_sent(week_start: date, rep_id: str, by: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE conv_weekly SET sent_at = now(), sent_by = %s
+            WHERE org_id = %s AND week_start = %s AND scope = %s
+            """,
+            (by, get_org_id(), week_start, rep_id),
+        )
+        conn.commit()
