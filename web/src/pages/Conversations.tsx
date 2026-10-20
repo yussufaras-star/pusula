@@ -7,7 +7,7 @@ import { ago, duration, int, minutes, num, pct, type Tone } from "../format";
 import type {
   ConvItemDetail,
   ConvItemSummary,
-  ConvScoreKey,
+  ConvSonarRef,
   ConvStats,
   ConvStatus,
   ConvWeek,
@@ -15,7 +15,6 @@ import type {
   Me,
 } from "../types";
 
-const SCORE_KEYS: ConvScoreKey[] = ["acilis", "ihtiyac_analizi", "deger_sunumu", "itiraz_karsilama", "kapanis"];
 
 const TUR_LABEL: Record<string, string> = {
   kesif: "Keşif",
@@ -146,6 +145,7 @@ export function ConversationsPage({ me }: { me: Me }) {
       : (data?.team?.stats ?? null)
     : (data?.reps[0]?.stats ?? null);
   const setup = weeks.data?.setup;
+  const scoreKeys = Object.keys(data?.score_labels ?? {});
   const pending = data ? data.durum.bekliyor + data.durum.yazildi : 0;
 
   return (
@@ -225,6 +225,13 @@ export function ConversationsPage({ me }: { me: Me }) {
               title="Görüşme randevu, ödeme ya da geri arama saati gibi net bir adımla bitti mi"
             />
             <StatTile label="Müşteri ilgisi" value={num(stats?.ilgi_ort ?? null)} unit="/5" expected="satın alma ilgisi" />
+            <StatTile
+              label="CRM notu"
+              value={pct(stats?.crm?.oran ?? null)}
+              expected={stats?.crm ? `${int(stats.crm.notlu)} görüşmede not var` : "—"}
+              title="Görüşmeden sonraki 3 saat içinde temsilcinin lead'e yazdığı not (SONAR-41 B39, C1-C6)"
+              tone={(stats?.crm?.oran ?? 100) < 50 ? "warning" : "neutral"}
+            />
           </div>
 
           {isAdmin && !repFilter && data.team?.narrative ? <TeamCard n={data.team.narrative} /> : null}
@@ -233,7 +240,7 @@ export function ConversationsPage({ me }: { me: Me }) {
             <section className="card">
               <div className="card-head">
                 <h2>{isAdmin ? "Temsilciler" : "Haftam"}</h2>
-                <span className="hint">puanlar 1-5 · satıra tıkla: haftanın odak maddesi</span>
+                <span className="hint">SONAR-41 boyutları, 1-5 · satıra tıkla: haftanın odak maddesi</span>
               </div>
               <div className="card-body">
                 <div className="table-wrap">
@@ -243,12 +250,13 @@ export function ConversationsPage({ me }: { me: Me }) {
                         <th>Temsilci</th>
                         <th className="num">Görüşme</th>
                         <th className="num">Süre</th>
-                        {SCORE_KEYS.map((k) => (
-                          <th key={k} className="num">
-                            {data.score_labels[k]}
+                        {scoreKeys.map((k) => (
+                          <th key={k} className="num" title={data.score_labels[k]}>
+                            {k}
                           </th>
                         ))}
                         <th className="num">Sonraki adım</th>
+                        <th className="num" title="Not yazılan görüşme oranı">CRM notu</th>
                         <th>Odak</th>
                       </tr>
                     </thead>
@@ -274,17 +282,27 @@ export function ConversationsPage({ me }: { me: Me }) {
                                 </td>
                                 <td className="num">{int(r.stats.analiz)}</td>
                                 <td className="num">{minutes(r.stats.dakika)}</td>
-                                {SCORE_KEYS.map((k) => (
+                                {scoreKeys.map((k) => (
                                   <td key={k} className="num">
                                     <Score v={r.stats.puanlar[k]} />
                                   </td>
                                 ))}
                                 <td className="num">{pct(r.stats.sonraki_adim_orani)}</td>
-                                <td className="cv-wrap">{r.narrative?.odak.baslik ?? <span className="muted">—</span>}</td>
+                                <td className="num">{pct(r.stats.crm?.oran ?? null)}</td>
+                                <td className="cv-wrap">
+                                  {r.narrative ? (
+                                    <>
+                                      {r.narrative.odak.kod ? <span className="cv-code">{r.narrative.odak.kod}</span> : null}
+                                      {r.narrative.odak.baslik}
+                                    </>
+                                  ) : (
+                                    <span className="muted">—</span>
+                                  )}
+                                </td>
                               </tr>
                               {isOpen && r.narrative ? (
                                 <tr className="cv-detail-row">
-                                  <td colSpan={SCORE_KEYS.length + 5}>
+                                  <td colSpan={scoreKeys.length + 6}>
                                     <RepNarrative n={r.narrative} />
                                     {isAdmin ? (
                                       <ShareToCliq
@@ -304,6 +322,21 @@ export function ConversationsPage({ me }: { me: Me }) {
                     </tbody>
                   </table>
                 </div>
+                <p className="muted cv-legend">
+                  {scoreKeys.map((k) => `${k} ${data.score_labels[k]}`).join(" · ")}
+                </p>
+              </div>
+            </section>
+          ) : null}
+
+          {stats && Object.keys(stats.davranislar ?? {}).length ? (
+            <section className="card">
+              <div className="card-head">
+                <h2>Davranış haritası</h2>
+                <span className="hint">SONAR-41 · en düşük ortalamalı davranışlar üstte · 2 ve altı = bug</span>
+              </div>
+              <div className="card-body">
+                <BehaviorMap stats={stats} sonar={data.sonar} labels={data.score_labels} />
               </div>
             </section>
           ) : null}
@@ -373,7 +406,9 @@ export function ConversationsPage({ me }: { me: Me }) {
         </>
       )}
 
-      {detailId !== null ? <ItemDetail id={detailId} onClose={() => setDetailId(null)} /> : null}
+      {detailId !== null && data ? (
+        <ItemDetail id={detailId} sonar={data.sonar} labels={data.score_labels} onClose={() => setDetailId(null)} />
+      ) : null}
     </div>
   );
 }
@@ -591,7 +626,17 @@ function ItemTable({
   );
 }
 
-function ItemDetail({ id, onClose }: { id: number; onClose: () => void }) {
+function ItemDetail({
+  id,
+  sonar,
+  labels,
+  onClose,
+}: {
+  id: number;
+  sonar: ConvSonarRef;
+  labels: Record<string, string>;
+  onClose: () => void;
+}) {
   const [row, setRow] = useState<ConvItemDetail | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [showTranscript, setShowTranscript] = useState(false);
@@ -622,14 +667,7 @@ function ItemDetail({ id, onClose }: { id: number; onClose: () => void }) {
           ) : (
             <>
               <p className="cv-lead">{a.ozet}</p>
-              <div className="cv-scores">
-                {SCORE_KEYS.map((k) => (
-                  <div key={k} className="cv-score">
-                    <span>{SCORE_NAMES[k]}</span>
-                    {a.puanlar[k] > 0 ? <Score v={a.puanlar[k]} /> : <span className="muted">yok</span>}
-                  </div>
-                ))}
-              </div>
+              <SonarBlock rows={a.sonar ?? []} sonar={sonar} labels={labels} />
               <p>
                 <strong>Sonraki adım:</strong>{" "}
                 {a.sonraki_adim.var ? a.sonraki_adim.aciklama : <span className="warn-text">net adım yok</span>}
@@ -656,9 +694,10 @@ function ItemDetail({ id, onClose }: { id: number; onClose: () => void }) {
                 </>
               ) : null}
               <div className="cv-cols">
-                <Quoted title="Güçlü" rows={a.guclu} />
-                <Quoted title="Gelişim" rows={a.gelisim} />
+                <Quoted title="Güçlü" rows={a.guclu} sonar={sonar} />
+                <Quoted title="Gelişim" rows={a.gelisim} sonar={sonar} />
               </div>
+              <CrmBlock crm={a.crm} notes={row.notes} sonar={sonar} />
               {a.riskler.length ? (
                 <>
                   <h3>Riskli anlar</h3>
@@ -708,15 +747,168 @@ function ItemDetail({ id, onClose }: { id: number; onClose: () => void }) {
   );
 }
 
-const SCORE_NAMES: Record<ConvScoreKey, string> = {
-  acilis: "Açılış",
-  ihtiyac_analizi: "İhtiyaç analizi",
-  deger_sunumu: "Değer sunumu",
-  itiraz_karsilama: "İtiraz karşılama",
-  kapanis: "Kapanış / sonraki adım",
-};
+function BehaviorMap({
+  stats,
+  sonar,
+  labels,
+}: {
+  stats: ConvStats;
+  sonar: ConvSonarRef;
+  labels: Record<string, string>;
+}) {
+  const [all, setAll] = useState(false);
+  const rows = Object.entries(stats.davranislar)
+    .map(([kod, r]) => ({ kod, ...r, ...(sonar.behaviors[kod] ?? { dim: "", name: kod }) }))
+    .sort((x, y) => (x.ort ?? 9) - (y.ort ?? 9) || y.adet - x.adet);
+  const shown = all ? rows : rows.slice(0, 10);
+  return (
+    <>
+      <div className="table-wrap">
+        <table className="board">
+          <thead>
+            <tr>
+              <th>Davranış</th>
+              <th>Boyut</th>
+              <th className="num">Ortalama</th>
+              <th className="num" title="Bu davranışın fırsatı doğan görüşme sayısı">Gözlem</th>
+              <th className="num" title="2 ve altı puan alan görüşme">Bug</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((r) => (
+              <tr key={r.kod}>
+                <td className="cv-wrap">
+                  <span className="cv-code">{r.kod}</span>
+                  {r.name}
+                </td>
+                <td className="muted">{labels[r.dim] ?? r.dim}</td>
+                <td className="num">
+                  <Score v={r.ort} />
+                </td>
+                <td className="num">{int(r.adet)}</td>
+                <td className="num">{r.zayif ? int(r.zayif) : <span className="muted">—</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {rows.length > 10 ? (
+        <button className="btn cv-more" onClick={() => setAll((v) => !v)}>
+          {all ? "İlk 10'u göster" : `Tümünü göster (${rows.length})`}
+        </button>
+      ) : null}
+    </>
+  );
+}
 
-function Quoted({ title, rows }: { title: string; rows: { madde: string; alinti: string }[] }) {
+function SonarBlock({
+  rows,
+  sonar,
+  labels,
+}: {
+  rows: { kod: string; puan: number; alinti: string }[];
+  sonar: ConvSonarRef;
+  labels: Record<string, string>;
+}) {
+  if (!rows.length) return null;
+  const byDim = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const dim = sonar.behaviors[r.kod]?.dim ?? "?";
+    byDim.set(dim, [...(byDim.get(dim) ?? []), r]);
+  }
+  return (
+    <div className="cv-sonar">
+      {[...byDim.entries()]
+        .sort(([x], [y]) => x.localeCompare(y))
+        .map(([dim, list]) => {
+          const avg = list.reduce((s, r) => s + r.puan, 0) / list.length;
+          return (
+            <div key={dim} className="cv-dim">
+              <div className="cv-dim-head">
+                <span>
+                  {dim} · {labels[dim] ?? ""}
+                </span>
+                <Score v={Math.round(avg * 10) / 10} />
+              </div>
+              <ul className="cv-list">
+                {list.map((r) => (
+                  <li key={r.kod}>
+                    <span className="cv-code">{r.kod}</span>
+                    {sonar.behaviors[r.kod]?.name ?? r.kod} <Score v={r.puan} />
+                    {r.alinti ? <blockquote className="cv-quote">“{r.alinti}”</blockquote> : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })}
+    </div>
+  );
+}
+
+function CrmBlock({
+  crm,
+  notes,
+  sonar,
+}: {
+  crm?: { not_var: boolean; puanlar: Record<string, number>; yorum: string };
+  notes?: { bu: string[]; onceki: string[] };
+  sonar: ConvSonarRef;
+}) {
+  const [history, setHistory] = useState(false);
+  if (!crm && !notes) return null;
+  return (
+    <div>
+      <h3>CRM notu</h3>
+      {notes?.bu.length ? (
+        <ul className="cv-list">
+          {notes.bu.map((n) => (
+            <li key={n}>{n}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="warn-text">Bu görüşme için not yazılmamış.</p>
+      )}
+      {crm?.not_var ? (
+        <div className="cv-scores">
+          {Object.entries(sonar.crm).map(([k, name]) => (
+            <div key={k} className="cv-score" title={name}>
+              <span>
+                {k} {name}
+              </span>
+              {crm.puanlar[k] > 0 ? <Score v={crm.puanlar[k]} /> : <span className="muted">—</span>}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {crm?.yorum ? <p className="muted">{crm.yorum}</p> : null}
+      {notes?.onceki.length ? (
+        <>
+          <button className="link-btn" onClick={() => setHistory((v) => !v)}>
+            {history ? "Önceki notları gizle" : `Önceki notlar (${notes.onceki.length})`}
+          </button>
+          {history ? (
+            <ul className="cv-list muted">
+              {notes.onceki.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function Quoted({
+  title,
+  rows,
+  sonar,
+}: {
+  title: string;
+  rows: { kod?: string; madde: string; alinti: string }[];
+  sonar: ConvSonarRef;
+}) {
   if (!rows.length) return <div />;
   return (
     <div>
@@ -724,6 +916,11 @@ function Quoted({ title, rows }: { title: string; rows: { madde: string; alinti:
       <ul className="cv-list">
         {rows.map((r, n) => (
           <li key={n}>
+            {r.kod ? (
+              <span className="cv-code" title={sonar.behaviors[r.kod]?.name}>
+                {r.kod}
+              </span>
+            ) : null}
             {r.madde}
             <blockquote className="cv-quote">“{r.alinti}”</blockquote>
           </li>

@@ -3,6 +3,7 @@
 from datetime import date, datetime
 
 from pusula import conversations as cv
+from pusula import sonar41
 from pusula.metrics import TZ
 from pusula.recordings import call_uuid
 from pusula.transcribe import _elevenlabs_turns, speaker_lines
@@ -71,18 +72,66 @@ def test_word_count_ignores_speaker_labels() -> None:
     assert cv.word_count("Konuşmacı 1: bir iki üç\nKonuşmacı 2: dört") == 4
 
 
-def test_normalize_clamps_scores_and_unknown_type() -> None:
-    out = cv.normalize_analysis({"puanlar": {"acilis": 9, "kapanis": -2}, "musteri": {"ilgi": "4"}, "tur": "x"})
-    assert out["puanlar"]["acilis"] == 5 and out["puanlar"]["kapanis"] == 0
-    assert out["puanlar"]["deger_sunumu"] == 0
+def test_normalize_clamps_sonar_drops_unknown_and_zero_crm_without_note() -> None:
+    out = cv.normalize_analysis({
+        "sonar": [
+            {"kod": "B29", "puan": 9, "alinti": "a"},
+            {"kod": "B29", "puan": 1, "alinti": "tekrar"},  # ilk kayıt geçerli
+            {"kod": "B99", "puan": 3, "alinti": "yok"},
+            {"kod": "B01", "puan": 0, "alinti": "uygulanmaz"},
+            {"kod": "B03", "puan": 2, "alinti": "c"},
+        ],
+        "crm": {"not_var": False, "puanlar": {"C1": 4}},
+        "musteri": {"ilgi": "4"},
+        "tur": "x",
+    })
+    assert out["sonar"] == [{"kod": "B03", "puan": 2, "alinti": "c"}, {"kod": "B29", "puan": 5, "alinti": "a"}]
+    assert out["crm"]["puanlar"] == {k: 0 for k in sonar41.CRM_KEYS}
     assert out["musteri"]["ilgi"] == 4 and out["tur"] == "diger"
 
 
-def analysed(kind="call", seconds=600, **a):
+def test_dim_scores_average_behaviors_per_dimension() -> None:
+    a = {"sonar": [{"kod": "B01", "puan": 4}, {"kod": "B03", "puan": 2}, {"kod": "B29", "puan": 1}]}
+    assert cv.dim_scores(a) == {"K1": 3.0, "K4": 1.0}
+
+
+def test_sonar_framework_is_complete() -> None:
+    assert len(sonar41.CODES) == 41 and sonar41.DIM_KEYS == ("K1", "K2", "K3", "K4", "K5")
+    assert {b["dim"] for b in sonar41.BEHAVIORS.values()} == set(sonar41.DIM_KEYS)
+    assert sonar41.CRM_KEYS == ("C1", "C2", "C3", "C4", "C5", "C6")
+    assert "B29 Net sonraki adım önerme" in sonar41.rubric_text()
+
+
+def test_note_row_cleans_html_and_links_lead_and_author() -> None:
+    row = cv.note_row({
+        "id": "n1",
+        "Note_Title": None,
+        "Note_Content": "trendyol<br>50800 dedim.&nbsp;indirim yok<br><span><br></span>",
+        "Parent_Id": {"module": {"api_name": "Leads", "id": "6847"}, "id": "L9"},
+        "Created_By": {"name": "Aras", "id": "r7"},
+        "Created_Time": "2026-10-19T14:05:00+03:00",
+    })
+    assert row["parent_module"] == "Leads" and row["parent_id"] == "L9" and row["rep_id"] == "r7"
+    assert row["content"] == "trendyol / 50800 dedim.\xa0indirim yok"
+    assert row["created_at"] == datetime(2026, 10, 19, 14, 5, tzinfo=TZ)
+
+
+def test_prompt_includes_this_call_note_and_history() -> None:
+    item = {"kind": "call", "direction": "outbound", "occurred_at": T0, "duration_sec": 300,
+            "rep_name": "Serkan", "customer": "Ece", "transcript": "Konuşmacı 1: Merhaba"}
+    text = cv._prompt(item, {"bu": ["14.10 15:10 Şahin: yarın 14'te ara"], "onceki": []})
+    assert "Temsilcinin bu görüşme için CRM notu:\n14.10 15:10 Şahin: yarın 14'te ara" in text
+    assert "(önceki not yok)" in text
+
+
+def analysed(kind="call", seconds=600, sonar=None, crm=None, **a):
     base = {
         "analiz_edilebilir": True,
         "tur": "sunum",
-        "puanlar": {"acilis": 4, "ihtiyac_analizi": 2, "deger_sunumu": 4, "itiraz_karsilama": 0, "kapanis": 3},
+        "sonar": sonar if sonar is not None else [
+            {"kod": "B01", "puan": 4}, {"kod": "B05", "puan": 2}, {"kod": "B29", "puan": 3},
+        ],
+        "crm": crm or {"not_var": False, "puanlar": {}, "yorum": ""},
         "musteri": {"ilgi": 4},
         "itirazlar": [],
         "riskler": [],
@@ -92,13 +141,14 @@ def analysed(kind="call", seconds=600, **a):
     return {"kind": kind, "duration_sec": seconds, "analysis": base}
 
 
-def test_aggregate_scores_skip_not_applicable_and_unusable() -> None:
+def test_aggregate_dimensions_behaviors_crm_and_objections() -> None:
     items = [
         analysed(),
         analysed(
             kind="meeting",
             seconds=1800,
-            puanlar={"acilis": 2, "ihtiyac_analizi": 4, "deger_sunumu": 0, "itiraz_karsilama": 3, "kapanis": 1},
+            sonar=[{"kod": "B01", "puan": 2}, {"kod": "B20", "puan": 3}, {"kod": "B29", "puan": 1}],
+            crm={"not_var": True, "puanlar": {"C1": 4, "C2": 2, "C3": 0}, "yorum": "x"},
             itirazlar=[{"tip": "fiyat", "karsilandi": "evet"}, {"tip": "fiyat", "karsilandi": "kismen"},
                        {"tip": "zaman", "karsilandi": "hayir"}],
             sonraki_adim={"var": False, "tarih_net": False},
@@ -108,34 +158,40 @@ def test_aggregate_scores_skip_not_applicable_and_unusable() -> None:
     ]
     s = cv.aggregate(items)
     assert s["gorusme"] == 3 and s["analiz"] == 2
-    assert s["telefon"] == 1 and s["toplanti"] == 1
-    assert s["dakika"] == 40.0
-    assert s["puanlar"]["acilis"] == 3.0
-    assert s["puanlar"]["deger_sunumu"] == 4.0  # 0 = uygulanmaz, ortalamaya girmez
-    assert s["puanlar"]["itiraz_karsilama"] == 3.0
+    assert s["telefon"] == 1 and s["toplanti"] == 1 and s["dakika"] == 40.0
+    # K1: görüşme 1 = (4+2)/2 = 3, görüşme 2 = 2 → 2,5; K3 yalnız ikinci görüşmede.
+    assert s["puanlar"] == {"K1": 2.5, "K2": None, "K3": 3.0, "K4": 2.0, "K5": None}
+    assert s["davranislar"]["B01"] == {"ort": 3.0, "adet": 2, "zayif": 1}
+    assert s["davranislar"]["B29"] == {"ort": 2.0, "adet": 2, "zayif": 1}
+    assert s["crm"]["notlu"] == 1 and s["crm"]["oran"] == 50.0
+    assert s["crm"]["puanlar"]["C1"] == 4.0 and s["crm"]["puanlar"]["C3"] is None
     assert s["sonraki_adim_orani"] == 50.0 and s["tarihli_adim_orani"] == 0.0
     assert s["itirazlar"]["fiyat"] == {"adet": 2, "karsilandi": 1, "kismen": 1, "oran": 75.0}
     assert list(s["itirazlar"]) == ["fiyat", "zaman"]
     assert s["riskler"] == {"baski": 1}
+    assert [w["kod"] for w in cv.weakest(s)] == ["B29", "B01"]  # tek gözlemli B05/B20 sayılmaz
 
 
 def test_aggregate_empty_week() -> None:
     s = cv.aggregate([])
     assert s["analiz"] == 0 and s["puan_ort"] is None and s["sonraki_adim_orani"] is None
+    assert s["davranislar"] == {} and s["crm"]["oran"] is None
 
 
-def test_share_text_has_focus_quote_scores_and_link() -> None:
+def test_share_text_has_focus_code_quote_scores_and_link() -> None:
     stats = cv.aggregate([analysed(), analysed()])
     narrative = {
         "ozet": "İki görüşme.",
-        "odak": {"baslik": "Tarihli adım", "neden": "Takip yok.", "alinti": "nasıl isterseniz", "nasil": "Saat sor."},
+        "odak": {"kod": "B29", "baslik": "Tarihli adım", "neden": "Takip yok.", "alinti": "nasıl isterseniz",
+                 "nasil": "Saat sor."},
         "guclu": ["Açılış iyi."],
         "dikkat": [],
     }
     text = cv.share_text("Serkan Şahin", date(2026, 10, 19), stats, narrative)
     assert text.startswith("*Görüşme değerlendirmen · 19.10 – 25.10.2026*")
     assert "Merhaba Serkan, bu hafta analiz edilen 2 görüşmenin" in text
-    assert "*Bu haftanın odağı: Tarihli adım*" in text and "> “nasıl isterseniz”" in text
+    assert "*Bu haftanın odağı: B29 · Tarihli adım*" in text and "> “nasıl isterseniz”" in text
     assert "• Açılış iyi." in text and "*Dikkat*" not in text
-    assert "Açılış 4,0" in text and "İtiraz karşılama" not in text  # 0 = uygulanmaz, gösterilmez
+    assert "Karşılama ve Teşhis 3,0" in text and "İtiraz ve Müzakere" not in text
+    assert "CRM notu yazılan görüşme: %0,0" in text
     assert "\n\n\n" not in text
