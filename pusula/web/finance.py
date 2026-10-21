@@ -34,6 +34,7 @@ from pusula.db.models import (
     FinSnapshot,
     FinSnapshotLine,
     FinTaxSettings,
+    FinTransaction,
     FinWallet,
     Money,
     SnapshotSection,
@@ -773,12 +774,19 @@ def create_week(body: NewWeekBody) -> Any:
     """Yeni hafta: hesap bakiyeleri + açık planlı kalemler + cüzdanlar + tahmini
     vergi + önceki elle girilenler.
 
-    Kurlar o anki son ECB kuruyla haftaya kilitlenir. include_intercompany:
-    şirketin kendi kayıtlarındaki net transferler (bilanço tarihine kadar)
-    şirketler arası alacak / borç satırı olur.
+    Bilanço tarihi (haftanın pazarı) bugünden önceyse hesap bakiyeleri o günün
+    sonuna geri hesaplanır (güncel bakiye − sonraki hareketler), cüzdanlar o
+    güne kadar girilmiş son bakiyedir ve kurlar o günün kuruyla kilitlenir;
+    değilse güncel bakiye ve son kur. include_intercompany: şirketin kendi
+    kayıtlarındaki net transferler (bilanço tarihine kadar) şirketler arası
+    alacak / borç satırı olur.
     """
     if body.week_date.isoweekday() != 1:
         raise HTTPException(status_code=400, detail="Hafta pazartesi olmalı")
+    end = week_end(body.week_date)
+    past = end < _now().date()
+    as_of = end if past else None
+    year_first = date(end.year, 1, 1)
     with connect() as conn, db_errors():
         companies = store.load_companies(conn)
         ids = body.company_ids or [c.id for c in sorted(companies, key=lambda c: c.sort)]
@@ -788,9 +796,11 @@ def create_week(body: NewWeekBody) -> Any:
             raise HTTPException(status_code=409, detail=f"Bu hafta zaten var: {', '.join(taken)}")
         accounts_ = store.load_accounts(conn)
         planned = store.load_planned(conn)
-        fx_table = load_fx(conn, None if body.include_intercompany else body.week_date - timedelta(days=7))
-        fx_rates = fx_table.latest_rates()
-        ic_txs = store.load_transactions(conn, None, week_end(body.week_date)) if body.include_intercompany else []
+        fx_table = load_fx(conn, None if body.include_intercompany else year_first - timedelta(days=7))
+        fx_rates = fx_table.latest_rates(day=as_of)
+        # Yıl başından bugüne: geri hesap, yıl başı net varlık ve vergi için
+        txs = store.load_transactions(conn, year_first - timedelta(days=1), None)
+        ic_txs = store.load_transactions(conn, None, end) if body.include_intercompany else []
         names = {c.id: c.name for c in companies}
         wallets = store.load_wallets(conn)
         tax_settings = {c: store.load_tax_settings(conn, c) for c in ids}
@@ -801,7 +811,13 @@ def create_week(body: NewWeekBody) -> Any:
                 prev = previous_snapshot(existing, company_id, body.week_date)
                 if prev and prev.id is not None:
                     previous = store.load_snapshot_lines(conn, [prev.id])
-            ic = intercompany_balances(company_id, ic_txs, fx_table, week_end(body.week_date), names)
+            ic = intercompany_balances(company_id, ic_txs, fx_table, end, names)
+            own = [t for t in txs if t.company_id == company_id]
+            balances = (
+                {a.id: tax.balance_on(a, own, end) for a in accounts_ if a.company_id == company_id and a.id is not None}
+                if past
+                else None
+            )
             snapshot_id = store.insert_snapshot(conn, company_id, body.week_date, fx_rates)
             lines = build_week_lines(
                 company_id,
@@ -810,8 +826,9 @@ def create_week(body: NewWeekBody) -> Any:
                 previous,
                 body.week_date,
                 ic,
-                wallets=wallets,
-                tax_due=_tax_due(tax_settings[company_id], accounts_, wallets, fx_table, body.week_date),
+                wallets=tax.wallets_on(wallets, company_id, as_of),
+                tax_due=_tax_due(tax_settings[company_id], accounts_, wallets, own, fx_table, end, as_of),
+                balances=balances,
             )
             for line in lines:
                 store.insert_line(conn, snapshot_id, line.__dict__)
@@ -823,19 +840,29 @@ def _tax_due(
     settings: FinTaxSettings,
     accounts_: list[FinAccount],
     wallets: list[FinWallet],
+    txs: list[FinTransaction],
     fx_table: Any,
-    week: date,
+    end: date,
+    as_of: date | None,
 ) -> list[tuple[str, Decimal]]:
-    """Bugünkü yapıyla yıl başından bu haftaya kârın tahmini vergisi (USD).
+    """Vergi satırları (USD): ödenmemiş geçen yıl vergisi + bugünkü yapıyla
+    yıl başından bilanço tarihine kârın tahmini vergisi.
 
-    Yıl başı net varlık girilmemiş şirkette boş. FDII payı girilmediyse 0.
+    Yıl başı net varlık bilinmiyorsa (girilmemiş, geçmiş eksik) yalnız geçen
+    yıl vergisi. FDII payı girilmediyse 0. as_of None: güncel bakiyeler.
     """
-    net = tax.net_assets(settings.company_id, accounts_, wallets, fx_table).net
-    prof = tax.profit(net, settings, week_end(week))
-    if prof is None:
-        return []
-    due = tax.structure_tax(prof.ytd, settings, settings.fdii_share or Decimal("0"))
-    return [(f"Tahmini ABD vergisi ({tax.STRUCTURE_LABEL[settings.structure]})", due)]
+    company_id = settings.company_id
+    assets = tax.net_assets(company_id, accounts_, wallets, fx_table, txs=txs, day=as_of)
+    out = []
+    unpaid = tax.prior_tax_unpaid(txs, company_id, fx_table, end)
+    if unpaid > 0:
+        out.append((f"{end.year - 1} ABD vergisi (ödenecek)", unpaid))
+    begin = tax.year_start(company_id, end.year, settings, accounts_, wallets, txs, fx_table)
+    prof = tax.profit(assets.net, begin.net if begin else None, settings, end)
+    if prof is not None:
+        due = tax.structure_tax(prof.ytd, settings, settings.fdii_share or Decimal("0"))
+        out.append((f"Tahmini {end.year} ABD vergisi ({tax.STRUCTURE_LABEL[settings.structure]})", due))
+    return out
 
 
 class SnapshotPatch(BaseModel):

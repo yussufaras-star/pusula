@@ -8,10 +8,16 @@ Her ikisi de şimdilik elle girilir.
 
 ABD vergisi varlık üzerinden değil yılın kârı üzerinden alınır. Kâr net
 varlık değişiminden çıkarılır: net varlık = hesaplar − satıcı cüzdanları −
-üretici bakiyeleri; kâr = bugünkü − yıl başı net varlık + kâr dağıtımı −
-konulan sermaye. Ortaklara operating agreement ile ödenen guaranteed
-payment gider olduğundan net varlığı zaten düşürür, geri eklenmez.
-Senaryolar aynı kârı farklı yapılarda vergiler (ortaklık / C-Corp).
+üretici bakiyeleri − ödenmemiş geçen yıl vergisi; kâr = bugünkü − yıl başı
+net varlık + kâr dağıtımı − konulan sermaye. Satıcı cüzdanı alınan avanstır:
+yüklenen para kâr değildir, yalnız harcandıkça (bakiye düştükçe) kâra döner.
+
+Yıl başı net varlık elle girilmediyse hesaplardan çıkarılır: 1 Ocak bakiyesi
+= güncel bakiye − yıl içindeki hareketler. Yıl içinde IRS'e ödenen vergi
+geçen yılın vergisidir: 1 Ocak'ta borçtur, bu yılın kârını düşürmez.
+Ortaklara operating agreement ile ödenen guaranteed payment gider olduğundan
+net varlığı zaten düşürür, geri eklenmez. Senaryolar aynı kârı farklı
+yapılarda vergiler (ortaklık / C-Corp).
 """
 
 from __future__ import annotations
@@ -19,7 +25,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from pusula.db.models import FinAccount, FinTaxSettings, FinTransaction, FinWallet
@@ -128,34 +134,136 @@ CONTRACTOR_CATEGORY = "yuklenici"
 CENT = Decimal("0.01")
 
 
+TAX_CATEGORY = "vergi"
+# Yıl başı bakiyesi hareketlerden çıkarılır; şirketin kayıtları yılın ilk
+# haftasından sonra başlıyorsa geçmiş eksiktir, otomatik değer verilmez.
+HISTORY_GRACE_DAYS = 7
+
+
 @dataclass(frozen=True)
 class NetAssets:
     cash_usd: Decimal  # aktif hesap bakiyeleri (negatif bakiye düşer)
-    seller_usd: Decimal  # satıcı cüzdanları
+    seller_usd: Decimal  # satıcı cüzdanları (alınan avans)
     producer_usd: Decimal  # üretici bakiyeleri (avans negatif)
+    prior_tax_usd: Decimal = ZERO  # geçen yılın henüz ödenmemiş vergisi
 
     @property
     def net(self) -> Decimal:
-        return self.cash_usd - self.seller_usd - self.producer_usd
+        return self.cash_usd - self.seller_usd - self.producer_usd - self.prior_tax_usd
+
+
+def balance_on(account: FinAccount, txs: Iterable[FinTransaction], day: date) -> Decimal:
+    """Hesabın 'day' günü sonundaki bakiyesi: güncel bakiye − sonraki hareketler.
+
+    txs 'day'den sonraki tüm hareketleri içermeli.
+    """
+    later = sum((t.amount for t in txs if t.account_id == account.id and t.booked_at > day), ZERO)
+    return account.current_balance - later
+
+
+def wallets_on(wallets: Iterable[FinWallet], company_id: str, day: date | None = None) -> list[FinWallet]:
+    """(tür, ad) başına 'day'e kadar girilmiş en son bakiye; day None ise en son.
+
+    Aynı cüzdan farklı tarihlerle birden çok kez girilebilir (ör. 1 Ocak ve bugün).
+    """
+    latest: dict[tuple[str, str], FinWallet] = {}
+    for w in wallets:
+        if w.company_id != company_id or not w.active or (day is not None and w.as_of > day):
+            continue
+        key = (w.kind, w.name.strip().lower())
+        if key not in latest or w.as_of >= latest[key].as_of:
+            latest[key] = w
+    return list(latest.values())
+
+
+def _wallet_totals(wallets: Iterable[FinWallet], fx: FxTable, day: date | None) -> tuple[Decimal, Decimal]:
+    seller = producer = ZERO
+    for w in wallets:
+        if w.kind == "seller":
+            seller += fx.to_usd(w.balance, w.currency, day)
+        else:
+            producer += fx.to_usd(w.balance, w.currency, day)
+    return seller, producer
+
+
+def prior_tax_unpaid(txs: Iterable[FinTransaction], company_id: str, fx: FxTable, day: date) -> Decimal:
+    """'day' sonunda ödenmemiş geçen yıl vergisi (USD).
+
+    'day'den sonra, aynı takvim yılı içinde ('day' 31 Aralık ise gelecek yıl)
+    IRS'e yapılan ödemeler: yıl içindeki tüm 'vergi' çıkışları geçen yılın
+    vergisi sayılır.
+    """
+    year = day.year + 1 if (day.month, day.day) == (12, 31) else day.year
+    return -sum(
+        (
+            fx.to_usd(t.amount, t.currency, t.booked_at)
+            for t in txs
+            if t.company_id == company_id
+            and t.category_id == TAX_CATEGORY
+            and t.booked_at.year == year
+            and t.booked_at > day
+        ),
+        ZERO,
+    )
 
 
 def net_assets(
-    company_id: str, accounts: Iterable[FinAccount], wallets: Iterable[FinWallet], fx: FxTable
+    company_id: str,
+    accounts: Iterable[FinAccount],
+    wallets: Iterable[FinWallet],
+    fx: FxTable,
+    *,
+    txs: Sequence[FinTransaction] = (),
+    day: date | None = None,
 ) -> NetAssets:
-    """Güncel bakiyeler, son kurla (kur yoksa 0 ve fx.missing'e yazılır)."""
-    cash = sum(
-        (fx.to_usd(a.current_balance, a.currency) for a in accounts if a.company_id == company_id and a.active),
-        ZERO,
-    )
-    seller = producer = ZERO
-    for w in wallets:
-        if w.company_id != company_id or not w.active:
+    """Net varlık (USD). day None: güncel bakiyeler ve son kur. day verilirse o
+    günün sonundaki bakiye (hareketlerden geri hesap), o günün kuru, o güne
+    kadar girilmiş cüzdanlar ve o gün ödenmemiş geçen yıl vergisi.
+    """
+    cash = ZERO
+    for a in accounts:
+        if a.company_id != company_id or not a.active:
             continue
-        if w.kind == "seller":
-            seller += fx.to_usd(w.balance, w.currency)
-        else:
-            producer += fx.to_usd(w.balance, w.currency)
-    return NetAssets(cash, seller, producer)
+        balance = a.current_balance if day is None else balance_on(a, txs, day)
+        cash += fx.to_usd(balance, a.currency, day)
+    seller, producer = _wallet_totals(wallets_on(wallets, company_id, day), fx, day)
+    prior = ZERO if day is None else prior_tax_unpaid(txs, company_id, fx, day)
+    return NetAssets(cash, seller, producer, prior)
+
+
+@dataclass(frozen=True)
+class YearStart:
+    net: Decimal
+    source: str  # manual | auto
+    assets: NetAssets | None  # otomatik hesapta kırılım
+    history_from: date | None  # şirketin yıl içindeki ilk hareketi
+
+
+def year_start(
+    company_id: str,
+    year: int,
+    settings: FinTaxSettings,
+    accounts: Sequence[FinAccount],
+    wallets: Sequence[FinWallet],
+    txs: Sequence[FinTransaction],
+    fx: FxTable,
+) -> YearStart | None:
+    """1 Ocak net varlığı: elle girilen, yoksa hesaplardan geri hesap.
+
+    txs yıl başından bugüne tüm hareketleri içermeli. Kayıtlar yılın ilk
+    haftasından sonra başlıyorsa (geçmiş eksik) ve elle girilmemişse None.
+    Hesaplar 31 Aralık gün sonuyla, cüzdanlar 1 Ocak'a kadar girilenle.
+    """
+    first = date(year, 1, 1)
+    history = min((t.booked_at for t in txs if t.company_id == company_id and t.booked_at >= first), default=None)
+    if settings.year_start_net_assets is not None:
+        return YearStart(settings.year_start_net_assets, "manual", None, history)
+    if history is None or (history - first).days > HISTORY_GRACE_DAYS:
+        return None
+    base = net_assets(company_id, accounts, (), fx, txs=txs, day=first - timedelta(days=1))
+    seller, producer = _wallet_totals(wallets_on(wallets, company_id, first), fx, first)
+    assets = NetAssets(base.cash_usd, seller, producer, base.prior_tax_usd)
+    return YearStart(assets.net, "auto", assets, history)
 
 
 def outflow_total(
@@ -179,11 +287,11 @@ class Profit:
     elapsed_days: int
 
 
-def profit(net_now: Decimal, settings: FinTaxSettings, today: date) -> Profit | None:
-    """Yıl başı net varlık girilmediyse None."""
-    if settings.year_start_net_assets is None:
+def profit(net_now: Decimal, start_net: Decimal | None, settings: FinTaxSettings, today: date) -> Profit | None:
+    """Yıl başı net varlık bilinmiyorsa None."""
+    if start_net is None:
         return None
-    ytd = net_now - settings.year_start_net_assets + settings.distributions - settings.contributions
+    ytd = net_now - start_net + settings.distributions - settings.contributions
     start = date(today.year, 1, 1)
     elapsed = (today - start).days + 1
     year_days = (date(today.year + 1, 1, 1) - start).days

@@ -574,10 +574,11 @@ def tax_view(
 ) -> dict[str, Any]:
     """Net varlık, yılın kârı ve beş yapıda ABD vergisi.
 
-    Kâr yıl başı net varlık girilmeden hesaplanamaz (profit None, senaryo
-    yok). Senaryolar yıl sonu tahmini kâr üzerinden; ortak ve yüklenici
-    ödemeleri yıl başından (kayıtlı hareketlerden) bilgi amaçlı.
-    Yüklemeler [start, end] aralığından.
+    Yıl başı net varlık elle girilmediyse hesaplardan geri hesaplanır
+    (bundle yıl başından bugüne tüm hareketleri içermeli); o da yoksa
+    profit None, senaryo yok. Senaryolar yıl sonu tahmini kâr üzerinden
+    (tax_ytd_usd: bugüne kadarki kârın vergisi); ortak ve yüklenici
+    ödemeleri yıl başından bilgi amaçlı. Yüklemeler [start, end] aralığından.
     """
     fx = bundle.fx
     today = now.date()
@@ -587,8 +588,13 @@ def tax_view(
     dep = tax.deposits([t for t in own if start <= t.booked_at <= end], bundle.accounts, fx)
     estimate = tax.foreign_share_estimate(dep)
     foreign = settings.fdii_share if settings.fdii_share is not None else (estimate or Decimal("0"))
-    prof = tax.profit(assets.net, settings, today)
+    begin = tax.year_start(company_id, today.year, settings, bundle.accounts, wallets, own, fx)
+    prof = tax.profit(assets.net, begin.net if begin else None, settings, today)
     scenarios = tax.scenarios(prof.projected, settings, foreign) if prof else []
+    ytd_tax = {s.key: s.tax for s in tax.scenarios(prof.ytd, settings, foreign)} if prof else {}
+    current_wallets = {id(w) for w in tax.wallets_on(wallets, company_id)}
+    start_wallets = {id(w) for w in tax.wallets_on(wallets, company_id, year_start)}
+    start_assets = begin.assets if begin else None
     current = tax.STRUCTURE_SCENARIO[settings.structure]
     accounts = [a for a in bundle.accounts if a.company_id == company_id and a.active]
     first_tx = min((t.booked_at for t in own), default=None)
@@ -604,6 +610,19 @@ def tax_view(
             "producer_usd": money(assets.producer_usd),
             "net_assets_usd": money(assets.net),
         },
+        "year_start": (
+            {
+                "source": begin.source,
+                "net_usd": money(begin.net),
+                "history_from": begin.history_from,
+                "cash_usd": money(start_assets.cash_usd) if start_assets else None,
+                "seller_usd": money(start_assets.seller_usd) if start_assets else None,
+                "producer_usd": money(start_assets.producer_usd) if start_assets else None,
+                "prior_tax_usd": money(start_assets.prior_tax_usd) if start_assets else None,
+            }
+            if begin
+            else None
+        ),
         "profit": (
             {"ytd_usd": money(prof.ytd), "projected_usd": money(prof.projected), "elapsed_days": prof.elapsed_days}
             if prof
@@ -624,6 +643,7 @@ def tax_view(
                 "title": sc.title,
                 "note": sc.note,
                 "tax_usd": money(sc.tax),
+                "tax_ytd_usd": money(ytd_tax.get(sc.key)),
                 "rate": _rate_out(sc.tax / prof.projected) if prof and prof.projected > 0 else None,
                 "current": sc.key == current,
                 "partners": [
@@ -639,7 +659,13 @@ def tax_view(
             for a in sorted(accounts, key=lambda a: (a.sort, a.id or 0))
         ],
         "wallets": [
-            {**w.model_dump(), "balance": money(w.balance), "balance_usd": money(fx.to_usd(w.balance, w.currency))}
+            {
+                **w.model_dump(),
+                "balance": money(w.balance),
+                "balance_usd": money(fx.to_usd(w.balance, w.currency)),
+                "current": id(w) in current_wallets,
+                "year_start": id(w) in start_wallets,
+            }
             for w in wallets
             if w.company_id == company_id
         ],

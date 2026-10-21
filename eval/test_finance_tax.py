@@ -38,8 +38,8 @@ def account(id_, name, balance, institution="Mercury", type_="fintech", company=
     )
 
 
-def wallet(kind, name, balance, company="llc", active=True):
-    return FinWallet(company_id=company, kind=kind, name=name, balance=D(balance), as_of=TODAY, active=active)
+def wallet(kind, name, balance, company="llc", active=True, as_of=TODAY):
+    return FinWallet(company_id=company, kind=kind, name=name, balance=D(balance), as_of=as_of, active=active)
 
 
 @pytest.mark.parametrize(
@@ -128,11 +128,76 @@ def test_net_assets_and_payments() -> None:
 
 
 def test_profit_needs_year_start_and_annualizes() -> None:
-    assert tax.profit(D("500000"), FinTaxSettings(company_id="llc"), TODAY) is None
-    prof = tax.profit(D("500000"), settings(distributions=D("20000")), date(2026, 7, 2))  # 183. gün
+    assert tax.profit(D("500000"), None, FinTaxSettings(company_id="llc"), TODAY) is None
+    prof = tax.profit(D("500000"), D("100000"), settings(distributions=D("20000")), date(2026, 7, 2))  # 183. gün
     assert prof.ytd == D("420000")
     assert prof.elapsed_days == 183
     assert prof.projected.quantize(D("1")) == D("837705")
+
+
+def test_balance_on_rolls_back_later_transactions() -> None:
+    acc = account(2, "Mercury", "1000")
+    rows = [tx(1, "300", account_id=2, day=date(2026, 1, 5)), tx(2, "-100", account_id=2, day=date(2026, 3, 1)),
+            tx(3, "50", account_id=9, day=date(2026, 3, 1))]
+    assert tax.balance_on(acc, rows, date(2025, 12, 31)) == D("800")
+    assert tax.balance_on(acc, rows, date(2026, 2, 1)) == D("1100")
+    assert tax.balance_on(acc, rows, date(2026, 3, 1)) == D("1000")
+
+
+def test_wallets_on_takes_latest_entry_per_wallet() -> None:
+    rows = [
+        wallet("seller", "Toplam", "200", as_of=date(2026, 1, 1)),
+        wallet("seller", "toplam ", "500", as_of=date(2026, 10, 1)),
+        wallet("producer", "ASPOL", "90", as_of=date(2026, 5, 1)),
+        wallet("seller", "Eski", "1", active=False, as_of=date(2026, 1, 1)),
+    ]
+    assert sorted(w.balance for w in tax.wallets_on(rows, "llc")) == [D("90"), D("500")]
+    assert [w.balance for w in tax.wallets_on(rows, "llc", date(2026, 1, 1))] == [D("200")]
+    assert tax.wallets_on(rows, "tr") == []
+
+
+def test_prior_year_tax_is_a_liability_until_paid() -> None:
+    rows = [tx(1, "-19550", category_id="vergi", day=date(2026, 8, 28)),
+            tx(2, "-500", category_id="vergi", day=date(2025, 4, 1))]
+    assert tax.prior_tax_unpaid(rows, "llc", FX, date(2025, 12, 31)) == D("19550")
+    assert tax.prior_tax_unpaid(rows, "llc", FX, date(2026, 8, 27)) == D("19550")
+    assert tax.prior_tax_unpaid(rows, "llc", FX, date(2026, 8, 28)) == 0
+
+
+def test_year_start_from_accounts_minus_prior_tax_and_wallets() -> None:
+    accounts = [account(2, "Mercury", "700000"), account(3, "Kart", "-10000", type_="card")]
+    rows = [
+        tx(1, "50", account_id=2, day=date(2026, 1, 2)),
+        tx(2, "650000", account_id=2, category_id="cuzdan", day=date(2026, 5, 1)),
+        tx(3, "-19550", account_id=2, category_id="vergi", day=date(2026, 8, 28)),
+        tx(4, "-10000", account_id=3, day=date(2026, 9, 1)),
+    ]
+    wallets = [wallet("seller", "Toplam", "30000", as_of=date(2026, 1, 1)), wallet("seller", "Toplam", "400000")]
+    begin = tax.year_start("llc", 2026, FinTaxSettings(company_id="llc"), accounts, wallets, rows, FX)
+    assert begin.source == "auto" and begin.history_from == date(2026, 1, 2)
+    # 1 Ocak nakit = Mercury 700.000 − (50 + 650.000 − 19.550) + kart (−10.000 + 10.000) = 69.500
+    assert (begin.assets.cash_usd, begin.assets.prior_tax_usd, begin.assets.seller_usd) == (D("69500"), D("19550"), D("30000"))
+    assert begin.net == D("19950")
+    now = tax.net_assets("llc", accounts, wallets, FX)
+    assert now.net == D("290000")
+    # kâr = 290.000 − 19.950; geçen yılın vergisi kârı düşürmez, cüzdan artışı kâr değil
+    assert tax.profit(now.net, begin.net, FinTaxSettings(company_id="llc"), TODAY).ytd == D("270050")
+
+
+def test_year_start_manual_wins_and_missing_history_gives_none() -> None:
+    accounts = [account(2, "Mercury", "1000")]
+    late = [tx(1, "10", account_id=2, day=date(2026, 7, 16))]
+    assert tax.year_start("llc", 2026, FinTaxSettings(company_id="llc"), accounts, [], late, FX) is None
+    manual = tax.year_start("llc", 2026, settings(), accounts, [], late, FX)
+    assert (manual.source, manual.net, manual.assets) == ("manual", D("100000"), None)
+
+
+def test_net_assets_on_past_day() -> None:
+    accounts = [account(2, "Mercury", "1000")]
+    rows = [tx(1, "400", account_id=2, day=date(2026, 6, 1)), tx(2, "-100", account_id=2, category_id="vergi", day=date(2026, 8, 28))]
+    wallets = [wallet("seller", "Toplam", "50", as_of=date(2026, 5, 1)), wallet("seller", "Toplam", "70", as_of=date(2026, 9, 1))]
+    past = tax.net_assets("llc", accounts, wallets, FX, txs=rows, day=date(2026, 5, 31))
+    assert (past.cash_usd, past.seller_usd, past.prior_tax_usd, past.net) == (D("700"), D("50"), D("100"), D("550"))
 
 
 def test_individual_tax_2026_brackets() -> None:
@@ -182,6 +247,13 @@ def test_foreign_share_estimate_excludes_us_entities() -> None:
     ])
     assert tax.foreign_share_estimate(dep) == D("0.8")
     assert tax.foreign_share_estimate(tax.Deposits()) is None
+
+
+def test_week_lines_use_given_balances() -> None:
+    lines = build_week_lines("llc", [account(2, "Mercury", "1000"), account(3, "Kart", "0", type_="card")], [],
+                             week=date(2026, 3, 2), balances={2: D("400"), 3: D("-25")})
+    got = [(l.section, l.label, l.amount) for l in lines]
+    assert got == [("current_assets", "Mercury", D("400")), ("current_liabilities", "Kart", D("25"))]
 
 
 def test_week_lines_include_wallets_and_tax() -> None:

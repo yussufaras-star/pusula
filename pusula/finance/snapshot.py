@@ -207,11 +207,13 @@ def build_week_lines(
     *,
     wallets: Iterable[FinWallet] = (),
     tax_due: Sequence[tuple[str, Decimal]] = (),
+    balances: Mapping[int, Decimal] | None = None,
 ) -> list[DraftLine]:
     """Yeni hafta satırları.
 
     - Hesaplar: pozitif bakiye türüne göre aktif (çoğu Hazır değerler);
-      negatif bakiye (kart, kredi) kısa vadeli Mali borçlar.
+      negatif bakiye (kart, kredi) kısa vadeli Mali borçlar. balances
+      verilirse (geçmiş hafta) hesap bakiyesi oradan, yoksa güncel bakiye.
     - Açık tek seferlik planlı kalemler: giriş → Ticari alacaklar, çıkış →
       Ticari borçlar (vergi/maaş kategorisi → Ödenecek vergi, SGK ve maaş);
       vadesi bilanço tarihinden 1 yıl sonrası uzun vadeli.
@@ -231,11 +233,14 @@ def build_week_lines(
     for account in accounts:
         if account.company_id != company_id or not account.active:
             continue
-        if account.current_balance < 0:
-            push("current_liabilities", FINANCIAL_DEBT, account.name, -account.current_balance, account.currency, "account")
+        balance = account.current_balance
+        if balances is not None and account.id is not None:
+            balance = balances.get(account.id, balance)
+        if balance < 0:
+            push("current_liabilities", FINANCIAL_DEBT, account.name, -balance, account.currency, "account")
         else:
             section, group = ACCOUNT_GROUP[account.type]
-            push(section, group, account.name, account.current_balance, account.currency, "account")
+            push(section, group, account.name, balance, account.currency, "account")
 
     for item in planned:
         if item.company_id != company_id or item.status != "open" or item.recurrence != "none":
