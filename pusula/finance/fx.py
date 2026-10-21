@@ -71,11 +71,13 @@ class FxTable:
         last = [days[-1] for days in self._dates.values() if days]
         return max(last) if last else None
 
-    def latest_rates(self, currencies: Iterable[str] = FX_CURRENCIES) -> dict[str, Decimal]:
-        """Bilanço kilidi için: bilinen her para biriminin son kuru."""
+    def latest_rates(
+        self, currencies: Iterable[str] = FX_CURRENCIES, day: date | None = None
+    ) -> dict[str, Decimal]:
+        """Bilanço kilidi için: bilinen her para biriminin son (day verilirse o günkü) kuru."""
         out: dict[str, Decimal] = {}
         for cur in currencies:
-            rate = self.rate(cur)
+            rate = self.rate(cur, day)
             if rate is not None:
                 out[cur] = rate
         return out

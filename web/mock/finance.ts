@@ -646,10 +646,11 @@ export function mockFinance(method: string, url: string): unknown {
     const [start, end] = range(q);
     const llcCash = cash(["llc"]);
     const wallets = [
-      { id: 1, company_id: "llc", kind: "seller", name: "Toplam", balance: 412_300, balance_usd: 412_300, currency: "USD", as_of: addDays(TODAY, -2), notes: "Platform admin paneli", active: true, sort: 0, updated_at: ago(30) },
-      { id: 2, company_id: "llc", kind: "producer", name: "ASPOL PRINT INC", balance: 96_400, balance_usd: 96_400, currency: "USD", as_of: addDays(TODAY, -1), notes: null, active: true, sort: 0, updated_at: ago(20) },
-      { id: 3, company_id: "llc", kind: "producer", name: "Atolye LLC", balance: 41_250, balance_usd: 41_250, currency: "USD", as_of: addDays(TODAY, -1), notes: null, active: true, sort: 1, updated_at: ago(20) },
-      { id: 4, company_id: "llc", kind: "producer", name: "Zanaart LLC", balance: -8_000, balance_usd: -8_000, currency: "USD", as_of: addDays(TODAY, -6), notes: "avans", active: true, sort: 2, updated_at: ago(140) },
+      { id: 1, company_id: "llc", kind: "seller", name: "Toplam", balance: 412_300, balance_usd: 412_300, currency: "USD", as_of: addDays(TODAY, -2), notes: "Platform admin paneli", active: true, sort: 0, updated_at: ago(30), current: true, year_start: false },
+      { id: 5, company_id: "llc", kind: "seller", name: "Toplam", balance: 298_000, balance_usd: 298_000, currency: "USD", as_of: `${TODAY.slice(0, 4)}-01-01`, notes: null, active: true, sort: 0, updated_at: ago(30), current: false, year_start: true },
+      { id: 2, company_id: "llc", kind: "producer", name: "ASPOL PRINT INC", balance: 96_400, balance_usd: 96_400, currency: "USD", as_of: addDays(TODAY, -1), notes: null, active: true, sort: 0, updated_at: ago(20), current: true, year_start: false },
+      { id: 3, company_id: "llc", kind: "producer", name: "Atolye LLC", balance: 41_250, balance_usd: 41_250, currency: "USD", as_of: addDays(TODAY, -1), notes: null, active: true, sort: 1, updated_at: ago(20), current: true, year_start: false },
+      { id: 4, company_id: "llc", kind: "producer", name: "Zanaart LLC", balance: -8_000, balance_usd: -8_000, currency: "USD", as_of: addDays(TODAY, -6), notes: "avans", active: true, sort: 2, updated_at: ago(140), current: true, year_start: false },
     ] as const;
     const seller = 412_300;
     const producer = 96_400 + 41_250 - 8_000;
@@ -669,14 +670,15 @@ export function mockFinance(method: string, url: string): unknown {
     const foreign = 0.62;
     const fdii = p * foreign * 0.14 + p * (1 - foreign) * 0.21;
     const sc = (key: string, title: string, note: string, tax: number, current = false, rows: typeof prows = []) =>
-      ({ key, title, note, tax_usd: r2(tax), rate: p > 0 ? Math.round((tax / p) * 10000) / 10000 : null, current, partners: rows });
+      ({ key, title, note, tax_usd: r2(tax), tax_ytd_usd: r2((tax * elapsed) / 365), rate: p > 0 ? Math.round((tax / p) * 10000) / 10000 : null, current, partners: rows });
     const names = ["Betul Coban", "TEKALP LLC", "SOVEREIGN SPARKLE", "Ali Tozun", "Real Famous Ltd", "MUSTAFA SARI"];
     return {
       company_id: "llc", as_of: new Date().toISOString(), year: Number(TODAY.slice(0, 4)), start, end,
       base: { cash_usd: r2(llcCash), seller_usd: seller, producer_usd: producer, net_assets_usd: r2(net) },
+      year_start: { source: "auto", net_usd: yearStart, history_from: `${TODAY.slice(0, 4)}-01-01`, cash_usd: r2(yearStart + 298_000 + 19_550), seller_usd: 298_000, producer_usd: 0, prior_tax_usd: 19_550 },
       profit: { ytd_usd: r2(ytd), projected_usd: r2(projected), elapsed_days: elapsed },
       payments: { since: "2026-07-18", partners_usd: 56_382.99, contractors_usd: 26_401.62, irs_usd: 19_550 },
-      settings: { year_start_net_assets: yearStart, distributions: 0, contributions: 0, structure: "partnership", dividend_ratio: 0.2, fdii_share: null, partners, updated_at: ago(3) },
+      settings: { year_start_net_assets: null, distributions: 0, contributions: 0, structure: "partnership", dividend_ratio: 0.2, fdii_share: null, partners, updated_at: ago(3) },
       foreign_share: foreign,
       foreign_share_estimate: foreign,
       accounts: ACCOUNTS.filter((a) => a.company_id === "llc" && a.active).map((a) => ({ id: a.id, name: a.name, currency: a.currency, balance: a.balance, balance_usd: r2(toUsd(a.balance, a.currency)), balance_at: a.balance_at })),

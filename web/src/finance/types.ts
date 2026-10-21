@@ -328,6 +328,8 @@ export interface Wallet {
   active: boolean;
   sort: number;
   updated_at: string | null;
+  current: boolean; // bugünkü hesapta kullanılan (adına göre en son giriş)
+  year_start: boolean; // 1 Ocak hesabında kullanılan
 }
 
 export type TaxStructure = "none" | "partnership" | "ccorp";
@@ -348,6 +350,7 @@ export interface TaxScenario {
   title: string;
   note: string;
   tax_usd: number;
+  tax_ytd_usd: number | null;
   rate: number | null;
   current: boolean;
   partners: { name: string; share: number; income_usd: number; tax_usd: number }[];
@@ -360,6 +363,15 @@ export interface TaxPayload extends FxMeta {
   start: string;
   end: string;
   base: { cash_usd: number; seller_usd: number; producer_usd: number; net_assets_usd: number };
+  year_start: {
+    source: "manual" | "auto";
+    net_usd: number;
+    history_from: string | null;
+    cash_usd: number | null;
+    seller_usd: number | null;
+    producer_usd: number | null;
+    prior_tax_usd: number | null;
+  } | null;
   profit: { ytd_usd: number; projected_usd: number; elapsed_days: number } | null;
   payments: { since: string; partners_usd: number; contractors_usd: number; irs_usd: number };
   settings: TaxSettings;

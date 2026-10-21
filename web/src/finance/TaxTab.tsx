@@ -15,7 +15,8 @@ const KIND_TITLE: Record<WalletKind, string> = {
   producer: "Üretici cüzdanları",
 };
 const KIND_HINT: Record<WalletKind, string> = {
-  seller: "Satıcıların yüklediği, henüz harcanmamış para. Platformdaki toplamı gir; tek satır yeterli.",
+  seller:
+    "Satıcıların yüklediği, henüz harcanmamış para: alınan avans, gelir değil. Platformdaki toplamı gir; kârın doğru çıkması için aynı adla 1 Ocak tarihli bir satır daha ekle.",
   producer: "Üreticilere ödenecek tutar. Avans verdiysen eksi gir.",
 };
 
@@ -35,11 +36,12 @@ export function TaxTab({ scope, start, end, tick }: TabProps) {
 
   const b = data.base;
   const sellers = data.wallets.filter((w) => w.kind === "seller");
-  const noSeller = !sellers.some((w) => w.active);
+  const noSeller = !sellers.some((w) => w.current);
   const dep = data.deposits;
   const prof = data.profit;
   const pay = data.payments;
   const st = data.settings;
+  const ys = data.year_start;
   const shareGap = 1 - st.partners.reduce((s, p) => s + p.share, 0);
 
   return (
@@ -50,8 +52,8 @@ export function TaxTab({ scope, start, end, tick }: TabProps) {
       <FxNote missing={data.missing_fx} />
       {noSeller ? (
         <div className="banner">
-          Satıcı cüzdan bakiyesi girilmedi: kalan net varlık ve vergi olduğundan yüksek görünür. Aşağıdan satıcıların toplam
-          cüzdan bakiyesini ekle.
+          Satıcı cüzdan bakiyesi girilmedi. Cüzdandaki para satıcının avansıdır, gelir değildir: girilmezse bütün yüklemeler
+          kâr sayılır ve vergi olduğundan yüksek görünür. Aşağıdan bugünkü ve 1 Ocak'taki toplam cüzdan bakiyesini ekle.
         </div>
       ) : null}
 
@@ -85,17 +87,31 @@ export function TaxTab({ scope, start, end, tick }: TabProps) {
                 <StatTile label="Yüklenici ödemeleri" value={short(pay.contractors_usd)} title={usd(pay.contractors_usd)} expected="contractor, gider" />
               </div>
               <p className="muted fin-note">
-                Kâr = bugünkü net varlık − 1 Ocak net varlığı ({usd(st.year_start_net_assets)})
-                {st.distributions ? ` + kâr dağıtımı ${usd(st.distributions)}` : ""}. Ortak ve yüklenici ödemeleri gider olduğu için net
-                varlığı zaten düşürür, geri eklenmez. Ödeme toplamları {day(pay.since)} sonrası kayıtlı hareketlerden.
-                {pay.irs_usd ? ` Bu yıl IRS'e ödenen ${usd(pay.irs_usd)} geçen yılın vergisi; bu yılın hesabına girmez.` : ""}
+                Kâr = bugünkü net varlık ({usd(b.net_assets_usd)}) − 1 Ocak net varlığı ({usd(ys?.net_usd)})
+                {st.distributions ? ` + kâr dağıtımı ${usd(st.distributions)}` : ""}.{" "}
+                {ys?.source === "auto" ? (
+                  <>
+                    1 Ocak hesaplardan çıkarıldı: güncel bakiyelerden yıl içindeki hareketler geri alındı → nakit {usd(ys.cash_usd)}
+                    {ys.prior_tax_usd ? ` − ${data.year - 1} vergisi borcu ${usd(ys.prior_tax_usd)}` : ""}
+                    {ys.seller_usd ? ` − satıcı cüzdanları ${usd(ys.seller_usd)}` : ""}
+                    {ys.producer_usd ? ` − üretici bakiyeleri ${usd(ys.producer_usd)}` : ""}.{" "}
+                  </>
+                ) : (
+                  "1 Ocak net varlığı vergi ayarlarında elle girildi. "
+                )}
+                {pay.irs_usd
+                  ? `Bu yıl IRS'e ödenen ${usd(pay.irs_usd)} geçen yılın vergisi: 1 Ocak'ta borç sayıldı, bu yılın kârını düşürmez ve bu yılın vergisinden düşülmez. `
+                  : ""}
+                Ortak ve yüklenici ödemeleri gider olduğu için net varlığı zaten düşürür, geri eklenmez. Ödeme toplamları{" "}
+                {day(pay.since)} sonrası kayıtlı hareketlerden.
               </p>
               <div className="table-wrap">
                 <table className="board fin-table">
                   <thead>
                     <tr>
                       <th>Yapı</th>
-                      <th className="num">ABD federal vergisi</th>
+                      <th className="num">Bugüne kadar</th>
+                      <th className="num">Yıl sonu vergisi</th>
                       <th className="num">Kâra oranı</th>
                       <th className="num">Vergi sonrası</th>
                     </tr>
@@ -109,6 +125,7 @@ export function TaxTab({ scope, start, end, tick }: TabProps) {
                             {s.current ? <span className="badge good">bugünkü yapı</span> : null}
                             <div className="sub">{s.note}</div>
                           </td>
+                          <td className="num">{usd(s.tax_ytd_usd)}</td>
                           <td className="num">
                             <b>{usd(s.tax_usd)}</b>
                           </td>
@@ -120,6 +137,7 @@ export function TaxTab({ scope, start, end, tick }: TabProps) {
                             <td>
                               {p.name} <span className="muted">· pay {pct(p.share)} · kâr payı {usd(p.income_usd)}</span>
                             </td>
+                            <td />
                             <td className="num">{usd(p.tax_usd)}</td>
                             <td className="num">{p.income_usd > 0 ? pct(p.tax_usd / p.income_usd) : "—"}</td>
                             <td />
@@ -142,7 +160,9 @@ export function TaxTab({ scope, start, end, tick }: TabProps) {
             </>
           ) : (
             <div className="empty">
-              Kâr hesabı için 1 Ocak {data.year}'teki net varlık gerekli (hesaplar − satıcı cüzdanları − üretici bakiyeleri).{" "}
+              1 Ocak {data.year} net varlığı hesaplardan çıkarılamadı: kayıtlı hareketler{" "}
+              {ys?.history_from ? day(ys.history_from) : "yılın ilk haftasından sonra"} başlıyor. Hareketleri yıl başına kadar
+              senkronla ya da o günkü net varlığı elle gir (hesaplar − satıcı cüzdanları − üretici bakiyeleri).{" "}
               <button className="btn sm" onClick={() => setEditing(true)}>
                 Vergi ayarlarını gir
               </button>
@@ -268,7 +288,7 @@ function WalletCard({
   onAdd: () => void;
   onEdit: (w: Wallet) => void;
 }) {
-  const total = wallets.filter((w) => w.active).reduce((s, w) => s + w.balance_usd, 0);
+  const total = wallets.filter((w) => w.current).reduce((s, w) => s + w.balance_usd, 0);
   return (
     <section className="card">
       <div className="card-head">
@@ -294,9 +314,10 @@ function WalletCard({
               </thead>
               <tbody>
                 {wallets.map((w) => (
-                  <tr key={w.id} style={{ opacity: w.active ? 1 : 0.55 }}>
+                  <tr key={w.id} style={{ opacity: w.current || w.year_start ? 1 : 0.55 }}>
                     <td className="fin-desc">
                       {w.name}
+                      {w.year_start && !w.current ? <span className="badge">1 Ocak</span> : null}
                       {w.notes ? <div className="sub">{w.notes}</div> : null}
                     </td>
                     <td className="num">
@@ -457,7 +478,10 @@ function SettingsForm({ data, onClose, onSaved }: { data: TaxPayload; onClose: (
   return (
     <Modal title="Vergi ayarları · Rexven LLC" onClose={onClose} wide>
       <div className="f-grid">
-        <Field label={`1 Ocak ${data.year} net varlık (USD)`} hint="o günkü hesaplar − satıcı cüzdanları − üretici bakiyeleri">
+        <Field
+          label={`1 Ocak ${data.year} net varlık (USD)`}
+          hint="boş bırakılırsa hesaplardan otomatik; girilirse bu kullanılır (hesaplar − cüzdanlar − geçen yıl vergisi borcu)"
+        >
           <input className="f-input num" type="number" step={1000} value={f.start} onChange={(e) => set("start", e.target.value)} />
         </Field>
         <Field label="Yıl içi kâr dağıtımı (USD)" hint="guaranteed payment değil; yalnız kâr payı dağıtımı">
