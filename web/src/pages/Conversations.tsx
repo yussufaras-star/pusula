@@ -258,6 +258,7 @@ export function ConversationsPage({ me }: { me: Me }) {
                         <th className="num">Sonraki adım</th>
                         <th className="num" title="Not yazılan görüşme oranı">CRM notu</th>
                         <th>Odak</th>
+                        {isAdmin ? <th>Cliq</th> : null}
                       </tr>
                     </thead>
                     <tbody>
@@ -299,10 +300,26 @@ export function ConversationsPage({ me }: { me: Me }) {
                                     <span className="muted">—</span>
                                   )}
                                 </td>
+                                {isAdmin ? (
+                                  <td className="cv-share-cell" onClick={(e) => e.stopPropagation()}>
+                                    {r.narrative ? (
+                                      <ShareToCliq
+                                        week={data.week_start}
+                                        repId={r.rep_id}
+                                        name={r.name}
+                                        sentAt={r.sent_at}
+                                        onSent={refresh}
+                                        compact
+                                      />
+                                    ) : (
+                                      <span className="muted">—</span>
+                                    )}
+                                  </td>
+                                ) : null}
                               </tr>
                               {isOpen && r.narrative ? (
                                 <tr className="cv-detail-row">
-                                  <td colSpan={scoreKeys.length + 6}>
+                                  <td colSpan={scoreKeys.length + (isAdmin ? 7 : 6)}>
                                     <RepNarrative n={r.narrative} />
                                     {isAdmin ? (
                                       <ShareToCliq
@@ -523,12 +540,15 @@ function ShareToCliq({
   name,
   sentAt,
   onSent,
+  compact = false,
 }: {
   week: string;
   repId: string;
   name: string;
   sentAt: string | null;
   onSent: () => void;
+  /** Tablo satırında: kısa etiket, gönderim tarihi altta */
+  compact?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -545,6 +565,20 @@ function ShareToCliq({
     } finally {
       setBusy(false);
     }
+  }
+  if (compact) {
+    return (
+      <div className="cv-share compact">
+        <button className="btn sm" onClick={send} disabled={busy} title={err ?? undefined}>
+          {busy ? "Gönderiliyor…" : sentAt ? "Yeniden gönder" : "Gönder"}
+        </button>
+        {err ? (
+          <span className="warn-text">Gönderilemedi</span>
+        ) : sentAt ? (
+          <span className="muted">✓ {dateTime.format(new Date(sentAt))}</span>
+        ) : null}
+      </div>
+    );
   }
   return (
     <div className="cv-share">

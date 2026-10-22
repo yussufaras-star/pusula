@@ -3403,6 +3403,20 @@ textarea.f-input {
   font-size: 13px;
 }
 
+.cv-share.compact {
+  flex-direction: column;
+  align-items: flex-start;
+  flex-wrap: nowrap;
+  gap: 2px;
+  margin-top: 0;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.cv-share-cell {
+  cursor: default;
+}
+
 .cv-code {
   display: inline-block;
   margin-right: 6px;
