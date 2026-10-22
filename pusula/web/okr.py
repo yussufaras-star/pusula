@@ -1,7 +1,7 @@
-"""Ekip Panosu API'si (/api/okr/*): OKR, haftalık check-in ve CFR.
+"""OKRs API'si (/api/okr/*): OKR, haftalık check-in ve CFR.
 
 Yetki: yönetici her şeyi yazar. Temsilci ekip hedeflerini ve kendi kişisel
-hedeflerini görür; kişisel hedefini kendisi yazar (Doerr: hedeflerin bir
+hedeflerini görür; kişisel hedefini kendisi yazar (hedeflerin bir
 kısmı aşağıdan yukarı gelir), sorumlusu olduğu anahtar sonuca check-in
 yapar, takdir ve kendi konuşma notunu ekler.
 """

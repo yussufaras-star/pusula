@@ -1,4 +1,4 @@
-"""Ekip Panosu OKR: dönem, puanlama, durum, pano kurulumu ve yetki (DB sahte)."""
+"""OKRs: dönem, puanlama, durum, pano kurulumu ve yetki (DB sahte)."""
 
 from datetime import date, datetime
 
@@ -38,7 +38,7 @@ def test_progress_clamps_and_handles_down_direction() -> None:
     assert okr.kr_progress(0, 10, None) is None
 
 
-def test_grade_follows_doerr_scale() -> None:
+def test_grade_follows_scale() -> None:
     assert okr.grade_tone(0.7) == "good"
     assert okr.grade_tone(0.5) == "warning"
     assert okr.grade_tone(0.3) == "critical"

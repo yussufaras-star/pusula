@@ -3454,3 +3454,35 @@ textarea.f-input {
   padding-bottom: 4px;
   border-bottom: 1px solid var(--grid);
 }
+
+.okr-label {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.okr-label.obj {
+  color: var(--accent);
+}
+
+.okr-label.kr {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+}
+
+.okr-krs-head {
+  margin: 14px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.okr-krs-head + .okr-krs {
+  margin-top: 6px;
+}
