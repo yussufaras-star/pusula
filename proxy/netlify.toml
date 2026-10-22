@@ -1,0 +1,11 @@
+# Pusula yansısı: bazı Türk ağları *.vercel.app adını kesiyor (SNI engeli).
+# Netlify ücretsiz adresi her isteği olduğu gibi Vercel'deki Pusula'ya iletir;
+# çerez, giriş ve API aynen çalışır. Uygulamanın kendisi Vercel'de kalır.
+[build]
+  publish = "."
+
+[[redirects]]
+  from = "/*"
+  to = "https://pusula-yussufaras-3785s-projects.vercel.app/:splat"
+  status = 200
+  force = true
