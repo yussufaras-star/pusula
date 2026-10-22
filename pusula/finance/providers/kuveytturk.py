@@ -31,6 +31,7 @@ from pusula.finance.providers.base import (
     request_json,
     require_env,
 )
+from pusula.finance.statement import bank_counterparty
 
 WINDOW_DAYS = 29  # uzun aralıklar parçalara bölünür
 TOKEN_TTL = 3500.0
@@ -127,12 +128,15 @@ def fetch(account: FinAccount, since: datetime, client: httpx.Client) -> Adapter
             reference = row.get("transactionReference")
             if not reference or not row.get("date") or row.get("amount") is None:
                 continue
+            amount = num(row["amount"])
+            description = " ".join(str(row.get("description") or "").split())
             txs.append(
                 NormTx(
                     external_id=f"kt:{reference}",
                     booked_at=local_day(str(row["date"])),
-                    amount=num(row["amount"]),
-                    description=" ".join(str(row.get("description") or "").split()),
+                    amount=amount,
+                    description=description,
+                    counterparty=bank_counterparty(description, amount),
                     currency=_currency(row.get("fxCode")),
                 )
             )

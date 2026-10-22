@@ -66,7 +66,8 @@ def test_wallet_deposit_candidates() -> None:
     assert not tax.is_wallet_deposit(tx(3, "-100", "REX-1"))  # çıkış
     assert not tax.is_wallet_deposit(tx(4, "100", "REX-1", category_id="satis"))  # elle verilmiş
     assert not tax.is_wallet_deposit(tx(5, "100", "REX-1", edited=datetime(2026, 10, 1)))
-    assert not tax.is_wallet_deposit(tx(6, "100", "REX-1", company="tr"))  # yalnız LLC
+    assert tax.is_wallet_deposit(tx(6, "100", "REX-1", company="tr"))  # TL cüzdanı
+    assert not tax.is_wallet_deposit(tx(9, "100", "REX-1", company="gmbh"))
     assert not tax.is_wallet_deposit(tx(7, "100", "Rexven LLC"))
     assert not tax.is_wallet_deposit(tx(8, "100", "REX-1", category_id="cuzdan", rule=None))
 
