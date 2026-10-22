@@ -89,7 +89,8 @@ def test_kuveyt_signed_requests_balance_and_transactions(kt_env, monkeypatch) ->
             {"date": "2026-07-01T10:15:00", "amount": -40000.0, "balance": 2084703.23, "fxCode": "TL",
              "description": "Kira  ödemesi", "transactionReference": "R1"},
             {"date": "2026-07-02T09:00:00", "amount": 10000.0, "fxCode": "TL",
-             "description": "REX-139777 - Gönderen:TUĞBA", "transactionReference": "R2"},
+             "description": "REX-139777 - Gönderen:TUĞBA ÇETİN, Alıcı:Rexven, FAST Para Transferi",
+             "transactionReference": "R2"},
             {"date": "2026-07-02", "amount": 5, "transactionReference": None},  # kimliksiz → atlanır
         ]}})
 
@@ -101,8 +102,9 @@ def test_kuveyt_signed_requests_balance_and_transactions(kt_env, monkeypatch) ->
     assert seen[1] == "/v3/accounts/1/transactions?BeginDate=2026-06-26&EndDate=2026-07-24"
     assert [(t.external_id, t.booked_at, t.amount, t.currency, t.description) for t in result.transactions[:2]] == [
         ("kt:R1", date(2026, 7, 1), D("-40000.0"), "TRY", "Kira ödemesi"),
-        ("kt:R2", date(2026, 7, 2), D("10000.0"), "TRY", "REX-139777 - Gönderen:TUĞBA"),
+        ("kt:R2", date(2026, 7, 2), D("10000.0"), "TRY", "REX-139777 - Gönderen:TUĞBA ÇETİN, Alıcı:Rexven, FAST Para Transferi"),
     ]
+    assert [t.counterparty for t in result.transactions[:2]] == [None, "TUĞBA ÇETİN"]
 
 
 def test_kuveyt_missing_settings_and_bad_key(monkeypatch) -> None:

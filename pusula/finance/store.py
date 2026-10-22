@@ -32,8 +32,8 @@ from pusula.db.models import (
     FinWallet,
 )
 from pusula.finance.analytics import OWN_CATEGORY, OWN_MATCH_DAYS, auto_intercompany, categorize, own_transfers
-from pusula.finance.statement import Parsed
-from pusula.finance.tax import WALLET_CATEGORY, WALLET_COMPANY, is_wallet_deposit
+from pusula.finance.statement import Parsed, bank_counterparty
+from pusula.finance.tax import WALLET_CATEGORY, WALLET_COMPANIES, is_wallet_deposit
 
 ACCOUNT_COLUMNS = (
     "id, company_id, name, institution, type, currency, provider, provider_account_id,"
@@ -204,6 +204,7 @@ def import_statement(
                 amount=t.amount,
                 description=t.description,
                 external_id=t.external_id,
+                counterparty=bank_counterparty(t.description, t.amount),
             ),
             companies,
         )
@@ -305,14 +306,36 @@ def apply_own_transfers(conn: psycopg.Connection, since: date) -> int:
     return len(marked) + len(cleared)
 
 
+def fill_counterparties(conn: psycopg.Connection) -> int:
+    """Karşı tarafı boş banka hareketlerinde açıklamadan doldurur; güncellenen sayı.
+
+    Türk bankası ekstresi/API'si karşı tarafı ayrı vermez, açıklamaya
+    'Gönderen:… Alıcı:…' yazar. Dolu karşı taraf değişmez.
+    """
+    rows = conn.execute(
+        "SELECT id, description, amount FROM fin_transactions"
+        " WHERE counterparty IS NULL AND description ~* '(g[öo]nderen|amir)\\s*[:=]'"
+    ).fetchall()
+    found = [(i, name) for i, desc, amount in rows if (name := bank_counterparty(desc, amount))]
+    if not found:
+        return 0
+    updated = conn.execute(
+        "UPDATE fin_transactions t SET counterparty = u.name"
+        " FROM unnest(%s::bigint[], %s::text[]) AS u(id, name)"
+        " WHERE t.id = u.id AND t.counterparty IS NULL RETURNING t.id",
+        ([i for i, _ in found], [n for _, n in found]),
+    ).fetchall()
+    return len(updated)
+
+
 def apply_wallet_deposits(conn: psycopg.Connection, since: date | None = None) -> int:
-    """LLC'de 'REX-…' referanslı girişleri satıcı cüzdan yüklemesi yapar; güncellenen sayı.
+    """LLC ve TR'de 'REX-…' referanslı girişleri satıcı cüzdan yüklemesi yapar; güncellenen sayı.
 
     Hesap arası ayrımından sonra, kategori kurallarından önce çalışır; SQL
     koşulu elle düzeltilmiş ve şirketler arası satırı yine korur.
     """
-    query = f"SELECT {TX_COLUMNS} FROM fin_transactions WHERE company_id = %s AND amount > 0"
-    params: list[object] = [WALLET_COMPANY]
+    query = f"SELECT {TX_COLUMNS} FROM fin_transactions WHERE company_id = ANY(%s) AND amount > 0"
+    params: list[object] = [list(WALLET_COMPANIES)]
     if since is not None:
         query += " AND booked_at >= %s"
         params.append(since)

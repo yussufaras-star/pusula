@@ -353,6 +353,25 @@ def _cell(row: Sequence[Cell], index: int | None) -> Cell:
     return row[index]
 
 
+# Türk bankası havale açıklaması: '… - Gönderen:X, Alıcı:Y, FAST Para Transferi'
+# (KuveytTürk) ya da 'Açıklama= …Gönderen= X , Alıcı= Y'; yurt dışı gelen 'Amir:X <no> <no>'.
+_PARTIES = re.compile(r"g[öo]nderen\s*[:=]\s*(?P<sender>.*?)\s*,\s*al[ıi]c[ıi]\s*[:=]\s*(?P<receiver>[^,]*)", re.I)
+_ORDERING = re.compile(r"(?<![a-zçğıöşü])amir\s*:\s*(?P<name>.*?)(?:\s+\d[\d\s]*)?$", re.I)
+COUNTERPARTY_MAX = 120
+
+
+def bank_counterparty(description: str, amount: Decimal) -> str | None:
+    """Açıklamadaki karşı taraf: girişte gönderen, çıkışta alıcı; yoksa None."""
+    match = _PARTIES.search(description)
+    if match:
+        name = match.group("sender" if amount > 0 else "receiver")
+    else:
+        ordering = _ORDERING.search(description)
+        name = ordering.group("name") if ordering and amount > 0 else ""
+    name = " ".join(name.split())
+    return name[:COUNTERPARTY_MAX] or None
+
+
 def external_id(booked_at: date, amount: Decimal, description: str, occurrence: int) -> str:
     """İçerikten kimlik. Aynı gün, tutar, açıklama tekrarında sıra no ile ayrılır."""
     base = f"{booked_at.isoformat()}|{amount.quantize(Decimal('0.01'))}|{_fold(description)}|{occurrence}"

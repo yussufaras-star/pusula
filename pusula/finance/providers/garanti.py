@@ -30,6 +30,7 @@ from pusula.finance.providers.base import (
     require_env,
 )
 from pusula.finance.providers.kuveytturk import windows
+from pusula.finance.statement import bank_counterparty
 
 PAGE = 1500
 MAX_PAGES = 50
@@ -161,13 +162,16 @@ def fetch(account: FinAccount, since: datetime, client: httpx.Client) -> Adapter
                 when = row.get("activityDate") or row.get("valueDate")
                 if not when or not row.get("transactionReferenceId"):
                     continue
+                amount = signed_amount(row)
+                description = " ".join(str(row.get("explanation") or "").split())
                 txs.append(
                     NormTx(
                         external_id=f"gb:{row['transactionReferenceId']}",
                         booked_at=local_day(str(when)),
-                        amount=signed_amount(row),
-                        description=" ".join(str(row.get("explanation") or "").split()),
-                        # customerName hesap sahibinin kendisi (Rexven); karşı taraf değil
+                        amount=amount,
+                        description=description,
+                        # customerName hesap sahibinin kendisi (Rexven); karşı taraf açıklamada
+                        counterparty=bank_counterparty(description, amount),
                         currency=(str(row["currencyCode"]).upper().replace("TL", "TRY") if row.get("currencyCode") else None),
                     )
                 )

@@ -942,6 +942,41 @@ FROM fin_accounts a
 WHERE a.id = t.account_id AND a.provider = 'wise' AND t.amount > 0
   AND t.description LIKE 'Sent money to %' AND t.external_id NOT LIKE '%:iade';
 
+-- Rexven TR (KuveytTürk): ofis kirası ayrı kategori; Türk bankası açıklama
+-- kalıpları. Karşı taraf açıklamadaki 'Gönderen:/Alıcı:'dan doldurulur
+-- (pusula.finance.statement.bank_counterparty); şirketin kendisine giden/gelen
+-- havale ve döviz alış-satışı kendi hesapları arasıdır. 'REX-<üye no>'
+-- havaleler TL satıcı cüzdanıdır (kodda, kurallardan önce).
+INSERT INTO fin_categories (id, name, kind, sort) VALUES
+    ('kira', 'Kira / Ofis', 'out', 17)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO fin_category_rules (company_id, direction, match_type, pattern, category_id, source)
+SELECT 'tr', v.direction, v.match_type, v.pattern, v.category_id, 'system'
+FROM (VALUES
+    ('any', 'contains', 'doviz satis', 'hesap_arasi'),
+    ('any', 'contains', 'doviz alis', 'hesap_arasi'),
+    ('any', 'contains', 'virman', 'hesap_arasi'),
+    ('any', 'exact', 'rexven teknoloji anonim sirketi', 'hesap_arasi'),
+    ('any', 'exact', 'rexven', 'hesap_arasi'),
+    ('in', 'contains', 'lidio', 'satis'),
+    ('in', 'contains', 'iyzi', 'satis'),
+    ('in', 'contains', 'plan ', 'satis'),
+    ('in', 'contains', 'reco ', 'satis'),
+    ('in', 'contains', 'premium', 'satis'),
+    ('in', 'contains', 'uyelik', 'satis'),
+    ('out', 'contains', 'cari donem prim', 'maas'),
+    ('out', 'contains', 'kidem tazminati', 'maas'),
+    ('out', 'contains', 'multinet', 'maas'),
+    ('out', 'contains', 'kira bedeli', 'kira'),
+    ('out', 'contains', 'workinton', 'kira'),
+    ('out', 'contains', 'smmm', 'danismanlik'),
+    ('out', 'contains', 'fon transfer odenmesi ucreti', 'banka'),
+    ('out', 'contains', 'tahsil ucreti', 'banka'),
+    ('out', 'contains', 'tahsis komisyonu', 'banka')
+) AS v(direction, match_type, pattern, category_id)
+ON CONFLICT DO NOTHING;
+
 -- RLS açık, politika yok: Supabase anon/authenticated rolleri finans
 -- tablolarını okuyamaz; uygulama tablo sahibi olarak bağlanır.
 DO $$

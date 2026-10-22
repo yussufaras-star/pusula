@@ -32,8 +32,9 @@ from pusula.db.models import FinAccount, FinTaxSettings, FinTransaction, FinWall
 from pusula.finance.fx import FxTable
 
 ZERO = Decimal("0")
-# Satıcı cüzdanı yalnız LLC'de; diğer şirketlerde 'REX' geçen açıklama sınıflanmaz.
-WALLET_COMPANY = "llc"
+# Satıcı cüzdanı LLC'de (USD: Wise / Mercury / Stripe) ve TR'de (TL: KuveytTürk
+# cüzdan hesabına 'REX-<üye no>' açıklamalı havale); GmbH'de 'REX' sınıflanmaz.
+WALLET_COMPANIES = ("llc", "tr")
 WALLET_CATEGORY = "cuzdan"
 # 'REX-158115', 'Rex 49980', 'REX64976'; 'Rexven' eşleşmez (harften sonra rakam gerekir).
 _REF = re.compile(r"(?<![a-z0-9])rex[^a-z0-9]{0,3}(\d+)", re.I)
@@ -53,7 +54,7 @@ def is_wallet_deposit(tx: FinTransaction) -> bool:
     Kullanıcının düzelttiği, şirketler arası işaretli veya elle verilmiş
     kategorisi olan hareket değişmez (kuralla verilmiş kategori değişebilir).
     """
-    if tx.company_id != WALLET_COMPANY:
+    if tx.company_id not in WALLET_COMPANIES:
         return False
     if tx.amount <= 0 or tx.user_edited_at is not None or tx.counterparty_company_id:
         return False

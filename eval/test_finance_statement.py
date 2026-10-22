@@ -10,6 +10,7 @@ from pusula.finance.statement import (
     StatementError,
     StatementMapping,
     apply_mapping,
+    bank_counterparty,
     find_header,
     guess_mapping,
     parse_date,
@@ -247,3 +248,24 @@ def test_binary_xls_and_headerless_files_are_rejected() -> None:
         find_header(read_rows("x.csv", b"a;b\n1;2\n"))
     with pytest.raises(StatementError, match="boş"):
         read_rows("x.csv", b"")
+
+
+@pytest.mark.parametrize(
+    ("description", "amount", "expected"),
+    [
+        # KuveytTürk giden: alıcı
+        ("ZFA2026000000006 - Gönderen:REXVEN TEKNOLOJİ ANONİM ŞİRKETİ, Alıcı:ZANAART TAKI ÜRETIM ANONIM ŞIRKETI,"
+         " Para Transferi", "-241543.03", "ZANAART TAKI ÜRETIM ANONIM ŞIRKETI"),
+        # gelen: gönderen; 'Para Transferi, Gönderen: X' biçimi
+        ("REX-1 - Para Transferi, Gönderen: MEHMET GÖK, Alıcı:Rexven Teknoloji", "500", "MEHMET GÖK"),
+        # EFT: 'Gönderen= X , Alıcı= Y', açıklama bitişik
+        (", Gelen Para Transferi, Açıklama= REXVENGönderen= LİDİO ÖDEME HİZMETLERİ ANONİM ŞİRKETİ ,"
+         " Alıcı= REXVEN TEKNOLOJİ ANONİM ŞİRKETİ", "7442.44", "LİDİO ÖDEME HİZMETLERİ ANONİM ŞİRKETİ"),
+        # yurt dışından gelen: emir veren, sondaki referans numaraları atılır
+        ("Amir:Neshe LLC 232690923 2026052200117758", "35000", "Neshe LLC"),
+        ("Maaş Ödemesi", "-1000", None),
+        ("Kredi Kartı No:5116********7269 , Kredi Kartı Borç Ödemesi", "-5", None),
+    ],
+)
+def test_bank_counterparty(description: str, amount: str, expected: str | None) -> None:
+    assert bank_counterparty(description, D(amount)) == expected

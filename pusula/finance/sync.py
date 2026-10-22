@@ -234,6 +234,7 @@ def run_finance_sync(
             # Yeni gelenler eski hareketlerle de eşleşebilir: ilk senkron penceresi + pay
             since = now.date() - timedelta(days=(days or FIRST_DAYS)) - OVERLAP
             with connect() as conn:
+                store.fill_counterparties(conn)
                 own = store.apply_own_transfers(conn, since)
                 # Önce hesap arası aktarımlar, sonra satıcı cüzdan yüklemeleri
                 # ayrılır; kalanlar kurallarla kategorilenir
