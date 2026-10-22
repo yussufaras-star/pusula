@@ -123,7 +123,7 @@ veritabanı gerektirmeyen testleri yine çalıştırır.
   saat saat grafik; dikkat gerektirenler; temsilci tablosu (durum, hareketsiz
   süre, son faaliyet, son CRM işlemi, tempo, doluluk, saatlik ısı şeridi).
   Dakikada bir yenilenir. Temsilci yalnız kendi kartını ve ekip toplamını görür.
-- **Karşılaştır**, **Ekip Panosu**, **Raporlar**: sonraki aşamalar (`ROADMAP.md`).
+- **Karşılaştır**, **OKRs**, **Raporlar**: sonraki aşamalar (`ROADMAP.md`).
 
 ### Canlı veri akışı
 

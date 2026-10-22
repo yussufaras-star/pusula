@@ -34,7 +34,7 @@ Streamlit bırakıldı; React + FastAPI, Vercel. KPI hesabı tek sorguda
 4. **Hedefler + dürtme + AI yorum** — yönetici panelden günlük hedef girer
    (boşsa geçmiş ortalama); tempo gerisinde kalınca Cliq'e anında uyarı;
    sapmayı kod bulur, LLM rehberlik cümlesine döker (onay kuralı yukarıda).
-5. **Ekip Panosu** ✅ (2026-10-19: OKR) — John Doerr usulü OKR: yıllık ve
+5. **OKRs** ✅ (2026-10-19; eski adı Ekip Panosu) — OKR: yıllık ve
    çeyrek hedefler, 2-5 anahtar sonuç (Pusula verisinden otomatik ya da
    haftalık check-in ile), 0-1 puan, taahhüt/iddialı, hizalama, CFR ve TV
    modu (`pusula/okr.py`, `/api/okr`). Önerilen taslak: 2026 yıl başı planı (yıl + 4 çeyrek, aylık dağılımlı tempo; ekip ciro/satışı tüm şirket, Ç1 CRM rakamı) ve 2027

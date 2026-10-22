@@ -1,4 +1,4 @@
-"""Ekip Panosu: OKR (Objectives and Key Results), John Doerr usulü.
+"""OKRs: Objectives and Key Results panosu.
 
 Measure What Matters'ın dört süper gücü panoda karşılık bulur:
 
@@ -36,7 +36,7 @@ CFR_KINDS = ("konusma", "geri_bildirim", "takdir")
 UNITS = ("tl", "adet", "yuzde", "sn", "gun", "sayi")
 MAX_OBJECTIVES = 5
 MIN_KRS, MAX_KRS = 2, 5
-# İddialı hedefte 0,7 başarıdır (Doerr: "aspirational OKR'lar %70'te tatmin eder").
+# İddialı hedefte 0,7 başarıdır.
 BAR = {"taahhut": 1.0, "iddiali": 0.7}
 STALE_DAYS = 7
 QUARTER_LABEL = {0: "Yıllık", 1: "Q1", 2: "Q2", 3: "Q3", 4: "Q4"}
@@ -149,7 +149,7 @@ def kr_progress(start: float, target: float, current: float | None, direction: s
 
 
 def grade_tone(score: float | None) -> str:
-    """Doerr ölçeği: 0,7-1,0 yeşil, 0,4-0,6 sarı, 0,0-0,3 kırmızı."""
+    """Puan ölçeği: 0,7-1,0 yeşil, 0,4-0,6 sarı, 0,0-0,3 kırmızı."""
     if score is None:
         return "neutral"
     if score >= 0.7:
@@ -197,7 +197,7 @@ def pace_tone(statuses: Iterable[str]) -> str:
 
 
 def objective_score(scores: Iterable[float | None]) -> float | None:
-    """Hedef puanı anahtar sonuç puanlarının ortalamasıdır (Google/Doerr)."""
+    """Hedef puanı anahtar sonuç puanlarının ortalamasıdır."""
     known = [s for s in scores if s is not None]
     return round(sum(known) / len(known), 2) if known else None
 
@@ -337,22 +337,22 @@ def annual_rollup(
 
 
 def rule_warnings(objectives: list[dict[str, Any]], names: dict[str, str]) -> list[str]:
-    """Odak kuralları (Doerr): az hedef, hedef başına 2-5 ölçülebilir sonuç."""
+    """Odak kuralları: az hedef, hedef başına 2-5 ölçülebilir sonuç."""
     out: list[str] = []
     per_owner: dict[str, int] = {}
     for obj in objectives:
         per_owner[obj["owner"]] = per_owner.get(obj["owner"], 0) + 1
         n = len(obj.get("krs") or [])
         if n == 0:
-            out.append(f"“{obj['title']}” ölçülmüyor: anahtar sonuç ekle (sayısı yoksa anahtar sonuç değildir).")
+            out.append(f"“{obj['title']}” ölçülmüyor: Key Result ekle (sayısı yoksa Key Result değildir).")
         elif n < MIN_KRS:
-            out.append(f"“{obj['title']}” tek anahtar sonuca dayanıyor; 2-5 arası önerilir.")
+            out.append(f"“{obj['title']}” tek Key Result'a dayanıyor; 2-5 arası önerilir.")
         elif n > MAX_KRS:
-            out.append(f"“{obj['title']}” {n} anahtar sonuç taşıyor; en fazla {MAX_KRS} — odak kaybolur.")
+            out.append(f"“{obj['title']}” {n} Key Result taşıyor; en fazla {MAX_KRS} — odak kaybolur.")
     for owner, n in per_owner.items():
         if n > MAX_OBJECTIVES:
             who = "Ekip" if owner == TEAM else names.get(owner, owner)
-            out.append(f"{who} için {n} hedef var; en fazla {MAX_OBJECTIVES}. Doerr: her şey önemliyse hiçbir şey önemli değildir.")
+            out.append(f"{who} için {n} hedef var; en fazla {MAX_OBJECTIVES}. Her şey önemliyse hiçbir şey önemli değildir.")
     return out
 
 

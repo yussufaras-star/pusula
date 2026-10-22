@@ -38,7 +38,7 @@ const NAV: Record<Area, NavItem[]> = {
   satis: [
     { route: "canli", label: "Canlı" },
     { route: "karsilastir", label: "Karşılaştır" },
-    { route: "pano", label: "Ekip Panosu" },
+    { route: "pano", label: "OKRs" },
     { route: "raporlar", label: "Raporlar" },
     { route: "gorusmeler", label: "Görüşme Analizleri" },
   ],

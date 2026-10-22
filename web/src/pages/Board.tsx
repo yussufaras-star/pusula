@@ -16,7 +16,7 @@ import type {
   OkrUnit,
 } from "../types";
 
-// Ekip Panosu: John Doerr'in "Measure What Matters" usulünde OKR.
+// OKRs: ekip ve kişisel Objective / Key Result panosu.
 // Hesap pusula/okr.py'dedir; burada yalnız gösterim ve formlar var.
 
 const QUARTERS: { q: number; label: string }[] = [
@@ -139,9 +139,9 @@ export function BoardPage({ me }: { me: Me }) {
     <div ref={wrap} className="okr-page">
       <div className="page-head">
         <div>
-          <h1>Ekip Panosu</h1>
+          <h1>OKRs</h1>
           <div className="sub">
-            Hedefler ve anahtar sonuçlar (OKR) — John Doerr, <i>Measure What Matters</i>
+            Objectives &amp; Key Results — ekip ve kişisel hedefler
           </div>
         </div>
         <div className="controls">
@@ -192,12 +192,12 @@ export function BoardPage({ me }: { me: Me }) {
               unit="/ 1,0"
               tone={scoreTone(data.summary.team_score)}
               badge={data.summary.team_score === null ? undefined : data.summary.team_score >= 0.7 ? "başarılı" : "takip"}
-              expected="ekip hedeflerinin ortalaması; 0,7+ başarı"
+              expected="ekip objective'lerinin ortalaması; 0,7+ başarı"
             />
             <StatTile
               label="Yolunda"
               value={`${data.summary.on_track} / ${data.summary.krs}`}
-              expected="anahtar sonuç"
+              expected="key result"
               tone="good"
             />
             <StatTile
@@ -229,7 +229,7 @@ export function BoardPage({ me }: { me: Me }) {
 
           <section className="okr-section">
             <div className="okr-section-head">
-              <h2>{quarter === 0 ? "Ekibin yıllık hedefleri" : "Ekip hedefleri"}</h2>
+              <h2>{quarter === 0 ? "Ekibin yıllık OKR'ları" : "Ekip OKR'ları"}</h2>
               <div className="spacer" />
               {data.template_available ? (
                 <button className="btn" onClick={seed} disabled={busy}>
@@ -238,15 +238,16 @@ export function BoardPage({ me }: { me: Me }) {
               ) : null}
               {isAdmin ? (
                 <button className="btn primary" onClick={() => setEditing({ type: "objective", objective: null, owner: "team" })}>
-                  Hedef ekle
+                  Objective ekle
                 </button>
               ) : null}
             </div>
             {team.length ? (
-              team.map((o) => (
+              team.map((o, i) => (
                 <ObjectiveCard
                   key={o.id}
                   o={o}
+                  code={`O${i + 1}`}
                   canEdit={canEdit(o.owner)}
                   canCheckin={(kr) => canCheckin(o, kr)}
                   onEdit={setEditing}
@@ -264,8 +265,8 @@ export function BoardPage({ me }: { me: Me }) {
           {quarter !== 0 ? (
             <section className="okr-section">
               <div className="okr-section-head">
-                <h2>Kişisel hedefler</h2>
-                <span className="muted">Doerr: hedeflerin bir kısmı aşağıdan yukarı gelir; temsilci kendi OKR'ını yazar.</span>
+                <h2>Kişisel OKR'lar</h2>
+                <span className="muted">Temsilci kendi OKR'ını yazar; ekip OKR'larına bağlanır.</span>
               </div>
               {reps.map((r) => {
                 const own = personal.filter((o) => o.owner === r.rep_id);
@@ -273,21 +274,22 @@ export function BoardPage({ me }: { me: Me }) {
                   <div key={r.rep_id} className="okr-rep">
                     <div className="okr-rep-head">
                       <b>{r.name}</b>
-                      <span className="muted">{own.length ? `${own.length} hedef` : "henüz kişisel hedef yok"}</span>
+                      <span className="muted">{own.length ? `${own.length} objective` : "henüz kişisel OKR yok"}</span>
                       <div className="spacer" />
                       {canEdit(r.rep_id) ? (
                         <button
                           className="btn sm"
                           onClick={() => setEditing({ type: "objective", objective: null, owner: r.rep_id })}
                         >
-                          Kişisel hedef ekle
+                          Objective ekle
                         </button>
                       ) : null}
                     </div>
-                    {own.map((o) => (
+                    {own.map((o, i) => (
                       <ObjectiveCard
                         key={o.id}
                         o={o}
+                        code={`O${i + 1}`}
                         canEdit={canEdit(o.owner)}
                         canCheckin={(kr) => canCheckin(o, kr)}
                         onEdit={setEditing}
@@ -331,11 +333,13 @@ function PeriodStrip({ board }: { board: OkrBoard }) {
 
 function ObjectiveCard({
   o,
+  code,
   canEdit,
   canCheckin,
   onEdit,
 }: {
   o: OkrObjective;
+  code: string;
   canEdit: boolean;
   canCheckin: (kr: OkrKeyResult) => boolean;
   onEdit: (e: Editing) => void;
@@ -350,12 +354,13 @@ function ObjectiveCard({
         </div>
         <div className="okr-obj-main">
           <div className="okr-tags">
+            <span className="okr-label obj">Objective {code}</span>
             <span className={`badge ${o.kind === "taahhut" ? "neutral" : "warning"}`} title={KIND_HINT[o.kind]}>
               {KIND_LABEL[o.kind]}
             </span>
             {o.status !== "aktif" ? <span className="badge neutral">{STATUS_LABEL[o.status]}</span> : null}
             {o.parent_title ? <span className="okr-parent">↑ {o.parent_title}</span> : null}
-            {o.children ? <span className="okr-parent">↓ {o.children} bağlı hedef</span> : null}
+            {o.children ? <span className="okr-parent">↓ {o.children} bağlı objective</span> : null}
           </div>
           <h3>{o.title}</h3>
           {o.description ? <p className="muted">{o.description}</p> : null}
@@ -368,7 +373,7 @@ function ObjectiveCard({
         {canEdit ? (
           <div className="okr-actions">
             <button className="btn sm" onClick={() => onEdit({ type: "kr", objective: o, kr: null })}>
-              + Anahtar sonuç
+              + Key Result
             </button>
             <button className="btn sm" onClick={() => onEdit({ type: "objective", objective: o, owner: o.owner })}>
               Düzenle
@@ -379,12 +384,14 @@ function ObjectiveCard({
           </div>
         ) : null}
       </div>
+      <div className="okr-krs-head">Key Results</div>
       {o.krs.length ? (
         <ul className="okr-krs">
-          {o.krs.map((kr) => (
+          {o.krs.map((kr, i) => (
             <KrRow
               key={kr.id}
               kr={kr}
+              code={`KR ${code.slice(1)}.${i + 1}`}
               canEdit={canEdit}
               canCheckin={canCheckin(kr)}
               onCheckin={() => onEdit({ type: "checkin", objective: o, kr })}
@@ -393,7 +400,7 @@ function ObjectiveCard({
           ))}
         </ul>
       ) : (
-        <div className="empty">Anahtar sonuç yok. Doerr: sayısı yoksa anahtar sonuç değildir.</div>
+        <div className="empty">Key Result yok. Sayısı olmayan şey Key Result değildir.</div>
       )}
     </article>
   );
@@ -401,12 +408,14 @@ function ObjectiveCard({
 
 function KrRow({
   kr,
+  code,
   canEdit,
   canCheckin,
   onCheckin,
   onEdit,
 }: {
   kr: OkrKeyResult;
+  code: string;
   canEdit: boolean;
   canCheckin: boolean;
   onCheckin: () => void;
@@ -421,7 +430,9 @@ function KrRow({
     <li className="okr-kr">
       <div className="okr-kr-top">
         <div className="okr-kr-title">
-          <span>{kr.title}</span>
+          <span>
+            <span className="okr-label kr">{code}</span> {kr.title}
+          </span>
           <span className="okr-src">
             {kr.source === "otomatik"
               ? `otomatik · ${kr.metric_label}`
@@ -527,7 +538,7 @@ function CfrCard({ board, me, onSaved }: { board: OkrBoard; me: Me; onSaved: () 
     <section className="card">
       <div className="card-head">
         <h2>Konuşma, geri bildirim, takdir</h2>
-        <span className="hint">Doerr'in CFR'ı: OKR'ı yıllık değerlendirme değil haftalık sohbet yaşatır.</span>
+        <span className="hint">OKR'ı yıllık değerlendirme değil haftalık sohbet yaşatır.</span>
       </div>
       <div className="card-body">
         <div className="okr-cfr-form">
@@ -601,24 +612,24 @@ function Guide() {
   return (
     <section className="card okr-guide">
       <div className="card-head">
-        <h2>Doerr usulü OKR nasıl çalışır?</h2>
+        <h2>OKR nasıl çalışır?</h2>
       </div>
       <div className="card-body">
         <div className="okr-guide-grid">
           <div>
             <h3>Formül</h3>
             <p>
-              <b>Hedef</b> (ne istiyoruz, nitel ve ilham verici) <b>şununla ölçülür:</b> 2-5 <b>anahtar sonuç</b> (sayısal,
-              tarihli, doğrulanabilir). Sayısı yoksa anahtar sonuç değildir.
+              <b>Objective</b> (ne istiyoruz, nitel ve ilham verici) <b>şununla ölçülür:</b> 2-5 <b>Key Result</b> (sayısal,
+              tarihli, doğrulanabilir). Sayısı yoksa Key Result değildir.
             </p>
           </div>
           <div>
             <h3>1 · Odak</h3>
-            <p>Çeyrek başına en fazla 3-5 hedef. Her şey önemliyse hiçbir şey önemli değildir; pano fazlasında uyarır.</p>
+            <p>Çeyrek başına en fazla 3-5 objective. Her şey önemliyse hiçbir şey önemli değildir; pano fazlasında uyarır.</p>
           </div>
           <div>
             <h3>2 · Hizalama</h3>
-            <p>Çeyrek hedefleri yıllık hedefe, kişisel hedefler ekip hedefine bağlanır (↑). Temsilci kendi OKR'ını kendisi önerir.</p>
+            <p>Çeyrek objective'leri yıllık objective'e, kişisel OKR'lar ekip OKR'larına bağlanır (↑). Temsilci kendi OKR'ını kendisi önerir.</p>
           </div>
           <div>
             <h3>3 · Takip</h3>
@@ -630,7 +641,7 @@ function Guide() {
           <div>
             <h3>4 · Esneme</h3>
             <p>
-              <b>Taahhüt</b> hedefinde 1,0 beklenir. <b>İddialı</b> hedefte 0,7 başarıdır; hep 1,0 alınıyorsa hedef yeterince
+              <b>Taahhüt</b> objective'inde 1,0 beklenir. <b>İddialı</b> objective'te 0,7 başarıdır; hep 1,0 alınıyorsa hedef yeterince
               büyük değildir.
             </p>
           </div>
@@ -756,7 +767,7 @@ function ObjectiveForm({
 
   function save() {
     if (!f.title.trim()) {
-      setErr("Hedef cümlesi gerekli.");
+      setErr("Objective cümlesi gerekli.");
       return;
     }
     const base = objective ? objectiveBody(objective) : { year: board.year, quarter: board.quarter, owner, sort: 0, final_score: null, reflection: null };
@@ -772,13 +783,13 @@ function ObjectiveForm({
   }
 
   function remove() {
-    if (!objective || !window.confirm("Hedef ve anahtar sonuçları silinsin mi?")) return;
+    if (!objective || !window.confirm("Objective ve Key Result'ları silinsin mi?")) return;
     void run(`/api/okr/objectives/${objective.id}`, "DELETE");
   }
 
   return (
-    <Modal title={`${objective ? "Hedefi düzenle" : "Hedef ekle"} · ${ownerName} · ${board.label}`} onClose={onClose} wide>
-      <Field label="Hedef (Objective)" hint="Ne başarmak istiyoruz? Nitel, ilham verici, tek cümle. Sayı anahtar sonuçlara gider.">
+    <Modal title={`${objective ? "Objective düzenle" : "Objective ekle"} · ${ownerName} · ${board.label}`} onClose={onClose} wide>
+      <Field label="Objective" hint="Ne başarmak istiyoruz? Nitel, ilham verici, tek cümle. Sayı Key Result'lara gider.">
         <input className="f-input" value={f.title} maxLength={200} onChange={(e) => setF({ ...f, title: e.target.value })} />
       </Field>
       <Field label="Neden önemli?" hint="Ekibin bu hedefe neden inanması gerektiği.">
@@ -801,7 +812,7 @@ function ObjectiveForm({
           </select>
         </Field>
         {board.quarter !== 0 || owner !== "team" ? (
-          <Field label="Hizalandığı hedef" hint="Bu hedef hangi üst hedefe hizmet ediyor?">
+          <Field label="Hizalandığı objective" hint="Bu objective hangi üst objective'e hizmet ediyor?">
             <select className="f-input" value={f.parent_id} onChange={(e) => setF({ ...f, parent_id: e.target.value })}>
               <option value="">Bağımsız</option>
               {parents.map((p) => (
@@ -866,14 +877,14 @@ function KrForm({
   }
 
   function remove() {
-    if (!kr || !window.confirm("Anahtar sonuç ve check-in geçmişi silinsin mi?")) return;
+    if (!kr || !window.confirm("Key Result ve check-in geçmişi silinsin mi?")) return;
     void run(`/api/okr/key-results/${kr.id}`, "DELETE");
   }
 
   return (
-    <Modal title={kr ? "Anahtar sonucu düzenle" : "Anahtar sonuç ekle"} onClose={onClose} wide>
-      <p className="muted okr-form-note">“{objective.title}” hedefi şununla ölçülür:</p>
-      <Field label="Anahtar sonuç (Key Result)" hint="Sayısal ve doğrulanabilir: ‘Çeyrek cirosu 10 M TL’, ‘Katılım %36'dan %55'e’.">
+    <Modal title={kr ? "Key Result düzenle" : "Key Result ekle"} onClose={onClose} wide>
+      <p className="muted okr-form-note">“{objective.title}” objective'i şununla ölçülür:</p>
+      <Field label="Key Result" hint="Sayısal ve doğrulanabilir: ‘Çeyrek cirosu 10 M TL’, ‘Katılım %36'dan %55'e’.">
         <input className="f-input" value={f.title} maxLength={200} onChange={(e) => setF({ ...f, title: e.target.value })} />
       </Field>
       <div className="f-grid">
@@ -962,7 +973,7 @@ function CheckinForm({ kr, onClose, onSaved }: { kr: OkrKeyResult; onClose: () =
           <input className="f-input num" type="number" value={value} onChange={(e) => setValue(e.target.value)} autoFocus />
         </Field>
       ) : null}
-      <Field label={`Güven: ${confidence}/10`} hint="Dönem sonunda bu sonuca ulaşacağımıza ne kadar inanıyorsun? 5 = yazı tura.">
+      <Field label={`Güven: ${confidence}/10`} hint="Dönem sonunda bu Key Result'a ulaşacağımıza ne kadar inanıyorsun? 5 = yazı tura.">
         <input type="range" min={1} max={10} value={confidence} onChange={(e) => setConfidence(Number(e.target.value))} />
       </Field>
       <Field label="Not" hint="Bu hafta ne oldu, önümüzdeki hafta ne yapacağız, nerede yardım lazım?">
@@ -1011,7 +1022,7 @@ function CloseForm({ objective, onClose, onSaved }: { objective: OkrObjective; o
       </Field>
       <label className="check">
         <input type="checkbox" checked={close} onChange={(e) => setClose(e.target.checked)} />
-        Hedefi kapat
+        Objective'i kapat
       </label>
       {err ? <div className="banner error">{err}</div> : null}
       <Actions busy={busy} onClose={onClose} onSave={save} />

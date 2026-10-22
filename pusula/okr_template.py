@@ -7,7 +7,7 @@ katılım %36,3, toplantıya dönüş %15,6, satış oranı %4,4, doluluk %38,5,
 ort. görüşme 236 sn, döngü 8,6 gün. Ekim'in ilk 15 iş günü 1,95 M TL
 (çeyreklik koşu ~10 M). Taslaktır: yönetici panelden değiştirir.
 
-Doerr kuralları: hedef nitel ve ilham verici, anahtar sonuç sayısal;
+OKR kuralları: hedef nitel ve ilham verici, anahtar sonuç sayısal;
 ciro gibi "olmazsa olmaz"lar taahhüt, dönüşüm sıçramaları iddialı.
 """
 
