@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 
 import { api, ApiError, usePolling } from "../api";
+import { ShareButton } from "../components/ShareButton";
 import { StatTile, ToneBadge } from "../components/StatTile";
 import { Modal } from "../finance/ui";
 import { ago, duration, int, minutes, num, pct, type Tone } from "../format";
@@ -237,10 +238,18 @@ export function ConversationsPage({ me }: { me: Me }) {
           {isAdmin && !repFilter && data.team?.narrative ? <TeamCard n={data.team.narrative} /> : null}
 
           {data.reps.length ? (
-            <section className="card">
+            <section className="card" data-share="gorusme-temsilciler">
               <div className="card-head">
                 <h2>{isAdmin ? "Temsilciler" : "Haftam"}</h2>
-                <span className="hint">SONAR-41 boyutları, 1-5 · satıra tıkla: haftanın odak maddesi</span>
+                <span className="hint">
+                  SONAR-41 boyutları, 1-5<span data-share-skip> · satıra tıkla: haftanın odak maddesi</span>
+                </span>
+                {isAdmin && !repFilter ? (
+                  <ShareButton
+                    kart="gorusme-temsilciler"
+                    baslik={`Görüşme Analizleri · ${dayFmt.format(new Date(`${data.week_start}T00:00:00Z`))} – ${dayFmt.format(new Date(`${data.week_end}T00:00:00Z`))}`}
+                  />
+                ) : null}
               </div>
               <div className="card-body">
                 <div className="table-wrap">
@@ -258,7 +267,7 @@ export function ConversationsPage({ me }: { me: Me }) {
                         <th className="num">Sonraki adım</th>
                         <th className="num" title="Not yazılan görüşme oranı">CRM notu</th>
                         <th>Odak</th>
-                        {isAdmin ? <th>Cliq</th> : null}
+                        {isAdmin ? <th data-share-skip>Cliq</th> : null}
                       </tr>
                     </thead>
                     <tbody>
@@ -275,7 +284,7 @@ export function ConversationsPage({ me }: { me: Me }) {
                               >
                                 <td>
                                   <div className="name">
-                                    <span className="caret" aria-hidden>
+                                    <span className="caret" aria-hidden data-share-skip>
                                       {isOpen ? "▾" : "▸"}
                                     </span>{" "}
                                     {r.name}
@@ -301,7 +310,7 @@ export function ConversationsPage({ me }: { me: Me }) {
                                   )}
                                 </td>
                                 {isAdmin ? (
-                                  <td className="cv-share-cell" onClick={(e) => e.stopPropagation()}>
+                                  <td className="cv-share-cell" data-share-skip onClick={(e) => e.stopPropagation()}>
                                     {r.narrative ? (
                                       <ShareToCliq
                                         week={data.week_start}
@@ -318,7 +327,7 @@ export function ConversationsPage({ me }: { me: Me }) {
                                 ) : null}
                               </tr>
                               {isOpen && r.narrative ? (
-                                <tr className="cv-detail-row">
+                                <tr className="cv-detail-row" data-share-skip>
                                   <td colSpan={scoreKeys.length + (isAdmin ? 7 : 6)}>
                                     <RepNarrative n={r.narrative} />
                                     {isAdmin ? (
