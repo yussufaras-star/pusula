@@ -68,10 +68,21 @@ def _message_url() -> str:
     return _webhook_url().replace("/incoming?", "/message?")
 
 
-def post_cliq(text: str, userids: str) -> list[str]:
-    """Kişiye bot mesajı. Cliq'in ulaştırdığı kullanıcı numaralarını döner;
+def post_cliq(
+    text: str,
+    userids: str,
+    *,
+    card: dict[str, Any] | None = None,
+    slides: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """Kişiye bot mesajı (userids virgülle birden çok olabilir). card/slides verilirse
+    Cliq kartı olarak gider. Cliq'in ulaştırdığı kullanıcı numaralarını döner;
     alıcıların hiçbirine ulaşmadıysa hata fırlatır."""
-    payload = {"text": text, "userids": userids, "broadcast": False}
+    payload: dict[str, Any] = {"text": text, "userids": userids, "broadcast": False}
+    if card:
+        payload["card"] = card
+    if slides:
+        payload["slides"] = slides
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         _message_url(),

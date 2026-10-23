@@ -45,3 +45,21 @@ def test_render_has_result_month_funnel_and_team() -> None:
     assert "57 / 67 yeni müşteri (%85)" in text and "3,17 M TL / 3,15 M TL" in text
     assert "arama: 212 (↑ ort. 157)" in text and "toplantı planlanan: 8 (↓ ort. 12)" in text
     assert "*Ekip:* normal" in text
+
+
+def test_cliq_card_sections() -> None:
+    s = {
+        "today": date(2026, 10, 23), "day": date(2026, 10, 22),
+        "son": {"satis": 3, "ciro": 176_000},
+        "ay": {"ad": "Ekim", "satis": 57, "ciro": 3_170_000, "hedef": {"satis": 67, "ciro": 3_148_330},
+               "tempo_satis": 81.0, "tempo_ciro": 4_500_000, "is_gunu": 19, "toplam_is_gunu": 27},
+        "huni": {"gelen_lead": 62, "arama": 212, "ulasilan": None, "randevu": 8, "katildi": 7, "satis": 3},
+        "huni_kiyas": {"gelen_lead": 67, "arama": 157, "ulasilan": 82, "randevu": 12, "katildi": 5, "satis": 2},
+        "bugun_toplanti": 10, "istisnalar": ["Ayşe Kar izinli"], "kalite": None,
+    }
+    note, card, slides = cs.cliq_card(s)
+    assert note == "3 yeni müşteri · 176 B TL" and card["title"] == "Satış özeti · 22 Ekim Perşembe"
+    funnel = next(x for x in slides if x["type"] == "table")
+    assert len(funnel["data"]["rows"]) == 5  # ölçülmeyen adım yok
+    assert funnel["data"]["rows"][1] == {"Adım": "Arama", "Gün": "212", "4 hafta ort.": "157 ↑"}
+    assert {"Ekip": "Ayşe Kar izinli"} in slides[3]["data"]
