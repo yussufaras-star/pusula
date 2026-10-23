@@ -270,6 +270,16 @@ export function ConversationsPage({ me }: { me: Me }) {
               title="Görüşmeden sonraki 3 saat içinde temsilcinin lead'e yazdığı not (SONAR-41 B39, C1-C6)"
               tone={(stats?.crm?.oran ?? 100) < 50 ? "warning" : "neutral"}
             />
+            {stats?.musaitlik?.temsilci_sordu ? (
+              <StatTile
+                label="“Müsait misiniz?”"
+                value={int(stats.musaitlik.temsilci_sordu)}
+                unit="görüşmede"
+                expected={`analiz edilen ${int(stats.analiz)} görüşmeden`}
+                title="Temsilcinin 'müsait misiniz / uygun musunuz' diye sorup müşteriye çıkış kapısı açtığı görüşmeler (B01 hatası)"
+                tone="warning"
+              />
+            ) : null}
             {stats?.musaitlik?.adet ? (
               <StatTile
                 label="Müsait değil anı"
@@ -1255,6 +1265,9 @@ function ItemDetail({
                 {a.sonraki_adim.var ? a.sonraki_adim.aciklama : <span className="warn-text">net adım yok</span>}
                 {a.sonraki_adim.var && !a.sonraki_adim.tarih_net ? <span className="muted"> (tarih konuşulmadı)</span> : null}
               </p>
+              {a.musaitlik?.temsilci_sordu ? (
+                <p className="warn-text">Temsilci “müsait misiniz” diye sordu (B01).</p>
+              ) : null}
               {a.musaitlik?.musait_degil ? (
                 <div className="cv-hold">
                   <strong>Müsait değil anı:</strong> {HOLD_LABEL[a.musaitlik.tutma] ?? a.musaitlik.tutma}

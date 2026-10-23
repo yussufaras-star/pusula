@@ -249,7 +249,7 @@ def test_normalize_musaitlik() -> None:
     assert out["musaitlik"]["tutma"] == "uygulanmaz"
     s = cv.aggregate([{"kind": "call", "duration_sec": 50, "analysis": {
         "analiz_edilebilir": True, "musaitlik": {"musait_degil": True, "tutma": "birakti", "geri_arama_net": False}}}])
-    assert s["musaitlik"] == {"adet": 1, "tuttu": 0, "kismen": 0, "birakti": 1, "net_geri_arama": 0}
+    assert s["musaitlik"] == {"adet": 1, "tuttu": 0, "kismen": 0, "birakti": 1, "net_geri_arama": 0, "temsilci_sordu": 0}
 
 
 def test_aggregate_empty_week() -> None:
