@@ -735,7 +735,7 @@ export interface ConvItemSummary {
 }
 
 export interface ConvSonarRef {
-  behaviors: Record<string, { dim: string; name: string }>;
+  behaviors: Record<string, { dim: string; name: string; def?: string }>;
   crm: Record<string, string>;
 }
 
@@ -750,10 +750,25 @@ export interface ConvWeek {
     stats: ConvStats;
     narrative: ConvRepNarrative | null;
     sent_at: string | null;
+    dagilim: ConvSpread;
   }[];
   items: ConvItemSummary[];
+  dagilim: ConvSpread;
+  bugs: ConvBug[];
   score_labels: Record<ConvScoreKey, string>;
   sonar: ConvSonarRef;
+}
+
+/** Boyut başına davranış puanlarının 1-5 dağılımı (dizi sırası puan 1..5). */
+export type ConvSpread = Record<ConvScoreKey, number[]>;
+
+export interface ConvBug {
+  kod: string;
+  puan: number;
+  alinti: string;
+  dogrusu: string;
+  rep_id: string | null;
+  item_id: number;
 }
 
 export interface ConvWeeks {
@@ -775,7 +790,7 @@ export interface ConvAnalysis {
   temsilci_konusmaci: string;
   musteri: { ihtiyaclar: string[]; ilgi: number; duygu: "olumlu" | "notr" | "olumsuz" };
   itirazlar: { tip: string; alinti: string; karsilandi: "evet" | "kismen" | "hayir" }[];
-  sonar?: { kod: string; puan: number; alinti: string }[];
+  sonar?: { kod: string; puan: number; alinti: string; dogrusu?: string }[];
   crm?: { not_var: boolean; puanlar: Record<string, number>; yorum: string };
   guclu: ConvQuoted[];
   gelisim: ConvQuoted[];
