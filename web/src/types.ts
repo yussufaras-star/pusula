@@ -755,12 +755,29 @@ export interface ConvWeek {
   items: ConvItemSummary[];
   dagilim: ConvSpread;
   bugs: ConvBug[];
+  ornekler?: ConvExample[];
   score_labels: Record<ConvScoreKey, string>;
   sonar: ConvSonarRef;
 }
 
 /** Boyut başına davranış puanlarının 1-5 dağılımı (dizi sırası puan 1..5). */
 export type ConvSpread = Record<ConvScoreKey, number[]>;
+
+export interface ConvExample {
+  item_id: number;
+  rep_id: string | null;
+  rep_name: string | null;
+  kind: "call" | "meeting";
+  occurred_at: string;
+  duration_sec: number | null;
+  crm_outcome: string | null;
+  tur: string | null;
+  ozet: string;
+  puan: number;
+  puanlar: Partial<Record<ConvScoreKey, number>>;
+  sonraki_adim: string;
+  anlar: { kod: string; puan: number; alinti: string }[];
+}
 
 export interface ConvBug {
   kod: string;
