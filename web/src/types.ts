@@ -690,7 +690,14 @@ export interface ConvStats {
   davranislar: Record<string, { ort: number | null; adet: number; zayif: number }>;
   crm: { notlu: number; oran: number | null; puanlar: Record<string, number | null> };
   ilgi_ort: number | null;
-  musaitlik?: { adet: number; tuttu: number; kismen: number; birakti: number; net_geri_arama: number };
+  musaitlik?: {
+    adet: number;
+    tuttu: number;
+    kismen: number;
+    birakti: number;
+    net_geri_arama: number;
+    temsilci_sordu?: number;
+  };
   sonraki_adim_orani: number | null;
   tarihli_adim_orani: number | null;
   itirazlar: Record<string, ConvObjectionStat>;
@@ -827,7 +834,7 @@ export interface ConvAnalysis {
   guclu: ConvQuoted[];
   gelisim: ConvQuoted[];
   sonraki_adim: { var: boolean; tarih_net: boolean; aciklama: string };
-  musaitlik?: { musait_degil: boolean; tutma: "tuttu" | "kismen" | "birakti" | "uygulanmaz"; geri_arama_net: boolean; alinti: string };
+  musaitlik?: { temsilci_sordu?: boolean; musait_degil: boolean; tutma: "tuttu" | "kismen" | "birakti" | "uygulanmaz"; geri_arama_net: boolean; alinti: string };
   riskler: { tip: string; aciklama: string; alinti: string }[];
   sozler: string[];
 }

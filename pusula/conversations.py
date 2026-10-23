@@ -729,12 +729,13 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
         "musaitlik": {
             "type": "object",
             "properties": {
+                "temsilci_sordu": {"type": "boolean"},
                 "musait_degil": {"type": "boolean"},
                 "tutma": {"type": "string", "enum": list(HOLD_VALUES)},
                 "geri_arama_net": {"type": "boolean"},
                 "alinti": _QUOTE,
             },
-            "required": ["musait_degil", "tutma", "geri_arama_net", "alinti"],
+            "required": ["temsilci_sordu", "musait_degil", "tutma", "geri_arama_net", "alinti"],
             "additionalProperties": False,
         },
     },
@@ -785,13 +786,17 @@ Diğer kurallar:
 - temsilci_konusmaci: transkriptteki temsilci etiketi (ör. "Konuşmacı 1"); ayrım yoksa "belirsiz".
 - sonraki_adim.var: görüşme net bir sonraki adımla bitti mi; tarih_net: gün/saat konuşuldu mu.
 - sozler: temsilcinin müşteriye verdiği somut sözler.
+- musaitlik.temsilci_sordu: temsilci "müsait misiniz / uygun musunuz / vaktiniz var mı" gibi
+  bir soruyla müşteriye çıkış kapısı açtı mı. Açtıysa bu bir hatadır: B01'i en fazla 2 puanla,
+  alıntı o soru olsun; DEBUG (dogrusu) aynı anda müşteriyi konuşturacak bir açılış sorusu olsun.
 - musaitlik: müşteri o an müsait olmadığını söyledi mi (musait_degil). Söylediyse "tutma":
   tuttu = tek bir değer cümlesi ya da kısa bir soruyla ilgiyi canlı tuttu; müşteri bir süre
   konuştu ya da somut bir geri arama zamanına kendisi onay verdi. kismen = ilgi uyandırmaya
   çalıştı ama yarım kaldı. birakti = yalnız "ne zaman müsaitsiniz / sonra arayayım" deyip
   kapattı. Müşteri müsaitse "uygulanmaz". geri_arama_net: gün ve saat netleşti mi. alinti:
-  müşterinin müsait olmadığını söylediği an ya da temsilcinin tepkisi. Kısa görüşmede
-  (2 dk altı) B01 ve B34'ü bu ana göre puanla, fırsatı doğmayan davranışları puanlama.
+  müşterinin müsait olmadığını söylediği an ya da temsilcinin tepkisi. Müşteri müsait değilken
+  sorup bıraktıysa B01'i, geri arama zamanı netleşmediyse B34'ü 2 ve altı puanla. Kısa görüşmede
+  (2 dk altı) fırsatı doğmayan davranışları puanlama.
 - riskler: kanıtsız kazanç/başarı iddiası, garanti, kesin vergi/hukuk yanıtı, baskıcı satış,
   verilemeyecek söz, kaba üslup. Doğruluğunu bilemediğin şirket bilgilerini (fiyat, paket içeriği)
   risk sayma.
@@ -829,6 +834,7 @@ def normalize_analysis(raw: dict[str, Any]) -> dict[str, Any]:
     crm["yorum"] = str(crm.get("yorum") or "")
     out["crm"] = crm
     hold = dict(raw.get("musaitlik") or {})
+    hold["temsilci_sordu"] = bool(hold.get("temsilci_sordu"))
     hold["musait_degil"] = bool(hold.get("musait_degil"))
     if hold.get("tutma") not in HOLD_VALUES or not hold["musait_degil"]:
         hold["tutma"] = "uygulanmaz"
@@ -1140,6 +1146,7 @@ def aggregate(items: list[dict[str, Any]]) -> dict[str, Any]:
     for item in usable:
         a = item["analysis"]
         m = a.get("musaitlik") or {}
+        hold["temsilci_sordu"] += 1 if m.get("temsilci_sordu") else 0
         if m.get("musait_degil"):
             hold["adet"] += 1
             hold[m.get("tutma") or "uygulanmaz"] += 1
@@ -1197,7 +1204,9 @@ def aggregate(items: list[dict[str, Any]]) -> dict[str, Any]:
             "puanlar": {k: _avg(v) for k, v in crm_scores.items()},
         },
         "ilgi_ort": _avg(interest),
-        "musaitlik": {k: hold.get(k, 0) for k in ("adet", "tuttu", "kismen", "birakti", "net_geri_arama")},
+        "musaitlik": {
+            k: hold.get(k, 0) for k in ("adet", "tuttu", "kismen", "birakti", "net_geri_arama", "temsilci_sordu")
+        },
         "sonraki_adim_orani": round(100.0 * next_step / n, 1) if n else None,
         "tarihli_adim_orani": round(100.0 * dated / n, 1) if n else None,
         "itirazlar": {

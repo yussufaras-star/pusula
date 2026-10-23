@@ -19,7 +19,7 @@ BEHAVIORS: dict[str, dict[str, str]] = {
     "B01": {
         "dim": "K1",
         "name": "Açılışta kendini ve amacı tanıtma",
-        "def": "İlk cümlelerde adını, Rexven'i ve görüşmenin amacını müşterinin kendi talebine bağlayarak net söyler; telefonda müsaitlik sormak yerine müşteriyi konuşturan bir soruyla devam eder."
+        "def": "İlk cümlelerde adını, Rexven'i ve görüşmenin amacını müşterinin kendi talebine bağlayarak net söyler; \"müsait misiniz / uygun musunuz\" diye sormaz, müşteriyi konuşturan bir soruyla devam eder. Müşteri kendiliğinden müsait olmadığını söylerse tek bir değer cümlesi ya da kısa bir soruyla ilgisini canlı tutar ve geri arama zamanını birlikte belirler (B34)."
     },
     "B02": {
         "dim": "K1",
