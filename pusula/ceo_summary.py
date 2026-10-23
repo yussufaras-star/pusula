@@ -37,7 +37,6 @@ FUNNEL_LABEL = {
     "katildi": "toplantıya gelen",
     "satis": "yeni müşteri",
 }
-PANEL_URL = "https://rexven-pusula.netlify.app/#/ceo"
 
 _MONTHS = ("Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim",
            "Kasım", "Aralık")
@@ -218,7 +217,8 @@ def render(s: dict[str, Any]) -> str:
         lines.append(f"{ay['ad']} Re-Co: {_n(ay['reco'])} satış · {tl(ay['reco_ciro'])}")
     if ay["tempo_satis"] is not None:
         lines.append(
-            f"Bu tempoyla ay sonu: ~{_n(ay['tempo_satis'])} yeni müşteri · ~{tl(ay['tempo_ciro'])} "
+            # Cliq'te ~metin~ üstü çizili yazılır; "yaklaşık" kullanılır.
+            f"Bu tempoyla ay sonu yaklaşık {_n(ay['tempo_satis'])} yeni müşteri · {tl(ay['tempo_ciro'])} "
             f"({ay['is_gunu']}/{ay['toplam_is_gunu']} iş günü)"
         )
     lines += ["", f"*Huni ({_DAYS[day.weekday()].lower()}, son {COMPARE_WEEKS} haftanın aynı günüyle):*"]
@@ -239,7 +239,6 @@ def render(s: dict[str, Any]) -> str:
         if k.get("ornek"):
             parts.append(f"en iyi görüşme {k['ornek']['temsilci']}")
         lines += ["", "*Geçen hafta görüşme kalitesi:* " + " · ".join(parts)]
-    lines += ["", f"Ayrıntı: {PANEL_URL}"]
     return "\n".join(lines)
 
 
@@ -259,7 +258,7 @@ def cliq_card(s: dict[str, Any]) -> tuple[str, dict[str, Any], list[dict[str, An
              {"Ciro": f"{tl(ay['ciro'])}" + (f" / {tl(hedef['ciro'])} (%{ay['ciro'] / hedef['ciro'] * 100:.0f})" if hedef else "")}]
     month.append({"Re-Co": f"{_n(ay.get('reco'))} satış · {tl(ay.get('reco_ciro'))}"})
     if ay["tempo_satis"] is not None:
-        month.append({"Tempoyla ay sonu": f"~{_n(ay['tempo_satis'])} müşteri · ~{tl(ay['tempo_ciro'])}"})
+        month.append({"Tempoyla ay sonu": f"yaklaşık {_n(ay['tempo_satis'])} müşteri · {tl(ay['tempo_ciro'])}"})
     rows = []
     for key in FUNNEL_KEYS:
         value = s["huni"].get(key)
@@ -287,7 +286,6 @@ def cliq_card(s: dict[str, Any]) -> tuple[str, dict[str, Any], list[dict[str, An
         if k.get("ornek"):
             data.append({"En iyi görüşme": k["ornek"]["temsilci"]})
         slides.append({"type": "label", "title": "Geçen hafta görüşme kalitesi", "data": data})
-    slides.append({"type": "text", "data": f"[Ayrıntı panelde]({PANEL_URL})"})
     note = f"{_n(s['son']['satis'])} yeni müşteri · {tl(s['son']['ciro'])}"
     return note, {"title": title, "theme": "modern-inline"}, slides
 
