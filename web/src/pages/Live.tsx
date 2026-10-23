@@ -241,6 +241,29 @@ function LiveBody({
         />
       </div>
 
+      {me.role === "admin" ? (
+        <section className="card" data-share="temsilciler">
+          <div className="card-head">
+            <h2>Temsilciler</h2>
+            <span className="hint">en acil durum üstte · altında mesai şeridi (en uzun boşluklardan 1 sa 15 dk mola düşülür)</span>
+            <ShareButton kart="temsilciler" baslik="Temsilciler" />
+          </div>
+          <div className="card-body">
+            <RepBoard
+              reps={data.reps}
+              nowHour={nowHour}
+              warnIdle={data.idle_thresholds.warn}
+              crmTracking={data.crm_tracking}
+              now={new Date(data.now)}
+              onLeave={markLeave}
+              onExcuse={excuse}
+              meetings={data.meetings?.by_rep}
+              strip={{ day: data.day, now: data.is_today ? data.now : null }}
+            />
+          </div>
+        </section>
+      ) : null}
+
       <CommissionCard isAdmin={me.role === "admin"} syncTick={syncTick} day={data.is_today ? null : data.day} />
 
       <div className="grid-2">
@@ -290,29 +313,6 @@ function LiveBody({
           </div>
           <div className="card-body">
             <LostTime reps={data.reps} day={data.day} now={data.is_today ? data.now : null} />
-          </div>
-        </section>
-      ) : null}
-
-      {me.role === "admin" ? (
-        <section className="card" data-share="temsilciler">
-          <div className="card-head">
-            <h2>Temsilciler</h2>
-            <span className="hint">en acil durum üstte · altında mesai şeridi (en uzun boşluklardan 1 sa 15 dk mola düşülür)</span>
-            <ShareButton kart="temsilciler" baslik="Temsilciler" />
-          </div>
-          <div className="card-body">
-            <RepBoard
-              reps={data.reps}
-              nowHour={nowHour}
-              warnIdle={data.idle_thresholds.warn}
-              crmTracking={data.crm_tracking}
-              now={new Date(data.now)}
-              onLeave={markLeave}
-              onExcuse={excuse}
-              meetings={data.meetings?.by_rep}
-              strip={{ day: data.day, now: data.is_today ? data.now : null }}
-            />
           </div>
         </section>
       ) : null}
