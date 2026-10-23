@@ -51,6 +51,8 @@ TEAM = "team"
 # Puan başlıkları SONAR-41 boyutlarıdır (K1-K5).
 SCORE_KEYS = sonar41.DIM_KEYS
 SCORE_LABELS = dict(sonar41.DIMS)
+# Bu puan ve altı "bug"tır.
+BUG_MAX = 2
 # Görüşmeden sonra bu süre içinde aynı temsilcinin lead'e yazdığı not o görüşmenindir.
 NOTE_WINDOW = timedelta(hours=3)
 # Önceki notlar için geriye bakış.
@@ -495,8 +497,16 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"kod": _CODE, "puan": {"type": "integer"}, "alinti": _QUOTE},
-                "required": ["kod", "puan", "alinti"],
+                "properties": {
+                    "kod": _CODE,
+                    "puan": {"type": "integer"},
+                    "alinti": _QUOTE,
+                    "dogrusu": {
+                        "type": "string",
+                        "description": "Puan 2 ve altıysa temsilcinin o anda söylemesi gereken tek cümle; değilse boş",
+                    },
+                },
+                "required": ["kod", "puan", "alinti", "dogrusu"],
                 "additionalProperties": False,
             },
         },
@@ -566,6 +576,8 @@ Puanlama ("sonar"):
 - Her puana transkriptten birebir en fazla 15 kelimelik alıntı ekle. Davranış yapılmadıysa
   fırsatın doğduğu cümleyi (çoğunlukla müşterinin) alıntıla.
 - B35 için önceki notları kullan: takip, önceki görüşmeden somut bir referansla mı başladı.
+- Puan 2 ve altıysa "dogrusu"na temsilcinin o anda müşteriye söylemesi gereken tek, doğal bir
+  cümle yaz (bu görüşmenin bağlamına göre, Rexven diliyle). Puan 3 ve üstündeyse boş bırak.
 - B39 CRM notudur: not yoksa (ve görüşme analiz edilebilirse) B39 = 1, alıntı olarak görüşmenin
   son cümlesini ver. Not varsa notun içeriğine göre puanla; alıntı transkriptten.
 
@@ -606,7 +618,12 @@ def normalize_analysis(raw: dict[str, Any]) -> dict[str, Any]:
         code = row.get("kod")
         score = _clamp(row.get("puan"), 0, 5)
         if code in sonar41.BEHAVIORS and code not in seen and score > 0:
-            seen[code] = {"kod": code, "puan": score, "alinti": str(row.get("alinti") or "")}
+            seen[code] = {
+                "kod": code,
+                "puan": score,
+                "alinti": str(row.get("alinti") or ""),
+                "dogrusu": str(row.get("dogrusu") or "") if score <= BUG_MAX else "",
+            }
     out["sonar"] = [seen[c] for c in sonar41.CODES if c in seen]
     crm = dict(raw.get("crm") or {})
     has_note = bool(crm.get("not_var"))
@@ -631,6 +648,42 @@ def dim_scores(analysis: dict[str, Any]) -> dict[str, float]:
         if b and (row.get("puan") or 0) > 0:
             rows[b["dim"]].append(float(row["puan"]))
     return {k: round(sum(v) / len(v), 2) for k, v in rows.items()}
+
+
+def score_spread(items: list[dict[str, Any]]) -> dict[str, list[int]]:
+    """Boyut başına davranış puanlarının 1-5 dağılımı: ortalama 3 tutarlı mı, dağınık mı."""
+    out = {k: [0, 0, 0, 0, 0] for k in SCORE_KEYS}
+    for item in items:
+        a = item.get("analysis") or {}
+        if not a.get("analiz_edilebilir"):
+            continue
+        for row in a.get("sonar") or []:
+            b = sonar41.BEHAVIORS.get(row.get("kod") or "")
+            score = row.get("puan") or 0
+            if b and 1 <= score <= 5 and b["dim"] in out:
+                out[b["dim"]][score - 1] += 1
+    return out
+
+
+def bug_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Haftanın bug'ları (puan 2 ve altı): ihlal anı alıntısı ve doğrusu cümlesiyle."""
+    out: list[dict[str, Any]] = []
+    for item in items:
+        a = item.get("analysis") or {}
+        if not a.get("analiz_edilebilir"):
+            continue
+        for row in a.get("sonar") or []:
+            score = row.get("puan") or 0
+            if row.get("kod") in sonar41.BEHAVIORS and 1 <= score <= BUG_MAX:
+                out.append({
+                    "kod": row["kod"],
+                    "puan": score,
+                    "alinti": row.get("alinti") or "",
+                    "dogrusu": row.get("dogrusu") or "",
+                    "rep_id": item.get("rep_id"),
+                    "item_id": item.get("id"),
+                })
+    return out
 
 
 def _clean_note(html: str | None) -> str:
@@ -1114,11 +1167,17 @@ def load_week(week_start: date, rep_id: str | None) -> dict[str, Any]:
             (get_org_id(), week_start),
         ).fetchall()
     status = Counter(r["status"] for r in rows)
+    analysed = [r for r in rows if r["status"] == "analiz_edildi"]
+    by_rep: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in analysed:
+        if r.get("rep_id"):
+            by_rep[str(r["rep_id"])].append(r)
     team = next(
         ({"stats": s, "narrative": n, "created_at": c} for sc, _, s, n, c, _ in weekly if sc == TEAM), None
     )
     reps = [
-        {"rep_id": sc, "name": name or sc, "stats": s, "narrative": n, "sent_at": sent}
+        {"rep_id": sc, "name": name or sc, "stats": s, "narrative": n, "sent_at": sent,
+         "dagilim": score_spread(by_rep.get(sc, []))}
         for sc, name, s, n, _, sent in weekly
         if sc != TEAM and (rep_id is None or sc == rep_id)
     ]
@@ -1133,9 +1192,13 @@ def load_week(week_start: date, rep_id: str | None) -> dict[str, Any]:
         "team": team,
         "reps": reps,
         "items": [_item_summary(r) for r in rows],
+        "dagilim": score_spread(analysed),
+        "bugs": bug_rows(analysed),
         "score_labels": SCORE_LABELS,
         "sonar": {
-            "behaviors": {k: {"dim": b["dim"], "name": b["name"]} for k, b in sonar41.BEHAVIORS.items()},
+            "behaviors": {
+                k: {"dim": b["dim"], "name": b["name"], "def": b["def"]} for k, b in sonar41.BEHAVIORS.items()
+            },
             "crm": {k: c["name"] for k, c in sonar41.CRM_CRITERIA.items()},
         },
     }

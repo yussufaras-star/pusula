@@ -79,13 +79,16 @@ def test_normalize_clamps_sonar_drops_unknown_and_zero_crm_without_note() -> Non
             {"kod": "B29", "puan": 1, "alinti": "tekrar"},  # ilk kayıt geçerli
             {"kod": "B99", "puan": 3, "alinti": "yok"},
             {"kod": "B01", "puan": 0, "alinti": "uygulanmaz"},
-            {"kod": "B03", "puan": 2, "alinti": "c"},
+            {"kod": "B03", "puan": 2, "alinti": "c", "dogrusu": "Formu neden doldurdunuz?"},
         ],
         "crm": {"not_var": False, "puanlar": {"C1": 4}},
         "musteri": {"ilgi": "4"},
         "tur": "x",
     })
-    assert out["sonar"] == [{"kod": "B03", "puan": 2, "alinti": "c"}, {"kod": "B29", "puan": 5, "alinti": "a"}]
+    assert out["sonar"] == [
+        {"kod": "B03", "puan": 2, "alinti": "c", "dogrusu": "Formu neden doldurdunuz?"},
+        {"kod": "B29", "puan": 5, "alinti": "a", "dogrusu": ""},
+    ]
     assert out["crm"]["puanlar"] == {k: 0 for k in sonar41.CRM_KEYS}
     assert out["musteri"]["ilgi"] == 4 and out["tur"] == "diger"
 
@@ -170,6 +173,21 @@ def test_aggregate_dimensions_behaviors_crm_and_objections() -> None:
     assert list(s["itirazlar"]) == ["fiyat", "zaman"]
     assert s["riskler"] == {"baski": 1}
     assert [w["kod"] for w in cv.weakest(s)] == ["B29", "B01"]  # tek gözlemli B05/B20 sayılmaz
+
+
+def test_score_spread_and_bug_rows() -> None:
+    items = [
+        {"id": 1, "rep_id": "r1", "analysis": {"analiz_edilebilir": True, "sonar": [
+            {"kod": "B01", "puan": 5, "alinti": "a"},
+            {"kod": "B03", "puan": 1, "alinti": "b", "dogrusu": "c"},
+            {"kod": "B29", "puan": 2, "alinti": "d"},
+        ]}},
+        {"id": 2, "rep_id": "r2", "analysis": {"analiz_edilebilir": False, "sonar": [{"kod": "B01", "puan": 1}]}},
+    ]
+    spread = cv.score_spread(items)
+    assert spread["K1"] == [1, 0, 0, 0, 1] and spread["K4"] == [0, 1, 0, 0, 0] and spread["K2"] == [0] * 5
+    bugs = cv.bug_rows(items)
+    assert [(b["kod"], b["puan"], b["dogrusu"], b["item_id"]) for b in bugs] == [("B03", 1, "c", 1), ("B29", 2, "", 1)]
 
 
 def test_aggregate_empty_week() -> None:

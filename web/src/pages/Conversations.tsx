@@ -6,6 +6,7 @@ import { StatTile, ToneBadge } from "../components/StatTile";
 import { Modal } from "../finance/ui";
 import { ago, duration, int, minutes, num, pct, type Tone } from "../format";
 import type {
+  ConvBug,
   ConvItemDetail,
   ConvItemSummary,
   ConvSonarRef,
@@ -105,6 +106,25 @@ function scoreTone(v: number | null | undefined): Tone {
 function Score({ v }: { v: number | null | undefined }) {
   if (v === null || v === undefined) return <span className="muted">—</span>;
   return <ToneBadge tone={scoreTone(v)}>{num(v)}</ToneBadge>;
+}
+
+/** Ortalama + dağılım: aynı 3 "hep yeterli" de olabilir "bazen iyi bazen zayıf" da. */
+function SpreadScore({ v, spread }: { v: number | null | undefined; spread?: number[] }) {
+  const weak = spread ? spread[0] + spread[1] : 0;
+  const strong = spread ? spread[3] + spread[4] : 0;
+  const title = spread?.some((n) => n) ? spread.map((n, i) => `${i + 1}: ${n}`).join(" · ") + " davranış puanı" : undefined;
+  return (
+    <span className="cv-spread" title={title}>
+      <Score v={v} />
+      {weak || strong ? (
+        <small>
+          {weak ? <span className="weak">{weak} zayıf</span> : null}
+          {weak && strong ? " · " : null}
+          {strong ? <span className="strong">{strong} güçlü</span> : null}
+        </small>
+      ) : null}
+    </span>
+  );
 }
 
 export function ConversationsPage({ me }: { me: Me }) {
@@ -294,7 +314,7 @@ export function ConversationsPage({ me }: { me: Me }) {
                                 <td className="num">{minutes(r.stats.dakika)}</td>
                                 {scoreKeys.map((k) => (
                                   <td key={k} className="num">
-                                    <Score v={r.stats.puanlar[k]} />
+                                    <SpreadScore v={r.stats.puanlar[k]} spread={r.dagilim?.[k]} />
                                   </td>
                                 ))}
                                 <td className="num">{pct(r.stats.sonraki_adim_orani)}</td>
@@ -350,9 +370,25 @@ export function ConversationsPage({ me }: { me: Me }) {
                 </div>
                 <p className="muted cv-legend">
                   {scoreKeys.map((k) => `${k} ${data.score_labels[k]}`).join(" · ")}
+                  <br />
+                  Puanın altındaki sayılar o boyutta 1-2 (zayıf) ve 4-5 (güçlü) alan davranış sayısıdır; ikisi birlikte
+                  yüksekse temsilci bunu yapabiliyor ama tutarsız.
                 </p>
               </div>
             </section>
+          ) : null}
+
+          {data.bugs?.length ? (
+            <BugCard
+              bugs={data.bugs}
+              sonar={data.sonar}
+              labels={data.score_labels}
+              reps={repOptions}
+              isAdmin={isAdmin}
+              pageRep={repFilter}
+              weekText={`${dayFmt.format(new Date(`${data.week_start}T00:00:00Z`))} – ${dayFmt.format(new Date(`${data.week_end}T00:00:00Z`))}`}
+              onOpen={setDetailId}
+            />
           ) : null}
 
           {stats && Object.keys(stats.davranislar ?? {}).length ? (
@@ -436,6 +472,136 @@ export function ConversationsPage({ me }: { me: Me }) {
         <ItemDetail id={detailId} sonar={data.sonar} labels={data.score_labels} onClose={() => setDetailId(null)} />
       ) : null}
     </div>
+  );
+}
+
+const BUG_LIMIT = 8;
+const EXAMPLES = 2;
+
+/** Haftanın bug'ları: SONAR kodu, standart, ihlal anı ve doğrusu. Ekip görünümünde isim yok;
+ * kanala paylaşılmak üzere tasarlandı. */
+function BugCard({
+  bugs,
+  sonar,
+  labels,
+  reps,
+  isAdmin,
+  pageRep,
+  weekText,
+  onOpen,
+}: {
+  bugs: ConvBug[];
+  sonar: ConvSonarRef;
+  labels: Record<string, string>;
+  reps: [string, string][];
+  isAdmin: boolean;
+  pageRep: string;
+  weekText: string;
+  onOpen: (id: number) => void;
+}) {
+  const [rep, setRep] = useState(pageRep);
+  const [all, setAll] = useState(false);
+  useEffect(() => setRep(pageRep), [pageRep]);
+
+  const groups = useMemo(() => {
+    const m = new Map<string, ConvBug[]>();
+    for (const b of bugs) if (!rep || b.rep_id === rep) m.set(b.kod, [...(m.get(b.kod) ?? []), b]);
+    return [...m.entries()]
+      .map(([kod, list]) => ({
+        kod,
+        list,
+        reps: new Set(list.map((b) => b.rep_id)).size,
+        // Doğrusu yazılmış ve en düşük puanlı örnekler önce.
+        examples: [...list].sort((x, y) => Number(!x.dogrusu) - Number(!y.dogrusu) || x.puan - y.puan).slice(0, EXAMPLES),
+      }))
+      .sort((x, y) => y.list.length - x.list.length || x.kod.localeCompare(y.kod));
+  }, [bugs, rep]);
+
+  const repName = rep ? (reps.find(([id]) => id === rep)?.[1] ?? "") : "";
+  const shown = all ? groups : groups.slice(0, BUG_LIMIT);
+  const total = groups.reduce((s, g) => s + g.list.length, 0);
+
+  return (
+    <section className="card" data-share="gorusme-buglar">
+      <div className="card-head">
+        <h2>Haftanın bug'ları{repName ? ` · ${repName}` : isAdmin ? " · ekip" : ""}</h2>
+        <span className="hint">
+          {weekText} · SONAR-41'de 1-2 puan alan davranışlar · {int(total)} ihlal, {int(groups.length)} kod
+        </span>
+        {isAdmin ? (
+          <select
+            className="f-input sm"
+            data-share-skip
+            value={rep}
+            onChange={(e) => setRep(e.target.value)}
+            aria-label="Bug kartı temsilcisi"
+          >
+            <option value="">Tüm ekip</option>
+            {reps.map(([id, name]) => (
+              <option key={id} value={id}>
+                {name}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        {isAdmin ? (
+          <ShareButton kart="gorusme-buglar" baslik={`Haftanın bug'ları · ${repName || "Ekip"} · ${weekText}`} />
+        ) : null}
+      </div>
+      <div className="card-body">
+        {groups.length ? (
+          <ol className="cv-bugs">
+            {shown.map((g) => {
+              const b = sonar.behaviors[g.kod];
+              return (
+                <li key={g.kod}>
+                  <div className="cv-bug-head">
+                    <span className="cv-code">{g.kod}</span>
+                    <b>{b?.name ?? g.kod}</b>
+                    <span className="muted">
+                      {b?.dim ? `${b.dim} ${labels[b.dim] ?? ""}` : ""}
+                    </span>
+                    <div className="spacer" />
+                    <ToneBadge tone="critical">
+                      {g.list.length} kez{!rep && g.reps > 1 ? ` · ${g.reps} temsilci` : ""}
+                    </ToneBadge>
+                  </div>
+                  {b?.def ? (
+                    <p className="cv-bug-std">
+                      <span className="label">Standart</span> {b.def}
+                    </p>
+                  ) : null}
+                  {g.examples.map((x, i) => (
+                    <div key={`${x.item_id}-${i}`} className="cv-bug-ex">
+                      {x.alinti ? (
+                        <p>
+                          <span className="label bad">İhlal</span> “{x.alinti}”
+                        </p>
+                      ) : null}
+                      {x.dogrusu ? (
+                        <p>
+                          <span className="label good">Doğrusu</span> “{x.dogrusu}”
+                        </p>
+                      ) : null}
+                      <button className="link-btn" onClick={() => onOpen(x.item_id)}>
+                        görüşmeyi aç
+                      </button>
+                    </div>
+                  ))}
+                </li>
+              );
+            })}
+          </ol>
+        ) : (
+          <div className="empty">Bu hafta {repName ? `${repName} için ` : ""}bug yok.</div>
+        )}
+        {groups.length > BUG_LIMIT ? (
+          <button className="link-btn" onClick={() => setAll((v) => !v)}>
+            {all ? `İlk ${BUG_LIMIT} kodu göster` : `Tüm ${groups.length} kodu göster`}
+          </button>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
@@ -849,7 +1015,7 @@ function SonarBlock({
   sonar,
   labels,
 }: {
-  rows: { kod: string; puan: number; alinti: string }[];
+  rows: { kod: string; puan: number; alinti: string; dogrusu?: string }[];
   sonar: ConvSonarRef;
   labels: Record<string, string>;
 }) {
@@ -879,6 +1045,11 @@ function SonarBlock({
                     <span className="cv-code">{r.kod}</span>
                     {sonar.behaviors[r.kod]?.name ?? r.kod} <Score v={r.puan} />
                     {r.alinti ? <blockquote className="cv-quote">“{r.alinti}”</blockquote> : null}
+                    {r.dogrusu ? (
+                      <div className="cv-bug-fix">
+                        <span className="label good">Doğrusu</span> “{r.dogrusu}”
+                      </div>
+                    ) : null}
                   </li>
                 ))}
               </ul>
