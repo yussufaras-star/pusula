@@ -17,6 +17,7 @@ karşı-olgusal yüzde yok; CRM'e yazılmaz, sonuç yalnız panelde görünür.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -40,13 +41,25 @@ from pusula.zoho.crm import coql
 logger = logging.getLogger(__name__)
 
 # Bu süreden kısa çağrı analiz edilmez (ulaşılamadı, sesli mesaj, "müsait değilim").
-MIN_CALL_SEC = int(os.environ.get("PUSULA_CONV_MIN_CALL_SEC") or 60)
+MIN_CALL_SEC = int(os.environ.get("PUSULA_CONV_MIN_CALL_SEC") or 20)
+# Haftalık kota (temsilci başına): 2 dk ve üstü görüşmelerden 14, 2 dk altından 1
+# ("müsait değilim" anında müşteriyi tutuyor mu). Kota dışı kayıt yazıya dökülmez.
+QUOTA_LONG = 14
+QUOTA_SHORT = 1
+LONG_MIN_SEC = 120
+# Kota haftaya yayılır: n. iş gününün sonunda en fazla QUOTA_LONG * n / 6 uzun görüşme.
+WORK_DAYS = 6
+# Kotada önce alınanlar (toplantılar ayrıca öncelikli).
+PRIORITY_OUTCOMES = frozenset({"demo_done", "meeting_booked", "meeting_scheduled"})
+# Kısa çağrı havuzuna girmeyenler (açılmadı, numara yanlış).
+SHORT_SKIP_OUTCOMES = frozenset({"no_answer", "invalid_number"})
 # Müşteri toplantıda bu kadar kalmadıysa kayıt analiz edilmez.
 MIN_MEETING_CUSTOMER_SEC = 120
 # Bu kadar kelimeden kısa transkript konuşma sayılmaz.
 MIN_WORDS = 25
 MAX_ATTEMPTS = 3
 TEAM = "team"
+BATCH_POLL_SEC = 60
 
 # Puan başlıkları SONAR-41 boyutlarıdır (K1-K5).
 SCORE_KEYS = sonar41.DIM_KEYS
@@ -68,6 +81,8 @@ NOTE_LOOKBACK = timedelta(days=60)
 TYPES = ("kesif", "sunum", "takip", "kapanis", "itiraz", "destek", "diger")
 OBJECTIONS = ("fiyat", "zaman", "guven", "ihtiyac_yok", "rakip", "karar_verici", "odeme", "diger")
 RISKS = ("yanlis_bilgi", "baski", "olmayan_soz", "uslup", "diger")
+# Müşteri "müsait değilim" dediğinde temsilci: tuttu / kısmen / bıraktı; müsaitse uygulanmaz.
+HOLD_VALUES = ("tuttu", "kismen", "birakti", "uygulanmaz")
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS conv_items (
@@ -101,6 +116,17 @@ CREATE TABLE IF NOT EXISTS conv_items (
     UNIQUE (org_id, kind, source_ref)
 );
 CREATE INDEX IF NOT EXISTS idx_conv_items_time ON conv_items (org_id, occurred_at);
+ALTER TABLE conv_items ADD COLUMN IF NOT EXISTS usage jsonb;
+ALTER TABLE conv_items ADD COLUMN IF NOT EXISTS cost_usd numeric;
+CREATE TABLE IF NOT EXISTS conv_batches (
+    batch_id    text PRIMARY KEY,
+    org_id      text NOT NULL DEFAULT 'rexven',
+    item_ids    bigint[] NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    done_at     timestamptz,
+    report      jsonb
+);
+ALTER TABLE conv_batches ENABLE ROW LEVEL SECURITY;
 CREATE TABLE IF NOT EXISTS conv_weekly (
     org_id      text NOT NULL DEFAULT 'rexven',
     week_start  date NOT NULL,
@@ -113,6 +139,7 @@ CREATE TABLE IF NOT EXISTS conv_weekly (
 );
 ALTER TABLE conv_weekly ADD COLUMN IF NOT EXISTS sent_at timestamptz;
 ALTER TABLE conv_weekly ADD COLUMN IF NOT EXISTS sent_by text;
+ALTER TABLE conv_weekly ADD COLUMN IF NOT EXISTS cost_usd numeric;
 CREATE TABLE IF NOT EXISTS conv_notes (
     org_id         text NOT NULL DEFAULT 'rexven',
     note_id        text NOT NULL,
@@ -193,7 +220,12 @@ def call_row(event: dict[str, Any]) -> dict[str, Any] | None:
         "occurred_at": event["occurred_at"],
         "duration_sec": seconds,
         "crm_outcome": meta.get("call_result") or meta.get("gelen_arama_sonucu"),
-        "meta": {"call_purpose": meta.get("call_purpose"), "subject": meta.get("subject")},
+        "meta": {
+            "call_purpose": meta.get("call_purpose"),
+            "subject": meta.get("subject"),
+            "outcome_key": meta.get("outcome_key"),
+            "call_status": meta.get("call_status"),
+        },
     }
 
 
@@ -203,8 +235,9 @@ def _insert_items(conn: Any, rows: Iterable[dict[str, Any]]) -> int:
         cur = conn.execute(
             """
             INSERT INTO conv_items (org_id, kind, source_ref, event_id, rep_id, thread_id, lead_id,
-                                    customer, direction, occurred_at, duration_sec, crm_outcome, meta)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                                    customer, direction, occurred_at, duration_sec, crm_outcome, meta,
+                                    status, error)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
             ON CONFLICT (org_id, kind, source_ref) DO UPDATE SET
                 rep_id = EXCLUDED.rep_id,
                 thread_id = coalesce(EXCLUDED.thread_id, conv_items.thread_id),
@@ -218,6 +251,7 @@ def _insert_items(conn: Any, rows: Iterable[dict[str, Any]]) -> int:
                 row.get("thread_id"), row.get("lead_id"), row.get("customer"), row.get("direction"),
                 row["occurred_at"], row.get("duration_sec"), row.get("crm_outcome"),
                 json.dumps(row.get("meta") or {}, ensure_ascii=False, default=str),
+                row.get("status") or "bekliyor", row.get("error"),
             ),
         )
         fetched = cur.fetchone()
@@ -241,8 +275,13 @@ def _collect_calls(conn: Any, start: datetime, end: datetime) -> dict[str, Any]:
     )
     cols = [c.name for c in cur.description]
     events = [dict(zip(cols, r)) for r in cur.fetchall()]
-    rows = [r for r in (call_row(e) for e in events) if r is not None]
+    rows = [_as_candidate(r) for r in (call_row(e) for e in events) if r is not None]
     return {"kayitli_cagri": len(events), "uygun": len(rows), "yeni": _insert_items(conn, rows)}
+
+
+def _as_candidate(row: dict[str, Any]) -> dict[str, Any]:
+    """Gece toplanan kayıt kota adayıdır; seçilene kadar yazıya dökülmez."""
+    return {**row, "status": "atlandi", "error": QUOTA_WAIT, "meta": {**(row.get("meta") or {}), "kota": "aday"}}
 
 
 def _collect_meetings(conn: Any, start: datetime, end: datetime) -> dict[str, Any]:
@@ -378,6 +417,118 @@ def collect(conn: Any, week_start: date) -> dict[str, Any]:
         "toplanti": _collect_meetings(conn, start, end),
         "crm_notlari": _collect_notes(conn, start, end),
     }
+
+
+# --- 1b. kota ----------------------------------------------------------------------
+
+QUOTA_WAIT = "kota: sırada"
+QUOTA_OUT = "kota dışı"
+
+
+def _stable(ref: str) -> int:
+    # Sabit sıra: aynı kayıt her gece aynı yere düşer, temsilci seçimi tahmin edemez.
+    return int(hashlib.sha256(ref.encode("utf-8")).hexdigest()[:12], 16)
+
+
+def plan_quota(rows: list[dict[str, Any]], elapsed_days: int, closed: bool) -> dict[str, list[int]]:
+    """Kota planı (saf). rows: haftanın kayıtları (id, rep_id, kind, occurred_at, duration_sec,
+    status, kota, talep, outcome, call_status, source_ref). Dönüş: secilen / sirada / disi id'leri."""
+    by_rep: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        if r.get("rep_id") and not r.get("talep"):
+            by_rep[str(r["rep_id"])].append(r)
+    plan: dict[str, list[int]] = {"secilen": [], "sirada": [], "disi": []}
+    cap_long = QUOTA_LONG if closed else -(-QUOTA_LONG * min(elapsed_days, WORK_DAYS) // WORK_DAYS)
+
+    def short(r: dict[str, Any]) -> bool:
+        return r["kind"] == "call" and (r.get("duration_sec") or 0) < LONG_MIN_SEC
+
+    def day(r: dict[str, Any]) -> date:
+        return r["occurred_at"].astimezone(TZ).date()
+
+    for items in by_rep.values():
+        chosen = [
+            r for r in items
+            if (r.get("kota") == "secildi" or (r.get("kota") is None and r["status"] == "analiz_edildi"))
+            and not (r["status"] == "atlandi" and r.get("kota") != "aday")
+        ]
+        pool = [
+            r for r in items
+            if r.get("kota") == "aday" or (r.get("kota") is None and r["status"] in ("bekliyor", "yazildi"))
+        ]
+        need_long = max(cap_long - sum(1 for r in chosen if not short(r)), 0)
+        need_short = max(QUOTA_SHORT - sum(1 for r in chosen if short(r)), 0) if elapsed_days >= 1 or closed else 0
+        per_day = Counter(day(r) for r in chosen if not short(r))
+        longs = [r for r in pool if not short(r)]
+        picked: list[dict[str, Any]] = []
+        while need_long and longs:
+            best = min(
+                longs,
+                key=lambda r: (
+                    0 if r["kind"] == "meeting" or r.get("outcome") in PRIORITY_OUTCOMES else 1,
+                    per_day[day(r)],
+                    _stable(r["source_ref"]),
+                ),
+            )
+            longs.remove(best)
+            picked.append(best)
+            per_day[day(best)] += 1
+            need_long -= 1
+        shorts = sorted(
+            (
+                r for r in pool
+                if short(r) and r.get("outcome") not in SHORT_SKIP_OUTCOMES
+                and r.get("call_status") in (None, "connected")
+            ),
+            key=lambda r: (0 if r.get("outcome") == "callback" else 1, _stable(r["source_ref"])),
+        )
+        picked += shorts[:need_short]
+        picked_ids = {r["id"] for r in picked}
+        plan["secilen"] += sorted(picked_ids)
+        plan["disi" if closed else "sirada"] += sorted(r["id"] for r in pool if r["id"] not in picked_ids)
+    return plan
+
+
+def select_quota(conn: Any, week_start: date, today: date) -> dict[str, Any]:
+    """Haftanın kota seçimini uygular. Seçilen yazıya dökülür; kalanlar sırada bekler,
+    hafta kapanınca kota dışı olur. Talep edilen ve temsilcisiz kayıtlar kotaya girmez."""
+    start, end = week_bounds(week_start)
+    cur = conn.execute(
+        """
+        SELECT c.id, c.rep_id, c.kind, c.occurred_at, c.duration_sec, c.status, c.source_ref,
+               c.meta->>'kota' AS kota, coalesce((c.meta->>'talep')::boolean, false) AS talep,
+               coalesce(c.meta->>'outcome_key', e.meta->>'outcome_key') AS outcome,
+               coalesce(c.meta->>'call_status', e.meta->>'call_status') AS call_status
+        FROM conv_items c LEFT JOIN events e ON e.id = c.event_id
+        WHERE c.org_id = %s AND c.occurred_at >= %s AND c.occurred_at < %s
+        """,
+        (get_org_id(), start, end),
+    )
+    cols = [c.name for c in cur.description]
+    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    closed = today >= week_start + timedelta(days=7)
+    plan = plan_quota(rows, (today - week_start).days, closed)
+    conn.execute(
+        """
+        UPDATE conv_items SET
+            status = CASE WHEN transcript IS NOT NULL THEN 'yazildi' ELSE 'bekliyor' END,
+            error = NULL,
+            meta = coalesce(meta, '{}'::jsonb) || '{"kota": "secildi"}'::jsonb
+        WHERE id = ANY(%s) AND status IN ('bekliyor', 'yazildi', 'atlandi')
+        """,
+        (plan["secilen"],),
+    )
+    for key, error in (("sirada", QUOTA_WAIT), ("disi", QUOTA_OUT)):
+        conn.execute(
+            """
+            UPDATE conv_items SET status = 'atlandi', error = %s,
+                   meta = coalesce(meta, '{}'::jsonb) || jsonb_build_object('kota', %s::text)
+            WHERE id = ANY(%s)
+            """,
+            (error, "aday" if key == "sirada" else "disi", plan[key]),
+        )
+    conn.commit()
+    return {k: len(v) for k, v in plan.items()}
 
 
 # --- 2. yazıya dök --------------------------------------------------------------
@@ -575,10 +726,21 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
             },
         },
         "sozler": {"type": "array", "items": {"type": "string"}},
+        "musaitlik": {
+            "type": "object",
+            "properties": {
+                "musait_degil": {"type": "boolean"},
+                "tutma": {"type": "string", "enum": list(HOLD_VALUES)},
+                "geri_arama_net": {"type": "boolean"},
+                "alinti": _QUOTE,
+            },
+            "required": ["musait_degil", "tutma", "geri_arama_net", "alinti"],
+            "additionalProperties": False,
+        },
     },
     "required": [
         "analiz_edilebilir", "neden", "ozet", "tur", "temsilci_konusmaci", "musteri", "itirazlar",
-        "sonar", "crm", "guclu", "gelisim", "sonraki_adim", "riskler", "sozler",
+        "sonar", "crm", "guclu", "gelisim", "sonraki_adim", "riskler", "sozler", "musaitlik",
     ],
     "additionalProperties": False,
 }
@@ -623,6 +785,13 @@ Diğer kurallar:
 - temsilci_konusmaci: transkriptteki temsilci etiketi (ör. "Konuşmacı 1"); ayrım yoksa "belirsiz".
 - sonraki_adim.var: görüşme net bir sonraki adımla bitti mi; tarih_net: gün/saat konuşuldu mu.
 - sozler: temsilcinin müşteriye verdiği somut sözler.
+- musaitlik: müşteri o an müsait olmadığını söyledi mi (musait_degil). Söylediyse "tutma":
+  tuttu = tek bir değer cümlesi ya da kısa bir soruyla ilgiyi canlı tuttu; müşteri bir süre
+  konuştu ya da somut bir geri arama zamanına kendisi onay verdi. kismen = ilgi uyandırmaya
+  çalıştı ama yarım kaldı. birakti = yalnız "ne zaman müsaitsiniz / sonra arayayım" deyip
+  kapattı. Müşteri müsaitse "uygulanmaz". geri_arama_net: gün ve saat netleşti mi. alinti:
+  müşterinin müsait olmadığını söylediği an ya da temsilcinin tepkisi. Kısa görüşmede
+  (2 dk altı) B01 ve B34'ü bu ana göre puanla, fırsatı doğmayan davranışları puanlama.
 - riskler: kanıtsız kazanç/başarı iddiası, garanti, kesin vergi/hukuk yanıtı, baskıcı satış,
   verilemeyecek söz, kaba üslup. Doğruluğunu bilemediğin şirket bilgilerini (fiyat, paket içeriği)
   risk sayma.
@@ -659,6 +828,13 @@ def normalize_analysis(raw: dict[str, Any]) -> dict[str, Any]:
     crm["puanlar"] = {k: _clamp(scores.get(k), 0, 5) if has_note else 0 for k in sonar41.CRM_KEYS}
     crm["yorum"] = str(crm.get("yorum") or "")
     out["crm"] = crm
+    hold = dict(raw.get("musaitlik") or {})
+    hold["musait_degil"] = bool(hold.get("musait_degil"))
+    if hold.get("tutma") not in HOLD_VALUES or not hold["musait_degil"]:
+        hold["tutma"] = "uygulanmaz"
+    hold["geri_arama_net"] = bool(hold.get("geri_arama_net"))
+    hold["alinti"] = str(hold.get("alinti") or "")
+    out["musaitlik"] = hold
     musteri = dict(raw.get("musteri") or {})
     musteri["ilgi"] = _clamp(musteri.get("ilgi"), 0, 5)
     out["musteri"] = musteri
@@ -834,32 +1010,111 @@ def reset_old_analyses(conn: Any, week_start: date) -> int:
     return cur.rowcount or 0
 
 
+def _save_analysis(conn: Any, item_id: int, raw: dict[str, Any] | None, used: dict[str, Any] | None,
+                   error: str | None) -> bool:
+    usage_json = json.dumps(used, ensure_ascii=False) if used else None
+    cost = (used or {}).get("usd")
+    if raw is None:
+        conn.execute(
+            """
+            UPDATE conv_items SET status = 'hata', attempts = attempts + 1, error = %s,
+                   usage = coalesce(%s::jsonb, usage), cost_usd = coalesce(cost_usd, 0) + coalesce(%s, 0)
+            WHERE id = %s
+            """,
+            ((error or "AI analizi alınamadı")[:500], usage_json, cost, item_id),
+        )
+        conn.commit()
+        return False
+    conn.execute(
+        """
+        UPDATE conv_items SET analysis = %s::jsonb, ai_model = %s, analyzed_at = now(),
+               status = 'analiz_edildi', error = NULL,
+               usage = %s::jsonb, cost_usd = coalesce(cost_usd, 0) + coalesce(%s, 0)
+        WHERE id = %s
+        """,
+        (json.dumps(normalize_analysis(raw), ensure_ascii=False), (used or {}).get("model") or llm.model_name(),
+         usage_json, cost, item_id),
+    )
+    conn.commit()
+    return True
+
+
+def batch_enabled() -> bool:
+    return (os.environ.get("PUSULA_AI_BATCH") or "1") != "0"
+
+
+def _collect_batches(conn: Any, report: dict[str, Any]) -> None:
+    """Açık toplu işlerin bitenlerini yazar."""
+    for batch_id, item_ids in conn.execute(
+        "SELECT batch_id, item_ids FROM conv_batches WHERE org_id = %s AND done_at IS NULL ORDER BY created_at",
+        (get_org_id(),),
+    ).fetchall():
+        results = llm.batch_results(batch_id)
+        if results is None:
+            report["bekleyen_toplu"] = report.get("bekleyen_toplu", 0) + 1
+            continue
+        done = {"analiz": 0, "hata": 0}
+        for item_id in item_ids:
+            raw, used, error = results.get(str(item_id), (None, None, "toplu işte sonuç yok"))
+            done["analiz" if _save_analysis(conn, item_id, raw, used, error) else "hata"] += 1
+        conn.execute(
+            "UPDATE conv_batches SET done_at = now(), report = %s::jsonb WHERE batch_id = %s",
+            (json.dumps(done), batch_id),
+        )
+        conn.commit()
+        report["analiz"] += done["analiz"]
+        report["hata"] += done["hata"]
+
+
 def analyze_pending(
     conn: Any, week_start: date, *, budget_sec: float | None = None, limit: int | None = None
 ) -> dict[str, Any]:
+    """Yazılmış kayıtları analiz eder. Toplu modda (varsayılan, %50 ucuz) iş gönderilir ve
+    süre içinde bitmezse sonuçları sonraki çalışma alır."""
     if not llm.enabled():
         return {"atlandi": "ANTHROPIC_API_KEY yok"}
     started = time.monotonic()
     report: dict[str, Any] = {"analiz": 0, "hata": 0, "yeniden": reset_old_analyses(conn, week_start)}
-    for item in _pending(conn, week_start, "yazildi", limit):
-        if budget_sec is not None and time.monotonic() - started > budget_sec:
-            report["durdu"] = "sure_doldu"
-            break
-        raw = llm.complete_json(ANALYSIS_SYSTEM, _prompt(item, call_notes(conn, item)), ANALYSIS_SCHEMA)
-        if raw is None:
-            _fail(conn, item["id"], "AI analizi alınamadı")
-            report["hata"] += 1
-            continue
-        conn.execute(
-            """
-            UPDATE conv_items SET analysis = %s::jsonb, ai_model = %s, analyzed_at = now(),
-                   status = 'analiz_edildi', error = NULL
-            WHERE id = %s
-            """,
-            (json.dumps(normalize_analysis(raw), ensure_ascii=False), llm.model_name(), item["id"]),
+    if not batch_enabled():
+        for item in _pending(conn, week_start, "yazildi", limit):
+            if budget_sec is not None and time.monotonic() - started > budget_sec:
+                report["durdu"] = "sure_doldu"
+                break
+            used: list[dict[str, Any]] = []
+            raw = llm.complete_json(ANALYSIS_SYSTEM, _prompt(item, call_notes(conn, item)), ANALYSIS_SCHEMA, usage=used)
+            ok = _save_analysis(conn, item["id"], raw, used[0] if used else None, None)
+            report["analiz" if ok else "hata"] += 1
+        return report
+
+    _collect_batches(conn, report)
+    open_ids = {
+        i for (ids,) in conn.execute(
+            "SELECT item_ids FROM conv_batches WHERE org_id = %s AND done_at IS NULL", (get_org_id(),)
+        ).fetchall() for i in ids
+    }
+    items = [i for i in _pending(conn, week_start, "yazildi", limit) if i["id"] not in open_ids]
+    if items:
+        batch_id = llm.batch_submit(
+            [(str(i["id"]), ANALYSIS_SYSTEM, _prompt(i, call_notes(conn, i)), ANALYSIS_SCHEMA) for i in items]
         )
-        conn.commit()
-        report["analiz"] += 1
+        if batch_id is None:
+            report["hata_gonderim"] = len(items)
+        else:
+            conn.execute(
+                "INSERT INTO conv_batches (batch_id, org_id, item_ids) VALUES (%s, %s, %s)",
+                (batch_id, get_org_id(), [i["id"] for i in items]),
+            )
+            conn.commit()
+            report["gonderildi"] = len(items)
+    # Süre yettiğince bekle; çoğu toplu iş bir saat içinde biter.
+    while report.get("gonderildi") or report.get("bekleyen_toplu"):
+        if budget_sec is not None and time.monotonic() - started > budget_sec - BATCH_POLL_SEC:
+            report["durdu"] = "toplu_is_suruyor"
+            break
+        time.sleep(BATCH_POLL_SEC)
+        report.pop("bekleyen_toplu", None)
+        report.pop("gonderildi", None)
+        _collect_batches(conn, report)
     return report
 
 
@@ -881,8 +1136,14 @@ def aggregate(items: list[dict[str, Any]]) -> dict[str, Any]:
     risks = Counter[str]()
     interest: list[float] = []
     next_step = dated = noted = 0
+    hold: Counter[str] = Counter()
     for item in usable:
         a = item["analysis"]
+        m = a.get("musaitlik") or {}
+        if m.get("musait_degil"):
+            hold["adet"] += 1
+            hold[m.get("tutma") or "uygulanmaz"] += 1
+            hold["net_geri_arama"] += 1 if m.get("geri_arama_net") else 0
         for key, value in dim_scores(a).items():
             dims[key].append(value)
         for row in a.get("sonar") or []:
@@ -936,6 +1197,7 @@ def aggregate(items: list[dict[str, Any]]) -> dict[str, Any]:
             "puanlar": {k: _avg(v) for k, v in crm_scores.items()},
         },
         "ilgi_ort": _avg(interest),
+        "musaitlik": {k: hold.get(k, 0) for k in ("adet", "tuttu", "kismen", "birakti", "net_geri_arama")},
         "sonraki_adim_orani": round(100.0 * next_step / n, 1) if n else None,
         "tarihli_adim_orani": round(100.0 * dated / n, 1) if n else None,
         "itirazlar": {
@@ -1063,6 +1325,7 @@ def build_weekly(conn: Any, week_start: date, *, narrate: bool = True) -> dict[s
     for scope, rows in scopes:
         stats = aggregate(rows)
         narrative = None
+        used: list[dict[str, Any]] = []
         if narrate and llm.enabled() and stats["analiz"] > 0:
             stats_json = json.dumps(stats, ensure_ascii=False)
             if scope == TEAM:
@@ -1070,28 +1333,30 @@ def build_weekly(conn: Any, week_start: date, *, narrate: bool = True) -> dict[s
                     f"Ekip haftası ({week_start:%d.%m.%Y} haftası).\nSayılar:\n{stats_json}\n\n"
                     f"Görüşme notları:\n{_notes(rows, cap=120)}"
                 )
-                narrative = llm.complete_json(WEEKLY_SYSTEM, prompt, TEAM_SCHEMA)
+                narrative = llm.complete_json(WEEKLY_SYSTEM, prompt, TEAM_SCHEMA, usage=used)
             else:
                 name = rows[0].get("rep_name") or scope
                 prompt = (
                     f"Temsilci: {name} ({week_start:%d.%m.%Y} haftası).\nSayılar:\n{stats_json}\n\n"
                     f"Görüşme notları:\n{_notes(rows)}"
                 )
-                narrative = llm.complete_json(WEEKLY_SYSTEM, prompt, REP_SCHEMA)
+                narrative = llm.complete_json(WEEKLY_SYSTEM, prompt, REP_SCHEMA, usage=used)
         conn.execute(
             """
-            INSERT INTO conv_weekly (org_id, week_start, scope, stats, narrative, ai_model, created_at)
-            VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s, now())
+            INSERT INTO conv_weekly (org_id, week_start, scope, stats, narrative, ai_model, created_at, cost_usd)
+            VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s, now(), %s)
             ON CONFLICT (org_id, week_start, scope) DO UPDATE SET
                 stats = EXCLUDED.stats,
                 narrative = coalesce(EXCLUDED.narrative, conv_weekly.narrative),
                 ai_model = coalesce(EXCLUDED.ai_model, conv_weekly.ai_model),
+                cost_usd = coalesce(conv_weekly.cost_usd, 0) + coalesce(EXCLUDED.cost_usd, 0),
                 created_at = now()
             """,
             (
                 get_org_id(), week_start, scope, json.dumps(stats, ensure_ascii=False),
                 json.dumps(narrative, ensure_ascii=False) if narrative else None,
                 llm.model_name() if narrative else None,
+                sum((u.get("usd") or 0) for u in used) or None,
             ),
         )
         conn.commit()
@@ -1123,6 +1388,7 @@ def run(
         try:
             if "topla" in stages:
                 report["topla"] = collect(conn, week_start)
+                report["kota"] = select_quota(conn, week_start, datetime.now(TZ).date())
             if "yaziya_dok" in stages:
                 # Analize süre kalsın: yazıya dökme sürenin en fazla %70'ini kullanır.
                 share = None if budget_sec is None else (left() or 0.0) * 0.7
@@ -1178,10 +1444,14 @@ def create_request(phone: str, days: int, by: str) -> dict[str, Any]:
             _insert_items(conn, [row])
             item = conn.execute(
                 """
-                UPDATE conv_items SET meta = coalesce(meta, '{}'::jsonb) || jsonb_build_object('talep', true)
+                UPDATE conv_items SET meta = coalesce(meta, '{}'::jsonb) || jsonb_build_object('talep', true),
+                       status = CASE WHEN status = 'atlandi' AND error IN (%s, %s)
+                                     THEN CASE WHEN transcript IS NOT NULL THEN 'yazildi' ELSE 'bekliyor' END
+                                     ELSE status END,
+                       error = CASE WHEN error IN (%s, %s) THEN NULL ELSE error END
                 WHERE org_id = %s AND kind = 'call' AND source_ref = %s RETURNING id
                 """,
-                (get_org_id(), row["source_ref"]),
+                (QUOTA_WAIT, QUOTA_OUT, QUOTA_WAIT, QUOTA_OUT, get_org_id(), row["source_ref"]),
             ).fetchone()
             ids.append(int(item[0]))
         req_id = conn.execute(
@@ -1318,6 +1588,16 @@ def load_week(week_start: date, rep_id: str | None) -> dict[str, Any]:
         )
         cols = [c.name for c in cur.description]
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        cost = conn.execute(
+            """
+            SELECT coalesce((SELECT sum(cost_usd) FROM conv_items
+                             WHERE org_id = %s AND occurred_at >= %s AND occurred_at < %s), 0),
+                   (SELECT count(*) FROM conv_items
+                    WHERE org_id = %s AND occurred_at >= %s AND occurred_at < %s AND cost_usd IS NOT NULL),
+                   coalesce((SELECT sum(cost_usd) FROM conv_weekly WHERE org_id = %s AND week_start = %s), 0)
+            """,
+            (get_org_id(), start, end, get_org_id(), start, end, get_org_id(), week_start),
+        ).fetchone()
         weekly = conn.execute(
             """
             SELECT w.scope, r.full_name, w.stats, w.narrative, w.created_at, w.sent_at
@@ -1326,6 +1606,9 @@ def load_week(week_start: date, rep_id: str | None) -> dict[str, Any]:
             """,
             (get_org_id(), week_start),
         ).fetchall()
+    # Kota bekleyen/dışı kayıtlar listede yer almaz, yalnız sayılır.
+    quota = [r for r in rows if r.get("error") in (QUOTA_WAIT, QUOTA_OUT)]
+    rows = [r for r in rows if r.get("error") not in (QUOTA_WAIT, QUOTA_OUT)]
     status = Counter(r["status"] for r in rows)
     analysed = [r for r in rows if r["status"] == "analiz_edildi"]
     by_rep: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -1348,11 +1631,15 @@ def load_week(week_start: date, rep_id: str | None) -> dict[str, Any]:
     return {
         "week_start": week_start,
         "week_end": week_start + timedelta(days=6),
-        "durum": {k: status.get(k, 0) for k in ("bekliyor", "yazildi", "analiz_edildi", "hata", "atlandi")},
+        "durum": {
+            **{k: status.get(k, 0) for k in ("bekliyor", "yazildi", "analiz_edildi", "hata", "atlandi")},
+            "kota_disi": len(quota),
+        },
         "team": team,
         "reps": reps,
         "items": [_item_summary(r) for r in rows],
         "dagilim": score_spread(analysed),
+        "maliyet": {"analiz_usd": float(cost[0]), "analiz_adet": int(cost[1]), "haftalik_usd": float(cost[2])},
         "bugs": bug_rows(analysed),
         "ornekler": example_calls(analysed),
         "score_labels": SCORE_LABELS,
