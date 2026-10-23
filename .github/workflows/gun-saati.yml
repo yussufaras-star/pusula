@@ -57,6 +57,9 @@ jobs:
           python scripts/ceo_summary.py --send --channel "${{ vars.CEO_OZET_KANAL }}"
       - if: ${{ vars.CEO_OZET_KANAL == '' }}
         run: python scripts/ceo_summary.py --send --to "${{ vars.CEO_OZET_ALICI }}"
+      - name: Finans yönetici özeti
+        if: ${{ !cancelled() && vars.FINANS_OZET_KANAL != '' && vars.CEO_OZET_KANAL != '' }}
+        run: python scripts/finance_summary.py --send --channel "${{ vars.FINANS_OZET_KANAL }}"
 
   kart-1230:
     runs-on: ubuntu-latest
