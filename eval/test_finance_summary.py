@@ -39,13 +39,15 @@ def test_cash_on_rolls_back_later_transactions() -> None:
     assert out == {"llc": Decimal("700"), "tr": Decimal("100")}
 
 
-def test_card_shows_stale_company_and_warnings() -> None:
+def test_card_shows_stale_company_and_warnings() -> None:  # ve hesapsız şirket
     s = {
         "first": "2026-10-22", "last": "2026-10-22", "nakit": 882_500.0, "nakit_degisim": 44_900.0,
         "giris": 33_800.0, "cikis": 3_500.0, "hareketler": [],
         "ay": {"ad": "Ekim", "giris": 850_800.0, "cikis": 695_800.0, "net": 155_000.0},
         "sirketler": [{"id": "tr", "ad": "Rexven TR", "para": "TRY", "usd": 48_173.0, "yerel": 2_390_761.0,
-                       "degisim": -25.0, "eski_veri": "2026-05-25"}],
+                       "degisim": -25.0, "eski_veri": "2026-05-25"},
+                      {"id": "gmbh", "ad": "Rexven GmbH", "para": "EUR", "usd": None, "yerel": None,
+                       "degisim": None, "eski_veri": None, "hesap_yok": True}],
         "projeksiyon": {"en_dusuk_hafta": "2026-10-19", "en_dusuk": 882_500.0, "acik_hafta": None},
         "uyarilar": {"geciken": 2, "geciken_usd": 1_500.0, "hata": [], "eski": ["KuveytTürk Ana Hesap"], "aksiyon": 0},
         "kur_eksik": [],
@@ -53,4 +55,5 @@ def test_card_shows_stale_company_and_warnings() -> None:
     html = finance_card.render_html(s)
     assert "Finans Yönetici Özeti" in html and "veri 2026-05-25 tarihli" in html
     assert "2 gecikmiş planlı kalem" in html and "Eski veri: KuveytTürk Ana Hesap" in html
+    assert "Rexven GmbH" in html and "bağlı hesap yok" in html
     assert "En büyük hareketler" not in html  # hareket yoksa bölüm yok

@@ -69,6 +69,9 @@ def build_summary(conn: Any, today: date, now: datetime) -> dict[str, Any]:
     for c in companies:
         own = [a for a in accounts if a.company_id == c.id]
         if not own:
+            # Bağlı hesabı olmayan şirket de listede durur (ör. GmbH); tutarı boş.
+            rows.append({"id": c.id, "ad": c.name, "para": c.base_currency, "usd": None, "yerel": None,
+                         "degisim": None, "eski_veri": None, "hesap_yok": True})
             continue
         usd = analytics.cash_usd(own, fx)
         stale = [a for a in alerts.stale if a.company_id == c.id]
@@ -153,6 +156,9 @@ def render(s: dict[str, Any]) -> str:
     lines.append(f"*Toplam nakit:* {usd(s['nakit'])} ({usd(s['nakit_degisim'], sign=True)})")
     lines.append(f"*Giriş / çıkış:* {usd(s['giris'])} / {usd(s['cikis'])}")
     for r in s["sirketler"]:
+        if r.get("hesap_yok"):
+            lines.append(f"• {r['ad']}: veri yok (bağlı hesap yok)")
+            continue
         lines.append(f"• {r['ad']}: {usd(r['usd'])} ({usd(r['degisim'], sign=True)})"
                      + (f" · veri {r['eski_veri']} tarihli" if r["eski_veri"] else ""))
     ay = s["ay"]

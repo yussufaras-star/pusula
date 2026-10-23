@@ -28,7 +28,7 @@ def _week(iso: str | None) -> str:
 
 def render_html(s: dict[str, Any]) -> str:
     companies = "".join(
-        f"""<tr><td>{escape(r["ad"])}{f'<div class="sub warn">veri {escape(r["eski_veri"])} tarihli</div>' if r.get("eski_veri") else ""}</td>
+        f"""<tr><td>{escape(r["ad"])}{f'<div class="sub warn">veri {escape(r["eski_veri"])} tarihli</div>' if r.get("eski_veri") else ""}{'<div class="sub">veri yok · bağlı hesap yok</div>' if r.get("hesap_yok") else ""}</td>
         <td class="num"><b>{usd(r["usd"])}</b>{f'<div class="sub">{r["yerel"]:,.0f} {escape(r["para"])}</div>'.replace(",", ".") if r.get("yerel") else ""}</td>
         <td class="num">{_signed(r["degisim"])}</td></tr>"""
         for r in s["sirketler"]
