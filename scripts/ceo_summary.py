@@ -67,7 +67,8 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001 — kanal reddederse yöneticiye haber ver
                 logging.exception("Kanala gönderilemedi")
                 post_cliq(
-                    f"Yönetici özeti #{args.channel} kanalına gönderilemedi ({exc}). Bot kanalda üye mi?\n\n{body}",
+                    f"Yönetici özeti #{args.channel} kanalına gönderilemedi: {exc}. "
+                    "Pusula botunun kanalda üye olduğunu kontrol edin; özet panelde (Yönetici özeti).",
                     ceo_summary.RECIPIENT,
                 )
                 return 1

@@ -33,7 +33,7 @@ def _bar(label: str, actual: float, target: float | None, tempo: float | None, f
     color = GOOD if ahead else WARN
     mark = "" if tempo is None else f'<span class="mark" style="left:{min(tempo / target, 1.3) / 1.3 * 100:.1f}%"></span>'
     note = "" if tempo is None else (
-        f'<span style="color:{color}">bu tempoyla ay sonu ~{fmt(tempo)} '
+        f'<span style="color:{color}">bu tempoyla ay sonu yaklaşık {fmt(tempo)}'
         f'({"hedefin üstünde" if ahead else "hedefin altında"})</span>'
     )
     return f"""
