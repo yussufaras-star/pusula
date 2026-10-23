@@ -3595,3 +3595,11 @@ textarea.f-input {
 .cv-bug-dim-head .muted {
   font-size: 12.5px;
 }
+
+.cv-bug-dim-head .spacer {
+  flex: 1;
+}
+
+.cv-bug-dim[data-share] {
+  padding: 4px 0;
+}
