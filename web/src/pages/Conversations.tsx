@@ -475,11 +475,10 @@ export function ConversationsPage({ me }: { me: Me }) {
   );
 }
 
-const BUG_LIMIT = 8;
-const EXAMPLES = 2;
+const BUGS_PER_DIM = 3;
 
-/** Haftanın bug'ları: SONAR kodu, standart, ihlal anı ve doğrusu. Ekip görünümünde isim yok;
- * kanala paylaşılmak üzere tasarlandı. */
+/** Haftanın bug'ları: SONAR kodu, standart, ihlal anı ve doğrusu; K1'den K5'e görüşme
+ * sırasıyla. Ekip görünümünde isim yok; kanala paylaşılmak üzere tasarlandı. */
 function BugCard({
   bugs,
   sonar,
@@ -503,30 +502,39 @@ function BugCard({
   const [all, setAll] = useState(false);
   useEffect(() => setRep(pageRep), [pageRep]);
 
-  const groups = useMemo(() => {
+  const dims = useMemo(() => {
     const m = new Map<string, ConvBug[]>();
     for (const b of bugs) if (!rep || b.rep_id === rep) m.set(b.kod, [...(m.get(b.kod) ?? []), b]);
-    return [...m.entries()]
-      .map(([kod, list]) => ({
-        kod,
-        list,
-        reps: new Set(list.map((b) => b.rep_id)).size,
-        // Doğrusu yazılmış ve en düşük puanlı örnekler önce.
-        examples: [...list].sort((x, y) => Number(!x.dogrusu) - Number(!y.dogrusu) || x.puan - y.puan).slice(0, EXAMPLES),
-      }))
-      .sort((x, y) => y.list.length - x.list.length || x.kod.localeCompare(y.kod));
-  }, [bugs, rep]);
+    const groups = [...m.entries()].map(([kod, list]) => ({
+      kod,
+      dim: sonar.behaviors[kod]?.dim ?? "?",
+      list,
+      reps: new Set(list.map((b) => b.rep_id)).size,
+      // Doğrusu yazılmış ve en düşük puanlı örnekler önce.
+      examples: [...list].sort((x, y) => Number(!x.dogrusu) - Number(!y.dogrusu) || x.puan - y.puan),
+    }));
+    return Object.keys(labels)
+      .map((dim) => {
+        const codes = groups
+          .filter((g) => g.dim === dim)
+          .sort((x, y) => y.list.length - x.list.length || x.kod.localeCompare(y.kod));
+        return { dim, codes, total: codes.reduce((s, g) => s + g.list.length, 0) };
+      })
+      .filter((d) => d.codes.length);
+  }, [bugs, rep, sonar, labels]);
 
   const repName = rep ? (reps.find(([id]) => id === rep)?.[1] ?? "") : "";
-  const shown = all ? groups : groups.slice(0, BUG_LIMIT);
-  const total = groups.reduce((s, g) => s + g.list.length, 0);
+  const total = dims.reduce((s, d) => s + d.total, 0);
+  const codeCount = dims.reduce((s, d) => s + d.codes.length, 0);
+  const hidden = dims.reduce((s, d) => s + Math.max(d.codes.length - BUGS_PER_DIM, 0), 0);
 
   return (
     <section className="card" data-share="gorusme-buglar">
       <div className="card-head">
         <h2>Haftanın bug'ları{repName ? ` · ${repName}` : isAdmin ? " · ekip" : ""}</h2>
         <span className="hint">
-          {weekText} · SONAR-41'de 1-2 puan alan davranışlar · {int(total)} ihlal, {int(groups.length)} kod
+          {weekText} · SONAR-41'de 1-2 puan alan davranışlar, açılıştan kapanışa · {int(total)} ihlal, {int(codeCount)} kod
+          {!all && hidden ? ` · her boyutta en sık ${BUGS_PER_DIM}` : ""}
         </span>
         {isAdmin ? (
           <select
@@ -549,55 +557,63 @@ function BugCard({
         ) : null}
       </div>
       <div className="card-body">
-        {groups.length ? (
-          <ol className="cv-bugs">
-            {shown.map((g) => {
-              const b = sonar.behaviors[g.kod];
-              return (
-                <li key={g.kod}>
-                  <div className="cv-bug-head">
-                    <span className="cv-code">{g.kod}</span>
-                    <b>{b?.name ?? g.kod}</b>
-                    <span className="muted">
-                      {b?.dim ? `${b.dim} ${labels[b.dim] ?? ""}` : ""}
-                    </span>
-                    <div className="spacer" />
-                    <ToneBadge tone="critical">
-                      {g.list.length} kez{!rep && g.reps > 1 ? ` · ${g.reps} temsilci` : ""}
-                    </ToneBadge>
-                  </div>
-                  {b?.def ? (
-                    <p className="cv-bug-std">
-                      <span className="label">Standart</span> {b.def}
-                    </p>
-                  ) : null}
-                  {g.examples.map((x, i) => (
-                    <div key={`${x.item_id}-${i}`} className="cv-bug-ex">
-                      {x.alinti ? (
-                        <p>
-                          <span className="label bad">İhlal</span> “{x.alinti}”
+        {dims.length ? (
+          dims.map((d) => (
+            <div key={d.dim} className="cv-bug-dim">
+              <div className="cv-bug-dim-head">
+                <b>
+                  {d.dim} · {labels[d.dim]}
+                </b>
+                <span className="muted">
+                  {int(d.total)} ihlal · {int(d.codes.length)} kod
+                </span>
+              </div>
+              <ol className="cv-bugs">
+                {(all ? d.codes : d.codes.slice(0, BUGS_PER_DIM)).map((g) => {
+                  const b = sonar.behaviors[g.kod];
+                  return (
+                    <li key={g.kod}>
+                      <div className="cv-bug-head">
+                        <span className="cv-code">{g.kod}</span>
+                        <b>{b?.name ?? g.kod}</b>
+                        <span className="badge critical">
+                          {g.list.length} kez{!rep && g.reps > 1 ? ` · ${g.reps} temsilci` : ""}
+                        </span>
+                      </div>
+                      {b?.def ? (
+                        <p className="cv-bug-std">
+                          <span className="label">Standart</span> {b.def}
                         </p>
                       ) : null}
-                      {x.dogrusu ? (
-                        <p>
-                          <span className="label good">Doğrusu</span> “{x.dogrusu}”
-                        </p>
-                      ) : null}
-                      <button className="link-btn" onClick={() => onOpen(x.item_id)}>
-                        görüşmeyi aç
-                      </button>
-                    </div>
-                  ))}
-                </li>
-              );
-            })}
-          </ol>
+                      {g.examples.slice(0, all ? 2 : 1).map((x, i) => (
+                        <div key={`${x.item_id}-${i}`} className="cv-bug-ex">
+                          {x.ihlal || x.alinti ? (
+                            <p>
+                              <span className="label bad">İhlal</span> {x.ihlal || `“${x.alinti}”`}
+                            </p>
+                          ) : null}
+                          {x.dogrusu ? (
+                            <p>
+                              <span className="label good">{g.kod === "B39" ? "Örnek not" : "Doğrusu"}</span> “{x.dogrusu}”
+                            </p>
+                          ) : null}
+                          <button className="link-btn" onClick={() => onOpen(x.item_id)}>
+                            görüşmeyi aç
+                          </button>
+                        </div>
+                      ))}
+                    </li>
+                  );
+                })}
+              </ol>
+            </div>
+          ))
         ) : (
           <div className="empty">Bu hafta {repName ? `${repName} için ` : ""}bug yok.</div>
         )}
-        {groups.length > BUG_LIMIT ? (
+        {hidden || dims.some((d) => d.codes.some((g) => g.list.length > 1)) ? (
           <button className="link-btn" onClick={() => setAll((v) => !v)}>
-            {all ? `İlk ${BUG_LIMIT} kodu göster` : `Tüm ${groups.length} kodu göster`}
+            {all ? "Özet görünüme dön" : `Tüm ${codeCount} kodu ve ikinci örnekleri göster`}
           </button>
         ) : null}
       </div>

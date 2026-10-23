@@ -766,6 +766,8 @@ export interface ConvBug {
   kod: string;
   puan: number;
   alinti: string;
+  /** Alıntı yerine durum (B39: not yok / eksik). */
+  ihlal?: string;
   dogrusu: string;
   rep_id: string | null;
   item_id: number;

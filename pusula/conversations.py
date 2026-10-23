@@ -53,6 +53,8 @@ SCORE_KEYS = sonar41.DIM_KEYS
 SCORE_LABELS = dict(sonar41.DIMS)
 # Bu puan ve altı "bug"tır.
 BUG_MAX = 2
+# SONAR-41'de CRM notu davranışı.
+NOTE_CODE = "B39"
 # Görüşmeden sonra bu süre içinde aynı temsilcinin lead'e yazdığı not o görüşmenindir.
 NOTE_WINDOW = timedelta(hours=3)
 # Önceki notlar için geriye bakış.
@@ -578,6 +580,9 @@ Puanlama ("sonar"):
 - B35 için önceki notları kullan: takip, önceki görüşmeden somut bir referansla mı başladı.
 - Puan 2 ve altıysa "dogrusu"na temsilcinin o anda müşteriye söylemesi gereken tek, doğal bir
   cümle yaz (bu görüşmenin bağlamına göre, Rexven diliyle). Puan 3 ve üstündeyse boş bırak.
+  Transkriptte geçmeyen fiyat, tarih, isim ya da paket bilgisi yazma. B39'da "dogrusu" müşteriye
+  söz değil, temsilcinin yazması gereken kısa CRM notudur ("İhtiyaç: … Engel: … Karar: …
+  Sonraki adım: …"), yalnız transkriptteki olgularla.
 - B39 CRM notudur: not yoksa (ve görüşme analiz edilebilirse) B39 = 1, alıntı olarak görüşmenin
   son cümlesini ver. Not varsa notun içeriğine göre puanla; alıntı transkriptten.
 
@@ -675,10 +680,21 @@ def bug_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for row in a.get("sonar") or []:
             score = row.get("puan") or 0
             if row.get("kod") in sonar41.BEHAVIORS and 1 <= score <= BUG_MAX:
+                crm = a.get("crm") or {}
+                # B39'un alıntısı görüşmenin son cümlesidir; ihlali not durumu anlatır.
+                if row["kod"] == NOTE_CODE:
+                    ihlal = (
+                        f"Not yazıldı ama eksik: {crm.get('yorum')}" if crm.get("not_var") and crm.get("yorum")
+                        else "Not yazıldı ama eksik." if crm.get("not_var")
+                        else "Görüşmeden sonra CRM notu yazılmadı."
+                    )
+                else:
+                    ihlal = ""
                 out.append({
                     "kod": row["kod"],
                     "puan": score,
-                    "alinti": row.get("alinti") or "",
+                    "alinti": "" if ihlal else row.get("alinti") or "",
+                    "ihlal": ihlal,
                     "dogrusu": row.get("dogrusu") or "",
                     "rep_id": item.get("rep_id"),
                     "item_id": item.get("id"),

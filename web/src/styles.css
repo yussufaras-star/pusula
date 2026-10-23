@@ -3251,6 +3251,7 @@ textarea.f-input {
   grid-template-columns: minmax(0, 1fr) 110px auto;
   align-items: center;
   margin-bottom: 8px;
+}
 .fin-desc .co-tag {
   margin-left: 6px;
 }
@@ -3575,4 +3576,22 @@ textarea.f-input {
 .cv-bugs .label.good,
 .cv-bug-fix .label.good {
   color: var(--good-ink);
+}
+
+.cv-bug-dim + .cv-bug-dim {
+  margin-top: 18px;
+}
+
+.cv-bug-dim-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+  border-bottom: 2px solid var(--border);
+  font-size: 15px;
+}
+
+.cv-bug-dim-head .muted {
+  font-size: 12.5px;
 }
