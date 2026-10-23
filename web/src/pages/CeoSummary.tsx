@@ -44,9 +44,9 @@ export function CeoSummaryPage() {
     <div className="ceo-page">
       <div className="page-head">
         <div>
-          <h1>CEO özeti</h1>
+          <h1>Yönetici özeti</h1>
           <div className="sub">
-            Her sabah son iş gününün özeti Mehmet Tek'e Cliq'ten gider · ciro ve yeni müşteri tüm şirket, huni satış ekibi
+            Her sabah son iş gününün özeti Cliq'te #headquarters kanalına gider · ciro ve yeni müşteri tüm şirket, huni satış ekibi
           </div>
         </div>
         {rows.length ? (
@@ -72,7 +72,7 @@ export function CeoSummaryPage() {
             </span>
           </div>
           <div className="card-body ceo-frame-wrap">
-            <iframe className="ceo-frame" title="CEO özeti kartı" srcDoc={s.html} sandbox="" />
+            <iframe className="ceo-frame" title="Yönetici özeti kartı" srcDoc={s.html} sandbox="" />
           </div>
         </section>
       ) : null}

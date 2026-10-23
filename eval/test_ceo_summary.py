@@ -41,7 +41,7 @@ def test_render_has_result_month_funnel_and_team() -> None:
         "kalite": None,
     }
     text = cs.render(s)
-    assert "24 Ekim Cumartesi" in text and "(pazar dahil)" in text
+    assert "Satış Operasyonu Yönetici Özeti" in text and "24 Ekim Cumartesi" in text and "(pazar dahil)" in text
     assert "57 / 67 yeni müşteri (%85)" in text and "3,17 M TL / 3,15 M TL" in text
     assert "arama: 212 (↑ ort. 157)" in text and "toplantı planlanan: 8 (↓ ort. 12)" in text
     assert "*Ekip:* normal" in text
@@ -58,7 +58,7 @@ def test_cliq_card_sections() -> None:
         "bugun_toplanti": 10, "istisnalar": ["Ayşe Kar izinli"], "kalite": None,
     }
     note, card, slides = cs.cliq_card(s)
-    assert note == "3 yeni müşteri · 176 B TL" and card["title"] == "Satış özeti · 22 Ekim Perşembe"
+    assert note == "3 yeni müşteri · 176 B TL" and card["title"] == "Satış Operasyonu Yönetici Özeti · 22 Ekim Perşembe"
     funnel = next(x for x in slides if x["type"] == "table")
     assert len(funnel["data"]["rows"]) == 5  # ölçülmeyen adım yok
     assert funnel["data"]["rows"][1] == {"Adım": "Arama", "Gün": "212", "4 hafta ort.": "157 ↑"}
@@ -82,3 +82,12 @@ def test_card_html_colours_and_sections() -> None:
     assert "hedefin altında" in html and "hedefin üstünde" in html  # müşteri tempo altında, ciro üstünde
     assert "▼ %33" in html and "▲ %35" in html
     assert "Ayşe &lt;Kar&gt; izinli" in html  # kaçış
+
+
+def test_workdays_skip_sundays_and_public_holidays() -> None:
+    from pusula.panel_ciro import is_workday, workdays_inclusive
+
+    assert not is_workday(date(2026, 10, 29))  # Cumhuriyet Bayramı
+    assert is_workday(date(2026, 10, 28))  # arife yarım gün, iş günü
+    assert workdays_inclusive(date(2026, 10, 1), date(2026, 10, 31)) == 26  # 31 gün − 4 pazar − 29 Ekim
+    assert cs.report_day(date(2026, 10, 30)) == date(2026, 10, 28)  # cuma → (29 tatil) çarşamba

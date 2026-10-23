@@ -34,9 +34,9 @@ def test_forecast_projects_pace_to_month_end() -> None:
 
 
 def test_elapsed_counts_today_by_shift_fraction() -> None:
-    # Ekim 2026: 27 iş günü (pazarlar hariç). 13 Ekim Salı 13:30 → 10 tam gün (4 ve 11 Ekim pazar) + yarım.
+    # Ekim 2026: 26 iş günü (pazarlar ve 29 Ekim hariç). 13 Ekim Salı 13:30 → 10 tam gün (4 ve 11 Ekim pazar) + yarım.
     done, total = elapsed_workdays(date(2026, 10, 1), datetime(2026, 10, 13, 13, 30, tzinfo=TZ))
-    assert total == 27
+    assert total == 26
     assert done == 10.5
     assert elapsed_workdays(date(2026, 9, 1), datetime(2026, 10, 13, tzinfo=TZ)) == (26.0, 26)
 
@@ -83,4 +83,4 @@ def test_past_day_view_uses_end_of_that_day() -> None:
     assert commission_asof("2026-10-14", today) is None and commission_asof(None, today) is None
     # 13 Ekim gün sonu: 10 tam iş günü + 13'ü tamamı = 11.
     done, total = elapsed_workdays(date(2026, 10, 1), as_of_moment(date(2026, 10, 13)))
-    assert (done, total) == (11.0, 27)
+    assert (done, total) == (11.0, 26)

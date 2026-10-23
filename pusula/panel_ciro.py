@@ -96,9 +96,24 @@ def add_months(day: date, delta: int) -> date:
     return date(year, month, 1)
 
 
+# Tam gün resmi tatiller (Türkiye). Arife yarım günleri iş günü sayılır.
+# Dini bayramlar Diyanet takviminden; idari izin eklenirse buraya yazılır.
+PUBLIC_HOLIDAYS = frozenset(
+    date.fromisoformat(d)
+    for d in (
+        "2026-01-01", "2026-03-20", "2026-03-21", "2026-03-22", "2026-04-23", "2026-05-01",
+        "2026-05-19", "2026-05-27", "2026-05-28", "2026-05-29", "2026-05-30", "2026-07-15",
+        "2026-08-30", "2026-10-29",
+        "2027-01-01", "2027-03-09", "2027-03-10", "2027-03-11", "2027-04-23", "2027-05-01",
+        "2027-05-16", "2027-05-17", "2027-05-18", "2027-05-19", "2027-07-15", "2027-08-30",
+        "2027-10-29",
+    )
+)
+
+
 def is_workday(day: date) -> bool:
-    """Pazar hariç her gün; cumartesi iş günüdür."""
-    return day.weekday() != SUNDAY
+    """Pazar ve resmi tatiller hariç her gün; cumartesi iş günüdür."""
+    return day.weekday() != SUNDAY and day not in PUBLIC_HOLIDAYS
 
 
 def workdays_inclusive(start: date, end: date) -> int:
