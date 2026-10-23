@@ -20,7 +20,7 @@ from pusula.metrics import Span
 from pusula.okr_template import PLAN_2026
 from pusula.panel_ciro import is_workday, workdays_inclusive
 from pusula.panel_data import connect
-from pusula.sales_report import build_sales_report, new_customers_by_owner, won_by_rep
+from pusula.sales_report import build_sales_report, new_customers_by_owner, reco_sales, won_by_rep
 
 RECIPIENT = "mehmet.tek@rexven.com"
 # Doluluğu bunun altında kalan temsilci istisna olarak yazılır.
@@ -67,9 +67,12 @@ def pace(actual: float, done_days: int, total_days: int) -> float | None:
 
 def _sales(first: date, last: date) -> dict[str, float]:
     won = won_by_rep(first, last)
+    reco, reco_ciro = reco_sales(first, last)
     return {
         "satis": float(sum(new_customers_by_owner(first, last).values())),
         "ciro": float(sum(v["ciro"] for v in won.values())),
+        "reco": float(reco),
+        "reco_ciro": reco_ciro,
     }
 
 
@@ -200,6 +203,8 @@ def render(s: dict[str, Any]) -> str:
     since = "" if s["today"] - day == timedelta(days=1) else " (pazar dahil)"
     lines = [f"*Satış özeti · {day.day} {_MONTHS[day.month - 1]} {_DAYS[day.weekday()]}*", ""]
     lines.append(f"*Sonuç{since}:* {_n(s['son']['satis'])} yeni müşteri · {tl(s['son']['ciro'])} ciro")
+    if s["son"].get("reco"):
+        lines.append(f"Re-Co: {_n(s['son']['reco'])} satış · {tl(s['son']['reco_ciro'])}")
     if hedef:
         lines.append(
             f"*{ay['ad']}:* {_n(ay['satis'])} / {_n(hedef['satis'])} yeni müşteri "
@@ -208,6 +213,8 @@ def render(s: dict[str, Any]) -> str:
         )
     else:
         lines.append(f"*{ay['ad']}:* {_n(ay['satis'])} yeni müşteri · {tl(ay['ciro'])} ciro")
+    if ay.get("reco"):
+        lines.append(f"{ay['ad']} Re-Co: {_n(ay['reco'])} satış · {tl(ay['reco_ciro'])}")
     if ay["tempo_satis"] is not None:
         lines.append(
             f"Bu tempoyla ay sonu: ~{_n(ay['tempo_satis'])} yeni müşteri · ~{tl(ay['tempo_ciro'])} "
@@ -244,10 +251,12 @@ def cliq_card(s: dict[str, Any]) -> tuple[str, dict[str, Any], list[dict[str, An
     since = "" if s["today"] - day == timedelta(days=1) else " (pazar dahil)"
     result = [
         {"Yeni müşteri": _n(s["son"]["satis"])},
+        {"Re-Co": f"{_n(s['son'].get('reco'))} satış · {tl(s['son'].get('reco_ciro'))}"},
         {"Ciro": tl(s["son"]["ciro"])},
     ]
     month = [{"Yeni müşteri": f"{_n(ay['satis'])}" + (f" / {_n(hedef['satis'])} (%{ay['satis'] / hedef['satis'] * 100:.0f})" if hedef else "")},
              {"Ciro": f"{tl(ay['ciro'])}" + (f" / {tl(hedef['ciro'])} (%{ay['ciro'] / hedef['ciro'] * 100:.0f})" if hedef else "")}]
+    month.append({"Re-Co": f"{_n(ay.get('reco'))} satış · {tl(ay.get('reco_ciro'))}"})
     if ay["tempo_satis"] is not None:
         month.append({"Tempoyla ay sonu": f"~{_n(ay['tempo_satis'])} müşteri · ~{tl(ay['tempo_ciro'])}"})
     rows = []

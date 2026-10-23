@@ -71,6 +71,20 @@ def new_customers_by_owner(start: date, end: date) -> dict[str, int]:
     return {str(r): int(n) for r, n in rows}
 
 
+def reco_sales(start: date, end: date) -> tuple[int, float]:
+    """Re-Co (mevcut müşteriye yenileme) satışları: (adet, ciro). Yeni müşteriye sayılmaz."""
+    with connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT count(*)::int, coalesce(sum(amount), 0)::float FROM deal_packages
+            WHERE org_id = %s AND stage = %s AND package ILIKE 'Re-Co%%'
+              AND {_WON_DAY} BETWEEN %s AND %s
+            """,
+            (get_org_id(), WON_STAGE, start, end),
+        ).fetchone()
+    return int(row[0]), float(row[1])
+
+
 def won_team_monthly(rep_ids: list[str], today: date, months: int = 12) -> list[dict[str, Any]]:
     # Nisan 2026 öncesi CRM taşıma dönemi; satış verisi güvenilir değil (panel_ciro ile aynı).
     first = max(add_months(month_first(today), -(months - 1)), REAL_SALES_START)

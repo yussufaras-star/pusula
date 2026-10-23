@@ -75,6 +75,15 @@ def render_html(s: dict[str, Any]) -> str:
         if team
         else '<span class="chip ok">Ekip normal, sapan temsilci yok</span>'
     )
+    son = s["son"]
+    reco_line = (
+        f'<div class="sub">+ {_n(son.get("reco"))} Re-Co · {tl(son.get("reco_ciro"))}</div>'
+        if son.get("reco") else '<div class="sub">Re-Co yok</div>'
+    )
+    month_reco = (
+        f'<div class="reco">Re-Co (yenileme): <b>{_n(ay.get("reco"))}</b> satış · {tl(ay.get("reco_ciro"))}</div>'
+        if ay.get("reco") is not None else ""
+    )
     k = s.get("kalite")
     quality = ""
     if k:
@@ -97,6 +106,9 @@ body {{ margin: 0; background: #eef1f6; font-family: "Segoe UI", "Inter", "Helve
 .kpi {{ flex: 1; background: rgba(255,255,255,.14); border-radius: 12px; padding: 12px 14px; }}
 .kpi .v {{ font-size: 30px; font-weight: 800; line-height: 1.1; }}
 .kpi .l {{ font-size: 12.5px; opacity: .85; margin-top: 2px; }}
+.kpi .sub {{ font-size: 12.5px; margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,.25); }}
+.reco {{ font-size: 13.5px; color: {MUTED}; margin: -4px 0 14px; }}
+.reco b {{ color: {INK}; }}
 .section {{ padding: 18px 28px; border-top: 1px solid #e8ecf3; }}
 .h {{ font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: {MUTED}; margin-bottom: 10px; }}
 .bar-row {{ display: flex; justify-content: space-between; align-items: baseline; font-size: 15px; }}
@@ -126,7 +138,7 @@ th:first-child {{ text-align: left; }}
     <div class="t">Satış özeti</div>
     <div class="d">{day.day} {_MONTHS[day.month - 1]} {_DAYS[day.weekday()]}{since}</div>
     <div class="kpis">
-      <div class="kpi"><div class="v">{_n(s["son"]["satis"])}</div><div class="l">yeni müşteri</div></div>
+      <div class="kpi"><div class="v">{_n(s["son"]["satis"])}</div><div class="l">yeni müşteri</div>{reco_line}</div>
       <div class="kpi"><div class="v">{tl(s["son"]["ciro"])}</div><div class="l">ciro</div></div>
       <div class="kpi"><div class="v">{_n(s["bugun_toplanti"])}</div><div class="l">bugün planlı toplantı</div></div>
     </div>
@@ -134,6 +146,7 @@ th:first-child {{ text-align: left; }}
   <div class="section">
     <div class="h">{escape(ay["ad"])} · {ay["is_gunu"]}/{ay["toplam_is_gunu"]} iş günü</div>
     {_bar("Yeni müşteri", ay["satis"], hedef["satis"] if hedef else None, ay.get("tempo_satis"), _n)}
+    {month_reco}
     {_bar("Ciro", ay["ciro"], hedef["ciro"] if hedef else None, ay.get("tempo_ciro"), tl)}
   </div>
   <div class="section">
