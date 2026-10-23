@@ -53,7 +53,7 @@ def test_card_shows_stale_company_and_warnings() -> None:  # ve hesapsız şirke
         "kur_eksik": [],
     }
     html = finance_card.render_html(s)
-    assert "Finans Yönetici Özeti" in html and "veri 2026-05-25 tarihli" in html
+    assert "Finans Operasyonu Yönetici Özeti" in html and "veri 2026-05-25 tarihli" in html
     assert "2 gecikmiş planlı kalem" in html and "Eski veri: KuveytTürk Ana Hesap" in html
     assert "Rexven GmbH" in html and "bağlı hesap yok" in html
     assert "En büyük hareketler" not in html  # hareket yoksa bölüm yok

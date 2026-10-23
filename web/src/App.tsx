@@ -158,7 +158,7 @@ export function App() {
         ) : route === "finans/ozet" ? (
           <CeoSummaryPage
             endpoint="/api/finance-summary"
-            title="Finans yönetici özeti"
+            title="Finans operasyonu yönetici özeti"
             sub="Her sabah son iş gününden beri nakit, giriş-çıkış ve uyarılar Cliq'te #headquarters kanalına gider · tutarlar USD"
           />
         ) : (
