@@ -36,7 +36,7 @@ jobs:
   ceo-ozeti:
     if: ${{ vars.CEO_OZET_KANAL != '' || vars.CEO_OZET_ALICI != '' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     env:
       PYTHONUNBUFFERED: "1"
       DATABASE_URL: ${{ secrets.DATABASE_URL }}

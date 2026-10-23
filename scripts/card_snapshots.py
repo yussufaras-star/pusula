@@ -29,7 +29,9 @@ PORT = 8765
 BASE = f"http://127.0.0.1:{PORT}"
 # Görsele girmeyenler; web/src/components/ShareButton.tsx ile aynı.
 SKIP = "[data-share-skip], .link-btn, .cm-orphans"
-CARDS = [("prim", "Aylık prim hedefi"), ("temsilciler", "Temsilciler"), ("kayip", "Kayıp zaman")]
+CARDS = [("prim", "Aylık prim hedefi"), ("temsilciler", "Temsilciler ve kayıp zaman")]
+# Kayıp zaman şeridi 23 Ekim'den beri Temsilciler tablosunda (ayrı kart yok).
+ALIASES = {"kayip": "temsilciler"}
 
 
 def _wait_up(proc: subprocess.Popen, timeout: float = 60) -> None:
@@ -76,11 +78,20 @@ def capture(out: Path | None, cards: list[tuple[str, str]]) -> None:
             context.add_cookies([{"name": COOKIE_NAME, "value": cookie, "url": BASE}])
             page = context.new_page()
             page.goto(f"{BASE}/#/canli")
-            for kart, _ in cards:
-                page.wait_for_selector(f"[data-share='{kart}'] .card-body > :not(.skeleton)", timeout=90_000)
+            ready = []
+            for kart, baslik in cards:
+                try:
+                    page.wait_for_selector(f"[data-share='{kart}'] .card-body > :not(.skeleton)", timeout=90_000)
+                    ready.append((kart, baslik))
+                except Exception as exc:  # noqa: BLE001 — bir kart bulunamazsa diğerleri yine gitsin
+                    print(f"{kart}: kart bulunamadı, atlandı ({type(exc).__name__})")
+            if not ready:
+                raise RuntimeError("Hiçbir kart bulunamadı")
+            cards = ready
             page.wait_for_load_state("networkidle")
             page.wait_for_function("!document.querySelector('[data-share] .skeleton')", timeout=60_000)
-            page.add_style_tag(content=f"{SKIP}{{display:none !important}}")
+            # Yapışkan üst menü kartın başlığının üstüne biniyor; görselde menü yok.
+            page.add_style_tag(content=f"{SKIP}, header{{display:none !important}}")
             for kart, baslik in cards:
                 png = page.locator(f"[data-share='{kart}']").screenshot()
                 if out:
@@ -121,7 +132,7 @@ def main() -> None:
     parser.add_argument("--cards", default=",".join(k for k, _ in CARDS), help="Virgülle kart adları")
     parser.add_argument("--sync", action="store_true", help="Önce verileri güncelle")
     args = parser.parse_args()
-    wanted = {c.strip() for c in args.cards.split(",") if c.strip()}
+    wanted = {ALIASES.get(c.strip(), c.strip()) for c in args.cards.split(",") if c.strip()}
     unknown = wanted - {k for k, _ in CARDS}
     if unknown or not wanted:
         parser.error(f"Bilinmeyen kart: {', '.join(sorted(unknown)) or 'boş'}")

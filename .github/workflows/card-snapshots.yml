@@ -1,5 +1,5 @@
 # Ekip Cliq kanalına kart görselleri, önce veri güncellenir (İstanbul, Pzt–Cmt):
-# 12:30 Temsilciler + Kayıp zaman · 15:30 Kayıp zaman · 18:30 (gün sonu) hepsi.
+# 12:30 ve 15:30 Temsilciler (kayıp zaman şeridi içinde) · 18:30 (gün sonu) prim + Temsilciler.
 name: card-snapshots
 
 on:
@@ -31,7 +31,8 @@ env:
 jobs:
   card-snapshots:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Ubuntu paket sunucusu yavaşladığında kurulum 12 dk sürebiliyor (23 Ekim).
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -54,8 +55,8 @@ jobs:
           SCHEDULE: ${{ github.event.schedule }}
         run: |
           case "$SCHEDULE" in
-            "30 9 * * 1-6") cards=temsilciler,kayip ;;
-            "30 12 * * 1-6") cards=kayip ;;
-            *) cards=prim,temsilciler,kayip ;;  # akşam ve elle çalıştırma
+            "30 9 * * 1-6") cards=temsilciler ;;
+            "30 12 * * 1-6") cards=temsilciler ;;
+            *) cards=prim,temsilciler ;;  # akşam ve elle çalıştırma (kayıp zaman Temsilciler'de)
           esac
           python scripts/card_snapshots.py --sync --cards "$cards"
