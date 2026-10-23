@@ -50,11 +50,18 @@ def main() -> int:
     print(body)
     if not args.send:
         return 0
-    to = (args.to or ceo_summary.RECIPIENT).strip()
+    # Virgülle birden çok alıcı (CEO ve yönetici).
+    to = ",".join(a.strip() for a in (args.to or ceo_summary.RECIPIENT).split(",") if a.strip())
+    note, card, slides = ceo_summary.cliq_card(summary)
     with connect() as conn:
         ceo_summary.save(conn, summary, body)
-        text, shadow_to, shadow = apply_shadow(body, to)
-        post_cliq(text, shadow_to if shadow else to)
+        text, shadow_to, shadow = apply_shadow(note, to)
+        try:
+            post_cliq(text, shadow_to if shadow else to, card=card, slides=slides)
+        except Exception as exc:  # noqa: BLE001 — kart reddedilirse düz metin gider
+            logging.warning("Cliq kartı gitmedi, metin gönderiliyor: %s", exc)
+            text, _, _ = apply_shadow(body, to)
+            post_cliq(text, shadow_to if shadow else to)
         ceo_summary.mark_sent(conn, today, shadow_to if shadow else to)
     print(f"Gönderildi: {shadow_to if shadow else to}")
     return 0

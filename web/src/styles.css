@@ -3740,3 +3740,10 @@ textarea.f-input {
   line-height: 1.55;
   color: var(--ink-2);
 }
+
+.okr-expected {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}

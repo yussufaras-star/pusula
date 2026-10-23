@@ -235,6 +235,58 @@ def render(s: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def cliq_card(s: dict[str, Any]) -> tuple[str, dict[str, Any], list[dict[str, Any]]]:
+    """Cliq kartı: (bildirim metni, kart başlığı, bölümler). Telefonda tek bakışta okunur."""
+    day: date = s["day"]
+    ay = s["ay"]
+    hedef = ay["hedef"]
+    title = f"Satış özeti · {day.day} {_MONTHS[day.month - 1]} {_DAYS[day.weekday()]}"
+    since = "" if s["today"] - day == timedelta(days=1) else " (pazar dahil)"
+    result = [
+        {"Yeni müşteri": _n(s["son"]["satis"])},
+        {"Ciro": tl(s["son"]["ciro"])},
+    ]
+    month = [{"Yeni müşteri": f"{_n(ay['satis'])}" + (f" / {_n(hedef['satis'])} (%{ay['satis'] / hedef['satis'] * 100:.0f})" if hedef else "")},
+             {"Ciro": f"{tl(ay['ciro'])}" + (f" / {tl(hedef['ciro'])} (%{ay['ciro'] / hedef['ciro'] * 100:.0f})" if hedef else "")}]
+    if ay["tempo_satis"] is not None:
+        month.append({"Tempoyla ay sonu": f"~{_n(ay['tempo_satis'])} müşteri · ~{tl(ay['tempo_ciro'])}"})
+    rows = []
+    for key in FUNNEL_KEYS:
+        value = s["huni"].get(key)
+        if value is None:
+            continue
+        ref = s["huni_kiyas"].get(key)
+        rows.append({"Adım": FUNNEL_LABEL[key].capitalize(), "Gün": _n(value),
+                     "4 hafta ort.": _n(ref) + (_arrow(value, ref) if ref else "")})
+    slides: list[dict[str, Any]] = [
+        {"type": "label", "title": f"Sonuç{since}", "data": result},
+        {"type": "label", "title": f"{ay['ad']} ({ay['is_gunu']}/{ay['toplam_is_gunu']} iş günü)", "data": month},
+        {"type": "table", "title": "Huni", "data": {"headers": ["Adım", "Gün", "4 hafta ort."], "rows": rows}},
+        {"type": "label", "title": "Bugün ve ekip", "data": [
+            {"Planlı toplantı": _n(s["bugun_toplanti"])},
+            {"Ekip": "; ".join(s["istisnalar"]) if s["istisnalar"] else "normal"},
+        ]},
+    ]
+    k = s.get("kalite")
+    if k:
+        data = [{"Analiz edilen": _n(k["analiz"])}]
+        if k.get("puan") is not None:
+            data.append({"Ortalama": f"{k['puan']:.1f}".replace(".", ",") + " / 5"})
+        if k.get("bug"):
+            data.append({"En sık hata": f"{k['bug']['kod']} {k['bug']['ad']} ({k['bug']['adet']})"})
+        if k.get("ornek"):
+            data.append({"En iyi görüşme": k["ornek"]["temsilci"]})
+        slides.append({"type": "label", "title": "Geçen hafta görüşme kalitesi", "data": data})
+    slides.append({"type": "text", "data": f"[Ayrıntı panelde]({PANEL_URL})"})
+    note = f"{_n(s['son']['satis'])} yeni müşteri · {tl(s['son']['ciro'])}"
+    return note, {"title": title, "theme": "modern-inline"}, slides
+
+
+def _arrow(value: float, ref: float) -> str:
+    change = (value - ref) / ref * 100
+    return " ↑" if change >= 5 else " ↓" if change <= -5 else ""
+
+
 # --- kayıt ve gönderim ------------------------------------------------------------
 
 SCHEMA_SQL = """

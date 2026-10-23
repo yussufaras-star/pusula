@@ -50,6 +50,14 @@ const KR_STATUS: Record<KrStatus, [string, Tone]> = {
   tamam: ["Tamam", "good"],
   kacti: ["Kaçtı", "critical"],
 };
+// Dönem sürerken renk tempodur: puan, zamana göre beklenen yerin ne kadar gerisinde.
+const TEMPO_LABEL: Record<Tone, string> = {
+  good: "tempoda",
+  warning: "riskte",
+  critical: "geride",
+  neutral: "ölçüm yok",
+};
+
 const CFR_LABEL: Record<CfrKind, string> = {
   takdir: "Takdir",
   konusma: "Konuşma",
@@ -70,6 +78,11 @@ function fmtValue(v: number | null, unit: OkrUnit): string {
 
 const grade = (s: number | null | undefined) =>
   s === null || s === undefined ? "—" : s.toLocaleString("tr-TR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+function worstTone(tones: Tone[]): Tone {
+  for (const t of ["critical", "warning", "good"] as Tone[]) if (tones.includes(t)) return t;
+  return "neutral";
+}
 
 function scoreTone(s: number | null): Tone {
   if (s === null) return "neutral";
@@ -190,9 +203,21 @@ export function BoardPage({ me }: { me: Me }) {
               label="Ekip puanı"
               value={grade(data.summary.team_score)}
               unit="/ 1,0"
-              tone={scoreTone(data.summary.team_score)}
-              badge={data.summary.team_score === null ? undefined : data.summary.team_score >= 0.7 ? "başarılı" : "takip"}
-              expected="ekip objective'lerinin ortalaması; 0,7+ başarı"
+              tone={data.state === "suruyor" ? worstTone(team.map((o) => o.tone)) : scoreTone(data.summary.team_score)}
+              badge={
+                data.summary.team_score === null
+                  ? undefined
+                  : data.state === "suruyor"
+                    ? TEMPO_LABEL[worstTone(team.map((o) => o.tone))]
+                    : data.summary.team_score >= 0.7
+                      ? "başarılı"
+                      : "takip"
+              }
+              expected={
+                data.state === "suruyor"
+                  ? `şimdiye kadarki ilerleme; dönemin %${Math.round(data.share * 100)}'i geçti`
+                  : "ekip objective'lerinin ortalaması; 0,7+ başarı"
+              }
             />
             <StatTile
               label="Yolunda"
@@ -348,9 +373,13 @@ function ObjectiveCard({
   return (
     <article className={`card okr-obj${o.status === "taslak" ? " draft" : ""}`}>
       <div className="okr-obj-head">
-        <div className={`okr-score ${o.tone}`} title={o.final_score !== null ? "Kapanış puanı" : "Anahtar sonuçların ortalaması"}>
+        <div className={`okr-score ${o.tone}`} title={
+            o.final_score !== null
+              ? "Kapanış puanı"
+              : "Rakam: Key Result'ların şimdiye kadarki ilerlemesi (0-1). Renk: zamana göre tempo — en geride kalan Key Result'a göre."
+          }>
           <span>{grade(shown)}</span>
-          <small>{o.final_score !== null ? "kapanış" : "puan"}</small>
+          <small>{o.final_score !== null ? "kapanış" : TEMPO_LABEL[o.tone]}</small>
         </div>
         <div className="okr-obj-main">
           <div className="okr-tags">
@@ -446,6 +475,11 @@ function KrRow({
         </div>
         <div className="okr-kr-score">
           <b className={`okr-grade ${tone}`}>{grade(kr.score)}</b>
+          {kr.expected !== null && kr.status !== "tamam" && kr.status !== "kacti" ? (
+            <span className="okr-expected" title="Zamana göre şu an olması gereken ilerleme">
+              beklenen {grade(kr.expected)}
+            </span>
+          ) : null}
           <ToneBadge tone={tone}>{label}</ToneBadge>
         </div>
       </div>
@@ -648,8 +682,13 @@ function Guide() {
           <div>
             <h3>Puan</h3>
             <p>
-              0,0-1,0. <span className="okr-grade good">0,7-1,0</span> teslim edildi, <span className="okr-grade warning">0,4-0,6</span>{" "}
-              ilerleme var, <span className="okr-grade critical">0,0-0,3</span> olmadı. Çubuktaki çizgi zamana göre beklenen yer.
+              Rakam 0,0-1,0 arası ilerlemedir. <b>Dönem sürerken renk tempoyu gösterir:</b> rakam, zamana göre
+              beklenen yerle (çubuktaki çizgi, "beklenen 0,3") karşılaştırılır. Bu yüzden aynı 0,2 bir Key Result'ta
+              yeşil (beklenen 0,2 — tempoda), aylık planı daha yüklü bir diğerinde kırmızı (beklenen 0,4 — geride)
+              olabilir. Hedefin rengi en geride kalan Key Result'ından gelir. <b>Dönem kapanınca</b> renk puandan gelir:{" "}
+              <span className="okr-grade good">0,7-1,0</span> teslim edildi,{" "}
+              <span className="okr-grade warning">0,4-0,6</span> ilerleme var,{" "}
+              <span className="okr-grade critical">0,0-0,3</span> olmadı.
             </p>
           </div>
           <div>
