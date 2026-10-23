@@ -3677,3 +3677,57 @@ textarea.f-input {
 .board tr.strip-row .lost-gaps {
   margin-top: 2px;
 }
+
+.card-head.clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.cv-request-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.cv-request-form .f-input:first-child {
+  flex: 1;
+  min-width: 200px;
+  max-width: 320px;
+}
+
+.cv-request-note {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+}
+
+.cv-requests {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.cv-requests > li {
+  border-top: 1px solid var(--border);
+  padding: 8px 0;
+}
+
+.cv-request-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cv-request-head .spacer {
+  flex: 1;
+}

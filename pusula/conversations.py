@@ -125,6 +125,20 @@ CREATE TABLE IF NOT EXISTS conv_notes (
     PRIMARY KEY (org_id, note_id)
 );
 CREATE INDEX IF NOT EXISTS idx_conv_notes_parent ON conv_notes (org_id, parent_id, created_at);
+CREATE TABLE IF NOT EXISTS conv_requests (
+    id            bigserial PRIMARY KEY,
+    org_id        text NOT NULL DEFAULT 'rexven',
+    phone         text NOT NULL,
+    days          int NOT NULL,
+    customer      text,
+    requested_by  text,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    item_ids      bigint[] NOT NULL DEFAULT '{}'
+);
+ALTER TABLE conv_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conv_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conv_weekly ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conv_notes ENABLE ROW LEVEL SECURITY;
 CREATE TABLE IF NOT EXISTS conv_runs (
     id           bigserial PRIMARY KEY,
     org_id       text NOT NULL DEFAULT 'rexven',
@@ -133,6 +147,7 @@ CREATE TABLE IF NOT EXISTS conv_runs (
     finished_at  timestamptz,
     report       jsonb
 );
+ALTER TABLE conv_runs ENABLE ROW LEVEL SECURITY;
 """
 
 
@@ -375,10 +390,11 @@ def _pending(conn: Any, week_start: date, status: str, limit: int | None) -> lis
         SELECT c.*, r.full_name AS rep_name, e.body AS event_body FROM conv_items c
         LEFT JOIN reps r ON r.org_id = c.org_id AND r.rep_id = c.rep_id
         LEFT JOIN events e ON e.id = c.event_id
-        WHERE c.org_id = %s AND c.occurred_at >= %s AND c.occurred_at < %s
+        WHERE c.org_id = %s
+          AND ((c.occurred_at >= %s AND c.occurred_at < %s) OR c.meta ? 'talep')
           AND (c.status = %s OR (c.status = 'hata' AND c.attempts < %s
                AND (%s = 'bekliyor') = (c.transcript IS NULL)))
-        ORDER BY c.occurred_at
+        ORDER BY (c.meta ? 'talep') DESC, c.occurred_at
         {"LIMIT %s" if limit else ""}
         """,
         (get_org_id(), start, end, status, MAX_ATTEMPTS, status, *([limit] if limit else [])),
@@ -1124,6 +1140,94 @@ def run(
             )
             conn.commit()
     return report
+
+
+# --- özel analiz talebi --------------------------------------------------------------
+
+
+def request_calls(conn: Any, phone: str, days: int) -> list[dict[str, Any]]:
+    """Numaranın son `days` gündeki kayıtlı çağrıları (temsilci kategorisinden bağımsız)."""
+    cur = conn.execute(
+        """
+        SELECT e.id, e.rep_id, e.thread_id, e.direction, e.occurred_at, e.meta
+        FROM events e
+        WHERE e.org_id = %s AND e.channel = 'call'
+          AND e.occurred_at >= now() - make_interval(days => %s)
+          AND e.meta->>'voice_recording_url' IS NOT NULL
+          AND (e.thread_id IN (SELECT thread_id FROM identities
+                               WHERE org_id = %s AND id_type = 'phone' AND id_value = %s)
+               OR e.meta->>'subject' LIKE %s)
+        ORDER BY e.occurred_at
+        """,
+        (get_org_id(), days, get_org_id(), phone, f"%{phone}%"),
+    )
+    cols = [c.name for c in cur.description]
+    return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+def create_request(phone: str, days: int, by: str) -> dict[str, Any]:
+    """Numaranın kayıtlı çağrılarını analiz kuyruğuna alır. Zaten analiz edilmiş
+    görüşmeye dokunmaz; talep onları da listeler."""
+    with connect() as conn:
+        _ready(conn)
+        events = request_calls(conn, phone, days)
+        rows = [r for r in (call_row(e) for e in events) if r is not None]
+        ids: list[int] = []
+        customer = next((r["customer"] for r in rows if r.get("customer")), None)
+        for row in rows:
+            _insert_items(conn, [row])
+            item = conn.execute(
+                """
+                UPDATE conv_items SET meta = coalesce(meta, '{}'::jsonb) || jsonb_build_object('talep', true)
+                WHERE org_id = %s AND kind = 'call' AND source_ref = %s RETURNING id
+                """,
+                (get_org_id(), row["source_ref"]),
+            ).fetchone()
+            ids.append(int(item[0]))
+        req_id = conn.execute(
+            """
+            INSERT INTO conv_requests (org_id, phone, days, customer, requested_by, item_ids)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+            """,
+            (get_org_id(), phone, days, customer, by, ids),
+        ).fetchone()[0]
+        conn.commit()
+    return {"id": req_id, "kayitli": len(events), "kisa": len(events) - len(rows), "gorusme": len(ids)}
+
+
+def load_requests(limit: int = 20) -> list[dict[str, Any]]:
+    with connect() as conn:
+        _ready(conn)
+        reqs = conn.execute(
+            """
+            SELECT id, phone, days, customer, requested_by, created_at, item_ids
+            FROM conv_requests WHERE org_id = %s ORDER BY created_at DESC LIMIT %s
+            """,
+            (get_org_id(), limit),
+        ).fetchall()
+        all_ids = sorted({i for r in reqs for i in r[6]})
+        items: dict[int, dict[str, Any]] = {}
+        if all_ids:
+            cur = conn.execute(
+                """
+                SELECT c.id, c.kind, c.rep_id, r.full_name AS rep_name, c.customer, c.occurred_at,
+                       c.duration_sec, c.crm_outcome, c.status, c.error, c.analysis
+                FROM conv_items c LEFT JOIN reps r ON r.org_id = c.org_id AND r.rep_id = c.rep_id
+                WHERE c.org_id = %s AND c.id = ANY(%s)
+                """,
+                (get_org_id(), all_ids),
+            )
+            cols = [c.name for c in cur.description]
+            items = {row[0]: _item_summary(dict(zip(cols, row))) for row in cur.fetchall()}
+    out = []
+    for rid, phone, days, customer, by, created, ids in reqs:
+        rows = sorted((items[i] for i in ids if i in items), key=lambda x: x["occurred_at"])
+        out.append({
+            "id": rid, "phone": phone, "days": days, "customer": customer, "requested_by": by,
+            "created_at": created, "items": rows,
+            "durum": dict(Counter(x["status"] for x in rows)),
+        })
+    return out
 
 
 # --- panel okuma -------------------------------------------------------------------
