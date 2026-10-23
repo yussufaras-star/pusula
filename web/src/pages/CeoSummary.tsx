@@ -2,29 +2,11 @@ import { useState } from "react";
 
 import { usePolling } from "../api";
 
-// CEO özeti: sabah işi hesaplar, kaydeder ve CEO'ya Cliq'ten gönderir; burada kaydedilenler.
+// Yönetici özetleri (satış ve finans): sabah işi hesaplar, kaydeder ve Cliq kanalına
+// görsel kart olarak gönderir; burada kaydedilen kartların aynısı.
 
 interface Summary {
   day: string;
-  payload: {
-    day: string;
-    son: { satis: number; ciro: number };
-    ay: {
-      ad: string;
-      satis: number;
-      ciro: number;
-      hedef: { satis: number; ciro: number } | null;
-      tempo_satis: number | null;
-      tempo_ciro: number | null;
-      is_gunu: number;
-      toplam_is_gunu: number;
-    };
-    huni: Record<string, number | null>;
-    huni_kiyas: Record<string, number | null>;
-    bugun_toplanti: number;
-    istisnalar: string[];
-  };
-  body: string;
   html: string;
   sent_to: string | null;
   sent_at: string | null;
@@ -34,8 +16,16 @@ const dayFmt = new Intl.DateTimeFormat("tr-TR", { weekday: "long", day: "numeric
 const sentFmt = new Intl.DateTimeFormat("tr-TR", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Istanbul" });
 const fmtDay = (iso: string) => dayFmt.format(new Date(`${iso.slice(0, 10)}T12:00:00Z`));
 
-export function CeoSummaryPage() {
-  const { data, error } = usePolling<{ summaries: Summary[] }>("/api/ceo-summary", 10 * 60_000);
+export function CeoSummaryPage({
+  endpoint = "/api/ceo-summary",
+  title = "Yönetici özeti",
+  sub = "Her sabah son iş gününün özeti Cliq'te #headquarters kanalına gider · ciro ve yeni müşteri tüm şirket, huni satış ekibi",
+}: {
+  endpoint?: string;
+  title?: string;
+  sub?: string;
+}) {
+  const { data, error } = usePolling<{ summaries: Summary[] }>(endpoint, 10 * 60_000);
   const [index, setIndex] = useState(0);
   const rows = data?.summaries ?? [];
   const s = rows[index];
@@ -44,10 +34,8 @@ export function CeoSummaryPage() {
     <div className="ceo-page">
       <div className="page-head">
         <div>
-          <h1>Yönetici özeti</h1>
-          <div className="sub">
-            Her sabah son iş gününün özeti Cliq'te #headquarters kanalına gider · ciro ve yeni müşteri tüm şirket, huni satış ekibi
-          </div>
+          <h1>{title}</h1>
+          <div className="sub">{sub}</div>
         </div>
         {rows.length ? (
           <div className="controls">
@@ -72,7 +60,7 @@ export function CeoSummaryPage() {
             </span>
           </div>
           <div className="card-body ceo-frame-wrap">
-            <iframe className="ceo-frame" title="Yönetici özeti kartı" srcDoc={s.html} sandbox="" />
+            <iframe className="ceo-frame" title={`${title} kartı`} srcDoc={s.html} sandbox="" />
           </div>
         </section>
       ) : null}

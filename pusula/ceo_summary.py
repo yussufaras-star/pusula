@@ -296,9 +296,14 @@ def _arrow(value: float, ref: float) -> str:
 
 
 # --- kayıt ve gönderim ------------------------------------------------------------
+# Satış ve finans özetleri aynı biçimde kendi tablolarında tutulur (sabit adlar).
+TABLES = ("ceo_summaries", "fin_summaries")
 
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS ceo_summaries (
+
+def _schema(table: str) -> str:
+    assert table in TABLES
+    return f"""
+CREATE TABLE IF NOT EXISTS {table} (
     org_id      text NOT NULL DEFAULT 'rexven',
     day         date NOT NULL,
     payload     jsonb NOT NULL,
@@ -308,15 +313,15 @@ CREATE TABLE IF NOT EXISTS ceo_summaries (
     created_at  timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (org_id, day)
 );
-ALTER TABLE ceo_summaries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;
 """
 
 
-def save(conn: Any, summary: dict[str, Any], body: str) -> None:
-    conn.execute(SCHEMA_SQL)
+def save(conn: Any, summary: dict[str, Any], body: str, table: str = "ceo_summaries") -> None:
+    conn.execute(_schema(table))
     conn.execute(
-        """
-        INSERT INTO ceo_summaries (org_id, day, payload, body) VALUES (%s, %s, %s::jsonb, %s)
+        f"""
+        INSERT INTO {table} (org_id, day, payload, body) VALUES (%s, %s, %s::jsonb, %s)
         ON CONFLICT (org_id, day) DO UPDATE SET payload = EXCLUDED.payload, body = EXCLUDED.body, created_at = now()
         """,
         (get_org_id(), summary["today"], json.dumps(summary, ensure_ascii=False, default=str), body),
@@ -324,29 +329,30 @@ def save(conn: Any, summary: dict[str, Any], body: str) -> None:
     conn.commit()
 
 
-def sent_today(conn: Any, today: date) -> bool:
-    conn.execute(SCHEMA_SQL)
+def sent_today(conn: Any, today: date, table: str = "ceo_summaries") -> bool:
+    conn.execute(_schema(table))
     row = conn.execute(
-        "SELECT sent_at FROM ceo_summaries WHERE org_id = %s AND day = %s", (get_org_id(), today)
+        f"SELECT sent_at FROM {table} WHERE org_id = %s AND day = %s", (get_org_id(), today)
     ).fetchone()
     return bool(row and row[0])
 
 
-def mark_sent(conn: Any, today: date, to: str) -> None:
+def mark_sent(conn: Any, today: date, to: str, table: str = "ceo_summaries") -> None:
+    assert table in TABLES
     conn.execute(
-        "UPDATE ceo_summaries SET sent_to = %s, sent_at = now() WHERE org_id = %s AND day = %s",
+        f"UPDATE {table} SET sent_to = %s, sent_at = now() WHERE org_id = %s AND day = %s",
         (to, get_org_id(), today),
     )
     conn.commit()
 
 
-def load_recent(limit: int = 14) -> list[dict[str, Any]]:
+def load_recent(limit: int = 14, table: str = "ceo_summaries") -> list[dict[str, Any]]:
     with connect() as conn:
-        conn.execute(SCHEMA_SQL)
+        conn.execute(_schema(table))
         conn.commit()
         rows = conn.execute(
-            """
-            SELECT day, payload, body, sent_to, sent_at, created_at FROM ceo_summaries
+            f"""
+            SELECT day, payload, body, sent_to, sent_at, created_at FROM {table}
             WHERE org_id = %s ORDER BY day DESC LIMIT %s
             """,
             (get_org_id(), limit),

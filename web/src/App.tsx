@@ -26,7 +26,8 @@ type FinanceRoute =
   | "finans/bilanco"
   | "finans/vergi"
   | "finans/kararlar"
-  | "finans/hesaplar";
+  | "finans/hesaplar"
+  | "finans/ozet";
 type Route = SalesRoute | FinanceRoute;
 
 interface NavItem {
@@ -47,6 +48,7 @@ const NAV: Record<Area, NavItem[]> = {
   ],
   finans: [
     { route: "finans/genel", label: "Genel" },
+    { route: "finans/ozet", label: "Yönetici özeti" },
     { route: "finans/akis", label: "Nakit akışı" },
     { route: "finans/duzenli", label: "Düzenli" },
     { route: "finans/projeksiyon", label: "Projeksiyon" },
@@ -153,6 +155,12 @@ export function App() {
           <BoardPage me={me} />
         ) : route === "ceo" ? (
           <CeoSummaryPage />
+        ) : route === "finans/ozet" ? (
+          <CeoSummaryPage
+            endpoint="/api/finance-summary"
+            title="Finans yönetici özeti"
+            sub="Her sabah son iş gününden beri nakit, giriş-çıkış ve uyarılar Cliq'te #headquarters kanalına gider · tutarlar USD"
+          />
         ) : (
           // Tek bileşen: sekme değişince şirket ve tarih seçimi korunur
           <FinancePage tab={route.slice("finans/".length) as FinanceTab} />
