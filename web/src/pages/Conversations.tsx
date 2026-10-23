@@ -104,9 +104,10 @@ function scoreTone(v: number | null | undefined): Tone {
   return "critical";
 }
 
+// Ton ikonu (▲ ▼ –) burada artış/azalış ya da eksi gibi okunuyor; puan yalnız renkle verilir.
 function Score({ v }: { v: number | null | undefined }) {
   if (v === null || v === undefined) return <span className="muted">—</span>;
-  return <ToneBadge tone={scoreTone(v)}>{num(v)}</ToneBadge>;
+  return <span className={`badge ${scoreTone(v)}`}>{num(v)}</span>;
 }
 
 /** Ortalama + dağılım: aynı 3 "hep yeterli" de olabilir "bazen iyi bazen zayıf" da. */
@@ -136,6 +137,7 @@ export function ConversationsPage({ me }: { me: Me }) {
   const [repFilter, setRepFilter] = useState<string>("");
   const [openRep, setOpenRep] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<number | null>(null);
+  const [guide, setGuide] = useState(false);
   const weeks = usePolling<ConvWeeks>("/api/conversations/weeks", 0);
   const { data, error, loading, refresh } = usePolling<ConvWeek>(`/api/conversations?week=${week}`, 0);
 
@@ -201,12 +203,16 @@ export function ConversationsPage({ me }: { me: Me }) {
               ))}
             </select>
           ) : null}
+          <button className="btn" onClick={() => setGuide((g) => !g)} aria-expanded={guide}>
+            Nasıl çalışır
+          </button>
           <button className="btn" onClick={refresh} disabled={loading}>
             Yenile
           </button>
         </div>
       </div>
 
+      {guide ? <SonarGuide labels={data?.score_labels ?? {}} /> : null}
       {error ? <div className="banner error">Analizler alınamadı: {error.message}</div> : null}
       {weeks.data && !setup?.son_calisma ? (
         <div className="banner">
@@ -728,6 +734,94 @@ function BugCard({
             {all ? "Özet görünüme dön" : `Tüm ${codeCount} kodu ve ikinci örnekleri göster`}
           </button>
         ) : null}
+      </div>
+    </section>
+  );
+}
+
+function SonarGuide({ labels }: { labels: Record<string, string> }) {
+  return (
+    <section className="card okr-guide">
+      <div className="card-head">
+        <h2>SONAR-41 nasıl çalışır?</h2>
+      </div>
+      <div className="card-body">
+        <div className="okr-guide-grid">
+          <div>
+            <h3>Ne ölçer</h3>
+            <p>
+              Satış görüşmesinde olması gereken 41 davranış (B01-B41), görüşmenin akışına göre 5 boyutta:{" "}
+              {Object.entries(labels)
+                .map(([k, v]) => `${k} ${v}`)
+                .join(" → ")}
+              .
+            </p>
+          </div>
+          <div>
+            <h3>Kayıttan puana</h3>
+            <p>
+              Telefon kaydı (Verimor) ve toplantı kaydı (Zoho Meeting) her gece yazıya dökülür, temsilci ve müşteri ayrılır. 1
+              dakikadan kısa çağrılar alınmaz. Yapay zekâ her görüşmeyi 41 davranışın tanımıyla okur.
+            </p>
+          </div>
+          <div>
+            <h3>Puan 1-5</h3>
+            <p>
+              1 fırsat vardı, yapılmadı · 2 zayıf · 3 yeterli · 4 iyi · 5 örnek alınacak. Fırsatı doğmayan davranış puanlanmaz:
+              itiraz gelmediyse K3 o görüşmede boş kalır, ortalamayı düşürmez.
+            </p>
+          </div>
+          <div>
+            <h3>Kanıt</h3>
+            <p>Her puanın yanında görüşmeden birebir alıntı vardır. Alıntısı olmayan puan, güçlü yan ya da gelişim maddesi yazılmaz.</p>
+          </div>
+          <div>
+            <h3>Boyut puanı</h3>
+            <p>
+              Görüşmede o boyutta puanlanan davranışların ortalaması; haftalık puan bu görüşmelerin ortalaması. Altındaki
+              "zayıf / güçlü" sayıları 1-2 ve 4-5 alan davranışlardır: ikisi birlikte yüksekse temsilci yapabiliyor ama tutarsız.
+            </p>
+          </div>
+          <div>
+            <h3>Renkler</h3>
+            <p>
+              <span className="badge good">4+</span> iyi · <span className="badge neutral">3-3,9</span> yeterli ·{" "}
+              <span className="badge warning">2,5-2,9</span> dikkat · <span className="badge critical">2,5 altı</span> zayıf.
+            </p>
+          </div>
+          <div>
+            <h3>BUG ve DEBUG</h3>
+            <p>
+              1-2 alan davranış bir BUG'dır; alıntı, ihlalin olduğu andır. DEBUG, temsilcinin o anda söylemesi gereken cümledir ve
+              yalnız görüşmede geçen bilgiyle yazılır.
+            </p>
+          </div>
+          <div>
+            <h3>CRM notu</h3>
+            <p>
+              Görüşmeden sonraki 3 saat içinde lead'e yazılan not o görüşmenindir (B39). Not yoksa B39 = 1. Not varsa C1-C6 ile
+              puanlanır: durum doğruluğu, ihtiyaç ve profil, gerçek engel, karar süreci, sonraki adım ve tarih, nesnellik.
+            </p>
+          </div>
+          <div>
+            <h3>Örnek görüşmeler</h3>
+            <p>En az 8 davranışı puanlanmış, en az 3'ü 4-5 alan görüşmeler ortalamaya göre sıralanır; iyi anlar akış sırasıyla gösterilir.</p>
+          </div>
+          <div>
+            <h3>Ritim</h3>
+            <p>
+              Analiz her gece güncellenir, hafta pazartesi kesinleşir. Temsilciye ve kanala gönderim otomatik değildir; yönetici
+              butonla gönderir.
+            </p>
+          </div>
+          <div>
+            <h3>Sınır</h3>
+            <p>
+              Puanları yapay zekâ verir. Tek görüşmenin puanı oynak olabilir; haftalık ortalamaya bakın, az görüşmeye dayanan
+              boyutlara temkinli yaklaşın. Puan prim ya da ücretle bağlanmaz, koçluk içindir.
+            </p>
+          </div>
+        </div>
       </div>
     </section>
   );
