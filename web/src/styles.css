@@ -3731,3 +3731,12 @@ textarea.f-input {
 .cv-request-head .spacer {
   flex: 1;
 }
+
+.ceo-body {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}

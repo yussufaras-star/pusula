@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import { Logo } from "./components/Logo";
 import { FinancePage, type FinanceTab } from "./finance/FinancePage";
+import { CeoSummaryPage } from "./pages/CeoSummary";
 import { BoardPage } from "./pages/Board";
 import { ComparePage } from "./pages/Compare";
 import { ConversationsPage } from "./pages/Conversations";
@@ -15,7 +16,7 @@ import type { Me } from "./types";
 // Finans yalnız me.finance true olan yöneticide görünür; sunucu da ayrıca korur.
 type Area = "satis" | "finans";
 
-type SalesRoute = "canli" | "karsilastir" | "pano" | "raporlar" | "gorusmeler";
+type SalesRoute = "canli" | "karsilastir" | "pano" | "raporlar" | "gorusmeler" | "ceo";
 type FinanceRoute =
   | "finans/genel"
   | "finans/akis"
@@ -32,6 +33,7 @@ interface NavItem {
   route: Route;
   label: string;
   soon?: boolean;
+  admin?: boolean;
 }
 
 const NAV: Record<Area, NavItem[]> = {
@@ -41,6 +43,7 @@ const NAV: Record<Area, NavItem[]> = {
     { route: "pano", label: "OKRs" },
     { route: "raporlar", label: "Raporlar" },
     { route: "gorusmeler", label: "Görüşme Analizleri" },
+    { route: "ceo", label: "CEO özeti", admin: true },
   ],
   finans: [
     { route: "finans/genel", label: "Genel" },
@@ -122,7 +125,7 @@ export function App() {
           </div>
         ) : null}
         <nav className="nav">
-          {NAV[area].map((n) => (
+          {NAV[area].filter((n) => !n.admin || me.role === "admin").map((n) => (
             <a key={n.route} href={`#/${n.route}`} aria-current={route === n.route ? "page" : undefined}>
               {n.label}
               {n.soon ? <span className="soon">yakında</span> : null}
@@ -148,6 +151,8 @@ export function App() {
           <ConversationsPage me={me} />
         ) : route === "pano" ? (
           <BoardPage me={me} />
+        ) : route === "ceo" ? (
+          <CeoSummaryPage />
         ) : (
           // Tek bileşen: sekme değişince şirket ve tarih seçimi korunur
           <FinancePage tab={route.slice("finans/".length) as FinanceTab} />
