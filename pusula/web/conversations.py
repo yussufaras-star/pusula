@@ -56,11 +56,13 @@ def week(week: str | None = None, rep: str | None = None, user: AuthUser = Depen
     start = _week(week)
     rep_id = selected_rep(user, rep)
     # Temsilci için rep_id hep dolu: load_week ekip yorumunu çıkarır.
-    return cache.cached(
+    data = cache.cached(
         ("conv-week", start.isoformat(), rep_id),
         TTL,
         lambda: jsonable_encoder(conversations.load_week(start, rep_id)),
     )
+    # Yapay zekâ maliyeti yalnız yöneticiye.
+    return data if user.role == "admin" else {k: v for k, v in data.items() if k != "maliyet"}
 
 
 class ShareBody(BaseModel):

@@ -20,6 +20,13 @@ import type {
 } from "../types";
 
 
+const HOLD_LABEL: Record<string, string> = {
+  tuttu: "müşteriyi tuttu",
+  kismen: "kısmen tuttu",
+  birakti: "sorup bıraktı",
+  uygulanmaz: "—",
+};
+
 const TUR_LABEL: Record<string, string> = {
   kesif: "Keşif",
   sunum: "Sunum",
@@ -263,6 +270,24 @@ export function ConversationsPage({ me }: { me: Me }) {
               title="Görüşmeden sonraki 3 saat içinde temsilcinin lead'e yazdığı not (SONAR-41 B39, C1-C6)"
               tone={(stats?.crm?.oran ?? 100) < 50 ? "warning" : "neutral"}
             />
+            {stats?.musaitlik?.adet ? (
+              <StatTile
+                label="Müsait değil anı"
+                value={`${int(stats.musaitlik.tuttu)} / ${int(stats.musaitlik.adet)}`}
+                unit="tuttu"
+                expected={`kısmen ${int(stats.musaitlik.kismen)} · bıraktı ${int(stats.musaitlik.birakti)} · net geri arama ${int(stats.musaitlik.net_geri_arama)}`}
+                title="Müşteri müsait olmadığını söylediğinde temsilci ilgiyi canlı tuttu mu, yoksa 'sonra arayayım' deyip bıraktı mı"
+                tone={stats.musaitlik.birakti > stats.musaitlik.tuttu ? "warning" : "neutral"}
+              />
+            ) : null}
+            {isAdmin && data.maliyet ? (
+              <StatTile
+                label="Yapay zekâ maliyeti"
+                value={`$${(data.maliyet.analiz_usd + data.maliyet.haftalik_usd).toLocaleString("tr-TR", { maximumFractionDigits: 2 })}`}
+                expected={`${int(data.maliyet.analiz_adet)} analiz${data.durum.kota_disi ? ` · ${int(data.durum.kota_disi)} kayıt kota dışı` : ""}`}
+                title="Bu haftanın görüşme analizleri ve haftalık yorumları; toplu gönderim yarı fiyat"
+              />
+            ) : null}
           </div>
 
           {isAdmin && !repFilter && data.team?.narrative ? <TeamCard n={data.team.narrative} /> : null}
@@ -1230,6 +1255,13 @@ function ItemDetail({
                 {a.sonraki_adim.var ? a.sonraki_adim.aciklama : <span className="warn-text">net adım yok</span>}
                 {a.sonraki_adim.var && !a.sonraki_adim.tarih_net ? <span className="muted"> (tarih konuşulmadı)</span> : null}
               </p>
+              {a.musaitlik?.musait_degil ? (
+                <div className="cv-hold">
+                  <strong>Müsait değil anı:</strong> {HOLD_LABEL[a.musaitlik.tutma] ?? a.musaitlik.tutma}
+                  {a.musaitlik.geri_arama_net ? " · geri arama zamanı net" : " · geri arama zamanı belirsiz"}
+                  {a.musaitlik.alinti ? <blockquote className="cv-quote">“{a.musaitlik.alinti}”</blockquote> : null}
+                </div>
+              ) : null}
               <p>
                 <strong>Müşteri:</strong> ilgi {a.musteri.ilgi}/5 · {a.musteri.duygu}
                 {a.musteri.ihtiyaclar.length ? ` · ${a.musteri.ihtiyaclar.join("; ")}` : ""}

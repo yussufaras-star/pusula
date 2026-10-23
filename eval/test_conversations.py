@@ -1,5 +1,6 @@
 """Görüşme Analizleri: kayıt seçimi, transkript biçimi, haftalık sayılar (veritabanısız)."""
 
+from collections import Counter
 from datetime import date, datetime
 
 from pusula import conversations as cv
@@ -206,6 +207,49 @@ def test_example_calls_need_enough_strong_moments_and_sort_by_score() -> None:
     assert [e["item_id"] for e in out] == [2, 1]
     # Güçlü anlar görüşme akışı sırasıyla (B01 → B29).
     assert [m["kod"] for m in out[1]["anlar"]] == ["B01", "B03", "B29"]
+
+
+def _q(i, rep, day, sec, *, kind="call", status="atlandi", kota="aday", outcome=None, talep=False):
+    return {"id": i, "rep_id": rep, "kind": kind, "occurred_at": datetime(2026, 10, 19 + day, 12, tzinfo=TZ),
+            "duration_sec": sec, "status": status, "kota": kota, "talep": talep, "outcome": outcome,
+            "call_status": "connected", "source_ref": f"s{i}"}
+
+
+def test_plan_quota_paces_long_calls_and_takes_one_short() -> None:
+    rows = [_q(i, "r1", i % 3, 300) for i in range(1, 31)] + [_q(100, "r1", 0, 45), _q(101, "r1", 1, 50, outcome="callback")]
+    plan = cv.plan_quota(rows, elapsed_days=3, closed=False)
+    # 3 iş günü geçti: 14 * 3/6 = 7 uzun + 1 kısa (geri arama önce); kalanlar sırada.
+    assert len(plan["secilen"]) == 8 and 101 in plan["secilen"] and 100 not in plan["secilen"]
+    assert len(plan["sirada"]) == len(rows) - 8 and not plan["disi"]
+    # Günlere yayılır: 3 günün her birinden en az 2.
+    days = Counter(r["occurred_at"].day for r in rows if r["id"] in plan["secilen"] and r["duration_sec"] >= 120)
+    assert min(days.values()) >= 2
+
+
+def test_plan_quota_counts_done_items_prioritises_meetings_and_closes_week() -> None:
+    done = [_q(i, "r1", 0, 300, status="analiz_edildi", kota=None) for i in range(1, 13)]
+    pool = [_q(20, "r1", 1, 300), _q(21, "r1", 1, 300), _q(22, "r1", 2, 1800, kind="meeting"),
+            _q(23, "r1", 2, 300, talep=True)]
+    plan = cv.plan_quota(done + pool, elapsed_days=7, closed=True)
+    assert 22 in plan["secilen"] and len(plan["secilen"]) == 2  # 14 - 12 = 2; toplantı önce
+    assert plan["disi"] == [r for r in (20, 21) if r not in plan["secilen"]]
+    assert 23 not in plan["secilen"] + plan["disi"]  # talep kotaya girmez
+
+
+def test_cost_usd_batch_halves_and_cache_pricing() -> None:
+    from pusula import llm
+    tokens = {"input": 1_000_000, "output": 100_000, "cache_read": 1_000_000, "cache_write": 0}
+    assert llm.cost_usd("claude-opus-5-5", tokens) == 4.0 + 2.0 + 0.2
+    assert llm.cost_usd("claude-opus-5-5", tokens, batch=True) == 3.1
+    assert llm.cost_usd("bilinmeyen", tokens) is None
+
+
+def test_normalize_musaitlik() -> None:
+    out = cv.normalize_analysis({"musaitlik": {"musait_degil": False, "tutma": "tuttu"}})
+    assert out["musaitlik"]["tutma"] == "uygulanmaz"
+    s = cv.aggregate([{"kind": "call", "duration_sec": 50, "analysis": {
+        "analiz_edilebilir": True, "musaitlik": {"musait_degil": True, "tutma": "birakti", "geri_arama_net": False}}}])
+    assert s["musaitlik"] == {"adet": 1, "tuttu": 0, "kismen": 0, "birakti": 1, "net_geri_arama": 0}
 
 
 def test_aggregate_empty_week() -> None:

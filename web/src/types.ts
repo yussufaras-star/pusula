@@ -690,6 +690,7 @@ export interface ConvStats {
   davranislar: Record<string, { ort: number | null; adet: number; zayif: number }>;
   crm: { notlu: number; oran: number | null; puanlar: Record<string, number | null> };
   ilgi_ort: number | null;
+  musaitlik?: { adet: number; tuttu: number; kismen: number; birakti: number; net_geri_arama: number };
   sonraki_adim_orani: number | null;
   tarihli_adim_orani: number | null;
   itirazlar: Record<string, ConvObjectionStat>;
@@ -753,7 +754,7 @@ export interface ConvSonarRef {
 export interface ConvWeek {
   week_start: string;
   week_end: string;
-  durum: Record<ConvStatus, number>;
+  durum: Record<ConvStatus, number> & { kota_disi?: number };
   team: { stats: ConvStats; narrative: ConvTeamNarrative | null; created_at: string } | null;
   reps: {
     rep_id: string;
@@ -765,6 +766,7 @@ export interface ConvWeek {
   }[];
   items: ConvItemSummary[];
   dagilim: ConvSpread;
+  maliyet?: { analiz_usd: number; analiz_adet: number; haftalik_usd: number };
   bugs: ConvBug[];
   ornekler?: ConvExample[];
   score_labels: Record<ConvScoreKey, string>;
@@ -825,6 +827,7 @@ export interface ConvAnalysis {
   guclu: ConvQuoted[];
   gelisim: ConvQuoted[];
   sonraki_adim: { var: boolean; tarih_net: boolean; aciklama: string };
+  musaitlik?: { musait_degil: boolean; tutma: "tuttu" | "kismen" | "birakti" | "uygulanmaz"; geri_arama_net: boolean; alinti: string };
   riskler: { tip: string; aciklama: string; alinti: string }[];
   sozler: string[];
 }
