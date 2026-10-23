@@ -7,6 +7,7 @@ import { Modal } from "../finance/ui";
 import { ago, duration, int, minutes, num, pct, type Tone } from "../format";
 import type {
   ConvBug,
+  ConvExample,
   ConvItemDetail,
   ConvItemSummary,
   ConvSonarRef,
@@ -378,6 +379,18 @@ export function ConversationsPage({ me }: { me: Me }) {
             </section>
           ) : null}
 
+          {data.ornekler?.length ? (
+            <ExampleCard
+              examples={data.ornekler}
+              sonar={data.sonar}
+              labels={data.score_labels}
+              isAdmin={isAdmin}
+              scope={repFilter ? (repOptions.find(([id]) => id === repFilter)?.[1] ?? "") : ""}
+              weekText={`${dayFmt.format(new Date(`${data.week_start}T00:00:00Z`))} – ${dayFmt.format(new Date(`${data.week_end}T00:00:00Z`))}`}
+              onOpen={setDetailId}
+            />
+          ) : null}
+
           {data.bugs?.length ? (
             <BugCard
               bugs={data.bugs}
@@ -472,6 +485,101 @@ export function ConversationsPage({ me }: { me: Me }) {
         <ItemDetail id={detailId} sonar={data.sonar} labels={data.score_labels} onClose={() => setDetailId(null)} />
       ) : null}
     </div>
+  );
+}
+
+const EXAMPLES_SHOWN = 3;
+const callDayFmt = new Intl.DateTimeFormat("tr-TR", { weekday: "short", day: "numeric", month: "short", timeZone: "Europe/Istanbul" });
+
+/** Örnek görüşmeler: haftanın en iyi görüşmelerinde ne yapıldığı, güçlü anlar K1→K5 sırasıyla.
+ * Her görüşme kanala ayrı gönderilir. */
+function ExampleCard({
+  examples,
+  sonar,
+  labels,
+  isAdmin,
+  scope,
+  weekText,
+  onOpen,
+}: {
+  examples: ConvExample[];
+  sonar: ConvSonarRef;
+  labels: Record<string, string>;
+  isAdmin: boolean;
+  scope: string;
+  weekText: string;
+  onOpen: (id: number) => void;
+}) {
+  const [all, setAll] = useState(false);
+  const rows = all ? examples : examples.slice(0, EXAMPLES_SHOWN);
+  return (
+    <section className="card">
+      <div className="card-head">
+        <h2>Örnek görüşmeler{scope ? ` · ${scope}` : ""}</h2>
+        <span className="hint">
+          {weekText} · haftanın en yüksek puanlı görüşmeleri · 4-5 alan anlar görüşme akışı sırasıyla
+        </span>
+      </div>
+      <div className="card-body">
+        {rows.map((e, n) => (
+          <article key={e.item_id} className="cv-example" data-share={`gorusme-ornek-${e.item_id}`}>
+            <div className="cv-example-head">
+              <span className="cv-example-rank">#{n + 1}</span>
+              <div className="cv-example-title">
+                <b>{e.rep_name ?? "—"}</b>
+                <span className="muted">
+                  {" "}
+                  · {e.kind === "call" ? "telefon" : "toplantı"}
+                  {e.tur ? ` · ${TUR_LABEL[e.tur] ?? e.tur}` : ""} · {minutes((e.duration_sec ?? 0) / 60)} ·{" "}
+                  {callDayFmt.format(new Date(e.occurred_at))}
+                  {e.crm_outcome ? ` · CRM: ${e.crm_outcome}` : ""}
+                </span>
+              </div>
+              <Score v={e.puan} />
+              {isAdmin ? (
+                <ShareButton
+                  kart={`gorusme-ornek-${e.item_id}`}
+                  baslik={`Örnek görüşme · ${e.rep_name ?? ""} · ${weekText}`}
+                />
+              ) : null}
+            </div>
+            {e.ozet ? <p className="cv-example-sum">{e.ozet}</p> : null}
+            <ol className="cv-example-moments">
+              {e.anlar.map((m) => {
+                const b = sonar.behaviors[m.kod];
+                return (
+                  <li key={m.kod}>
+                    <div>
+                      <span className="cv-code">{m.kod}</span>
+                      <b>{b?.name ?? m.kod}</b>
+                      <span className="muted">
+                        {" "}
+                        · {b?.dim} {b?.dim ? labels[b.dim] : ""}
+                      </span>{" "}
+                      <Score v={m.puan} />
+                    </div>
+                    {m.alinti ? <blockquote className="cv-quote">“{m.alinti}”</blockquote> : null}
+                  </li>
+                );
+              })}
+            </ol>
+            {e.sonraki_adim ? (
+              <p className="cv-example-next">
+                <span className="label">Sonraki adım</span> {e.sonraki_adim}
+              </p>
+            ) : null}
+            <button className="link-btn" onClick={() => onOpen(e.item_id)}>
+              görüşmeyi aç
+            </button>
+          </article>
+        ))}
+        {examples.length > EXAMPLES_SHOWN ? (
+          <button className="link-btn" onClick={() => setAll((v) => !v)}>
+            {all ? `İlk ${EXAMPLES_SHOWN} görüşmeyi göster` : `${examples.length} görüşmenin hepsini göster`}
+          </button>
+        ) : null}
+      </div>
+    </section>
   );
 }
 

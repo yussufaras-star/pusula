@@ -55,6 +55,12 @@ SCORE_LABELS = dict(sonar41.DIMS)
 BUG_MAX = 2
 # SONAR-41'de CRM notu davranışı.
 NOTE_CODE = "B39"
+# Bu puan ve üstü "güçlü an"dır.
+STRONG_MIN = 4
+# Örnek görüşme: en az bu kadar davranış puanlanmış ve en az bu kadar güçlü an.
+EXAMPLE_MIN_SCORED = 8
+EXAMPLE_MIN_STRONG = 3
+EXAMPLE_LIMIT = 6
 # Görüşmeden sonra bu süre içinde aynı temsilcinin lead'e yazdığı not o görüşmenindir.
 NOTE_WINDOW = timedelta(hours=3)
 # Önceki notlar için geriye bakış.
@@ -670,6 +676,40 @@ def score_spread(items: list[dict[str, Any]]) -> dict[str, list[int]]:
     return out
 
 
+def example_calls(items: list[dict[str, Any]], limit: int = EXAMPLE_LIMIT) -> list[dict[str, Any]]:
+    """Örnek görüşmeler: yeterince davranış puanlanmış, güçlü anları çok ve ortalaması yüksek
+    görüşmeler; güçlü anlar (4-5) görüşme akışı sırasıyla (K1→K5) alıntılarıyla."""
+    out: list[dict[str, Any]] = []
+    for item in items:
+        a = item.get("analysis") or {}
+        if not a.get("analiz_edilebilir"):
+            continue
+        rows = [r for r in a.get("sonar") or [] if r.get("kod") in sonar41.BEHAVIORS and (r.get("puan") or 0) > 0]
+        strong = [r for r in rows if r["puan"] >= STRONG_MIN]
+        if len(rows) < EXAMPLE_MIN_SCORED or len(strong) < EXAMPLE_MIN_STRONG:
+            continue
+        out.append({
+            "item_id": item.get("id"),
+            "rep_id": item.get("rep_id"),
+            "rep_name": item.get("rep_name"),
+            "kind": item.get("kind"),
+            "occurred_at": item.get("occurred_at"),
+            "duration_sec": item.get("duration_sec"),
+            "crm_outcome": item.get("crm_outcome"),
+            "tur": a.get("tur"),
+            "ozet": a.get("ozet") or "",
+            "puan": round(sum(r["puan"] for r in rows) / len(rows), 2),
+            "puanlar": dim_scores(a),
+            "sonraki_adim": (a.get("sonraki_adim") or {}).get("aciklama") or "",
+            "anlar": [
+                {"kod": r["kod"], "puan": r["puan"], "alinti": r.get("alinti") or ""}
+                for r in sorted(strong, key=lambda r: sonar41.CODES.index(r["kod"]))
+            ],
+        })
+    out.sort(key=lambda e: (-e["puan"], -len(e["anlar"])))
+    return out[:limit]
+
+
 def bug_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Haftanın bug'ları (puan 2 ve altı): ihlal anı alıntısı ve doğrusu cümlesiyle."""
     out: list[dict[str, Any]] = []
@@ -1210,6 +1250,7 @@ def load_week(week_start: date, rep_id: str | None) -> dict[str, Any]:
         "items": [_item_summary(r) for r in rows],
         "dagilim": score_spread(analysed),
         "bugs": bug_rows(analysed),
+        "ornekler": example_calls(analysed),
         "score_labels": SCORE_LABELS,
         "sonar": {
             "behaviors": {

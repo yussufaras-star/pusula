@@ -193,6 +193,21 @@ def test_score_spread_and_bug_rows() -> None:
     assert bugs[2]["alinti"] == "" and bugs[2]["ihlal"] == "Görüşmeden sonra CRM notu yazılmadı."
 
 
+def test_example_calls_need_enough_strong_moments_and_sort_by_score() -> None:
+    def item(i, scores):
+        codes = ["B29", "B01", "B03", "B10", "B11", "B20", "B30", "B34", "B05"]
+        return {"id": i, "rep_id": "r", "analysis": {"analiz_edilebilir": True, "sonar": [
+            {"kod": k, "puan": p, "alinti": k} for k, p in zip(codes, scores)]}}
+    good = item(1, [5, 4, 4, 3, 3, 3, 3, 3])
+    better = item(2, [5, 5, 4, 4, 3, 3, 3, 3])
+    few = item(3, [5, 5, 5, 5])  # 8'den az davranış
+    weak = item(4, [4, 4, 3, 3, 3, 3, 3, 3])  # 3'ten az güçlü an
+    out = cv.example_calls([good, better, few, weak])
+    assert [e["item_id"] for e in out] == [2, 1]
+    # Güçlü anlar görüşme akışı sırasıyla (B01 → B29).
+    assert [m["kod"] for m in out[1]["anlar"]] == ["B01", "B03", "B29"]
+
+
 def test_aggregate_empty_week() -> None:
     s = cv.aggregate([])
     assert s["analiz"] == 0 and s["puan_ort"] is None and s["sonraki_adim_orani"] is None
