@@ -3662,3 +3662,18 @@ textarea.f-input {
   text-transform: uppercase;
   color: var(--good-ink);
 }
+
+/* Temsilciler tablosunda satır altı mesai şeridi */
+.board.with-strip tr.has-strip td {
+  border-bottom: 0;
+}
+
+.board tr.strip-row td {
+  padding-top: 0;
+  padding-bottom: 12px;
+  white-space: normal;
+}
+
+.board tr.strip-row .lost-gaps {
+  margin-top: 2px;
+}
