@@ -181,13 +181,16 @@ def test_score_spread_and_bug_rows() -> None:
             {"kod": "B01", "puan": 5, "alinti": "a"},
             {"kod": "B03", "puan": 1, "alinti": "b", "dogrusu": "c"},
             {"kod": "B29", "puan": 2, "alinti": "d"},
-        ]}},
+            {"kod": "B39", "puan": 1, "alinti": "İyi günler."},
+        ], "crm": {"not_var": False}}},
         {"id": 2, "rep_id": "r2", "analysis": {"analiz_edilebilir": False, "sonar": [{"kod": "B01", "puan": 1}]}},
     ]
     spread = cv.score_spread(items)
     assert spread["K1"] == [1, 0, 0, 0, 1] and spread["K4"] == [0, 1, 0, 0, 0] and spread["K2"] == [0] * 5
     bugs = cv.bug_rows(items)
-    assert [(b["kod"], b["puan"], b["dogrusu"], b["item_id"]) for b in bugs] == [("B03", 1, "c", 1), ("B29", 2, "", 1)]
+    assert [(b["kod"], b["puan"], b["dogrusu"], b["item_id"]) for b in bugs][:2] == [("B03", 1, "c", 1), ("B29", 2, "", 1)]
+    # B39'da alıntı (son cümle) değil not durumu gösterilir.
+    assert bugs[2]["alinti"] == "" and bugs[2]["ihlal"] == "Görüşmeden sonra CRM notu yazılmadı."
 
 
 def test_aggregate_empty_week() -> None:
