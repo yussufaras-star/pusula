@@ -244,9 +244,9 @@ function LiveBody({
       {me.role === "admin" ? (
         <section className="card" data-share="temsilciler">
           <div className="card-head">
-            <h2>Temsilciler</h2>
+            <h2>Satış Mühendisleri</h2>
             <span className="hint">en acil durum üstte · altında mesai şeridi (en uzun boşluklardan 1 sa 15 dk mola düşülür)</span>
-            <ShareButton kart="temsilciler" baslik="Temsilciler" />
+            <ShareButton kart="temsilciler" baslik="Satış Mühendisleri" />
           </div>
           <div className="card-body">
             <RepBoard
