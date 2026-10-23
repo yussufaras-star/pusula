@@ -529,11 +529,11 @@ function BugCard({
   const hidden = dims.reduce((s, d) => s + Math.max(d.codes.length - BUGS_PER_DIM, 0), 0);
 
   return (
-    <section className="card" data-share="gorusme-buglar">
+    <section className="card">
       <div className="card-head">
         <h2>Haftanın bug'ları{repName ? ` · ${repName}` : isAdmin ? " · ekip" : ""}</h2>
         <span className="hint">
-          {weekText} · SONAR-41'de 1-2 puan alan davranışlar, açılıştan kapanışa · {int(total)} ihlal, {int(codeCount)} kod
+          {weekText} · SONAR-41'de 1-2 puan alan davranışlar, açılıştan kapanışa · {int(total)} bug, {int(codeCount)} kod
           {!all && hidden ? ` · her boyutta en sık ${BUGS_PER_DIM}` : ""}
         </span>
         {isAdmin ? (
@@ -552,21 +552,25 @@ function BugCard({
             ))}
           </select>
         ) : null}
-        {isAdmin ? (
-          <ShareButton kart="gorusme-buglar" baslik={`Haftanın bug'ları · ${repName || "Ekip"} · ${weekText}`} />
-        ) : null}
       </div>
       <div className="card-body">
         {dims.length ? (
           dims.map((d) => (
-            <div key={d.dim} className="cv-bug-dim">
+            <div key={d.dim} className="cv-bug-dim" data-share={`gorusme-bug-${d.dim}`}>
               <div className="cv-bug-dim-head">
                 <b>
                   {d.dim} · {labels[d.dim]}
                 </b>
                 <span className="muted">
-                  {int(d.total)} ihlal · {int(d.codes.length)} kod
+                  {int(d.total)} bug · {int(d.codes.length)} kod · {repName || "ekip"} · {weekText}
                 </span>
+                <div className="spacer" />
+                {isAdmin ? (
+                  <ShareButton
+                    kart={`gorusme-bug-${d.dim}`}
+                    baslik={`Haftanın bug'ları · ${d.dim} ${labels[d.dim]} · ${repName || "Ekip"} · ${weekText}`}
+                  />
+                ) : null}
               </div>
               <ol className="cv-bugs">
                 {(all ? d.codes : d.codes.slice(0, BUGS_PER_DIM)).map((g) => {
@@ -589,12 +593,12 @@ function BugCard({
                         <div key={`${x.item_id}-${i}`} className="cv-bug-ex">
                           {x.ihlal || x.alinti ? (
                             <p>
-                              <span className="label bad">İhlal</span> {x.ihlal || `“${x.alinti}”`}
+                              <span className="label bad">BUG</span> {x.ihlal || `“${x.alinti}”`}
                             </p>
                           ) : null}
                           {x.dogrusu ? (
                             <p>
-                              <span className="label good">{g.kod === "B39" ? "Örnek not" : "Doğrusu"}</span> “{x.dogrusu}”
+                              <span className="label good">DEBUG</span> “{x.dogrusu}”
                             </p>
                           ) : null}
                           <button className="link-btn" onClick={() => onOpen(x.item_id)}>
@@ -1063,7 +1067,7 @@ function SonarBlock({
                     {r.alinti ? <blockquote className="cv-quote">“{r.alinti}”</blockquote> : null}
                     {r.dogrusu ? (
                       <div className="cv-bug-fix">
-                        <span className="label good">Doğrusu</span> “{r.dogrusu}”
+                        <span className="label good">DEBUG</span> “{r.dogrusu}”
                       </div>
                     ) : null}
                   </li>
