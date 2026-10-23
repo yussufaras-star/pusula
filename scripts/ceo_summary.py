@@ -33,6 +33,7 @@ def main() -> int:
     parser.add_argument("--to", default=None, help=f"Alıcı (varsayılan {ceo_summary.RECIPIENT})")
     parser.add_argument("--day", default=None, help="Bugün yerine (YYYY-AA-GG; deneme)")
     parser.add_argument("--force", action="store_true", help="Bugün gönderildiyse de gönder")
+    parser.add_argument("--channel", default=None, help="Görsel kartın gideceği Cliq kanalı (benzersiz ad)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     load_dotenv()
@@ -55,6 +56,16 @@ def main() -> int:
     note, card, slides = ceo_summary.cliq_card(summary)
     with connect() as conn:
         ceo_summary.save(conn, summary, body)
+        if args.channel:
+            # Bot kişiye görsel gönderemiyor; görsel kart yalnız CEO özeti kanalına gider.
+            from pusula import ceo_card
+            from pusula.card_share import post_channel_image
+
+            png = ceo_card.render_png(ceo_card.render_html(summary))
+            post_channel_image(png, f"satis-ozeti-{today}.png", card["title"], channel=args.channel)
+            ceo_summary.mark_sent(conn, today, f"#{args.channel}")
+            print(f"Gönderildi: #{args.channel}")
+            return 0
         text, shadow_to, shadow = apply_shadow(note, to)
         try:
             post_cliq(text, shadow_to if shadow else to, card=card, slides=slides)

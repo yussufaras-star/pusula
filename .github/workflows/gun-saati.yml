@@ -31,9 +31,10 @@ env:
 
 jobs:
   # CEO özeti: sabah iş başlar başlamaz (günde bir kez; tekrar tetiklenirse atlar).
-  # Alıcı depo değişkeni CEO_OZET_ALICI; boşsa gönderilmez.
+  # CEO_OZET_KANAL doluysa renkli görsel kart o Cliq kanalına gider (bot kişiye
+  # görsel gönderemiyor); yoksa CEO_OZET_ALICI kişilerine Cliq kartı. İkisi de boşsa gitmez.
   ceo-ozeti:
-    if: ${{ vars.CEO_OZET_ALICI != '' }}
+    if: ${{ vars.CEO_OZET_KANAL != '' || vars.CEO_OZET_ALICI != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -49,7 +50,13 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install -r requirements.txt
-      - run: python scripts/ceo_summary.py --send --to "${{ vars.CEO_OZET_ALICI }}"
+      - if: ${{ vars.CEO_OZET_KANAL != '' }}
+        run: |
+          python -m pip install playwright==1.48.0
+          python -m playwright install --with-deps chromium
+          python scripts/ceo_summary.py --send --channel "${{ vars.CEO_OZET_KANAL }}"
+      - if: ${{ vars.CEO_OZET_KANAL == '' }}
+        run: python scripts/ceo_summary.py --send --to "${{ vars.CEO_OZET_ALICI }}"
 
   kart-1230:
     runs-on: ubuntu-latest

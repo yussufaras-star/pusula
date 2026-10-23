@@ -63,3 +63,22 @@ def test_cliq_card_sections() -> None:
     assert len(funnel["data"]["rows"]) == 5  # ölçülmeyen adım yok
     assert funnel["data"]["rows"][1] == {"Adım": "Arama", "Gün": "212", "4 hafta ort.": "157 ↑"}
     assert {"Ekip": "Ayşe Kar izinli"} in slides[3]["data"]
+
+
+def test_card_html_colours_and_sections() -> None:
+    from pusula import ceo_card
+
+    s = {
+        "today": "2026-10-23", "day": "2026-10-22",
+        "son": {"satis": 3, "ciro": 176_000},
+        "ay": {"ad": "Ekim", "satis": 57, "ciro": 3_170_000, "hedef": {"satis": 67, "ciro": 3_148_330},
+               "tempo_satis": 60.0, "tempo_ciro": 4_500_000, "is_gunu": 19, "toplam_is_gunu": 27},
+        "huni": {"gelen_lead": 62, "arama": 212, "ulasilan": 93, "randevu": 8, "katildi": 7, "satis": 3},
+        "huni_kiyas": {"gelen_lead": 67, "arama": 157, "ulasilan": 82, "randevu": 12, "katildi": 5, "satis": 2},
+        "bugun_toplanti": 10, "istisnalar": ["Ayşe <Kar> izinli"], "kalite": None,
+    }
+    html = ceo_card.render_html(s)
+    assert "22 Ekim Perşembe" in html and "176 B TL" in html
+    assert "hedefin altında" in html and "hedefin üstünde" in html  # müşteri tempo altında, ciro üstünde
+    assert "▼ %33" in html and "▲ %35" in html
+    assert "Ayşe &lt;Kar&gt; izinli" in html  # kaçış
