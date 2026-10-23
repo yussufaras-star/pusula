@@ -1,4 +1,4 @@
-"""Günlük CEO özeti (satış): son iş gününün sonucu, ay hedefi ve tempo, huni,
+"""Satış Operasyonu Yönetici Özeti (günlük): son iş gününün sonucu, ay hedefi ve tempo, huni,
 bugünün toplantıları, ekipte yalnız istisnalar; pazartesi görüşme kalitesi.
 
 Sayıları kod hesaplar. Ciro ve yeni müşteri OKR'daki gibi tüm şirket; huni ve
@@ -22,7 +22,8 @@ from pusula.panel_ciro import is_workday, workdays_inclusive
 from pusula.panel_data import connect
 from pusula.sales_report import build_sales_report, new_customers_by_owner, reco_sales, won_by_rep
 
-RECIPIENT = "mehmet.tek@rexven.com"
+RECIPIENT = "yusuf.aras@rexven.com"
+TITLE = "Satış Operasyonu Yönetici Özeti"
 # Doluluğu bunun altında kalan temsilci istisna olarak yazılır.
 LOW_DOLULUK = 60.0
 # Huni kıyası: son 4 haftanın aynı günü.
@@ -201,7 +202,7 @@ def render(s: dict[str, Any]) -> str:
     ay = s["ay"]
     hedef = ay["hedef"]
     since = "" if s["today"] - day == timedelta(days=1) else " (pazar dahil)"
-    lines = [f"*Satış özeti · {day.day} {_MONTHS[day.month - 1]} {_DAYS[day.weekday()]}*", ""]
+    lines = [f"*{TITLE} · {day.day} {_MONTHS[day.month - 1]} {_DAYS[day.weekday()]}*", ""]
     lines.append(f"*Sonuç{since}:* {_n(s['son']['satis'])} yeni müşteri · {tl(s['son']['ciro'])} ciro")
     if s["son"].get("reco"):
         lines.append(f"Re-Co: {_n(s['son']['reco'])} satış · {tl(s['son']['reco_ciro'])}")
@@ -247,7 +248,7 @@ def cliq_card(s: dict[str, Any]) -> tuple[str, dict[str, Any], list[dict[str, An
     day: date = s["day"]
     ay = s["ay"]
     hedef = ay["hedef"]
-    title = f"Satış özeti · {day.day} {_MONTHS[day.month - 1]} {_DAYS[day.weekday()]}"
+    title = f"{TITLE} · {day.day} {_MONTHS[day.month - 1]} {_DAYS[day.weekday()]}"
     since = "" if s["today"] - day == timedelta(days=1) else " (pazar dahil)"
     result = [
         {"Yeni müşteri": _n(s["son"]["satis"])},

@@ -62,7 +62,15 @@ def main() -> int:
             from pusula.card_share import post_channel_image
 
             png = ceo_card.render_png(ceo_card.render_html(summary))
-            post_channel_image(png, f"satis-ozeti-{today}.png", card["title"], channel=args.channel)
+            try:
+                post_channel_image(png, f"yonetici-ozeti-{today}.png", card["title"], channel=args.channel)
+            except Exception as exc:  # noqa: BLE001 — kanal reddederse yöneticiye haber ver
+                logging.exception("Kanala gönderilemedi")
+                post_cliq(
+                    f"Yönetici özeti #{args.channel} kanalına gönderilemedi ({exc}). Bot kanalda üye mi?\n\n{body}",
+                    ceo_summary.RECIPIENT,
+                )
+                return 1
             ceo_summary.mark_sent(conn, today, f"#{args.channel}")
             print(f"Gönderildi: #{args.channel}")
             return 0

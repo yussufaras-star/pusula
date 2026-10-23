@@ -43,7 +43,7 @@ const NAV: Record<Area, NavItem[]> = {
     { route: "pano", label: "OKRs" },
     { route: "raporlar", label: "Raporlar" },
     { route: "gorusmeler", label: "Görüşme Analizleri" },
-    { route: "ceo", label: "CEO özeti", admin: true },
+    { route: "ceo", label: "Yönetici özeti", admin: true },
   ],
   finans: [
     { route: "finans/genel", label: "Genel" },

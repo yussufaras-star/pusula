@@ -135,7 +135,7 @@ th:first-child {{ text-align: left; }}
 .foot {{ padding: 10px 28px 14px; font-size: 11.5px; color: {MUTED}; background: #f8f9fc; }}
 </style></head><body><div class="card" id="card">
   <div class="top">
-    <div class="t">Satış özeti</div>
+    <div class="t">Satış Operasyonu Yönetici Özeti</div>
     <div class="d">{day.day} {_MONTHS[day.month - 1]} {_DAYS[day.weekday()]}{since}</div>
     <div class="kpis">
       <div class="kpi"><div class="v">{_n(s["son"]["satis"])}</div><div class="l">yeni müşteri</div>{reco_line}</div>
