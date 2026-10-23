@@ -1,4 +1,4 @@
-"""Finans Yönetici Özeti (günlük): konsolide ve şirket şirket nakit, son iş gününden
+"""Finans Operasyonu Yönetici Özeti (günlük): konsolide ve şirket şirket nakit, son iş gününden
 beri giriş-çıkış ve büyük hareketler, ay başından akış, 13 haftalık projeksiyonun en
 düşük haftası, uyarılar (gecikmiş ödeme, eski/hatalı hesap verisi, açık aksiyon).
 
@@ -16,7 +16,7 @@ from pusula.ceo_summary import _DAYS, _MONTHS, report_day
 from pusula.finance import analytics, store
 from pusula.finance.fx import load_fx
 
-TITLE = "Finans Yönetici Özeti"
+TITLE = "Finans Operasyonu Yönetici Özeti"
 TABLE = "fin_summaries"
 BIG_MOVES = 3
 ZERO = Decimal("0")
