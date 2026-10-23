@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from pusula import conversations
 from pusula.block_share import post_cliq
+from pusula.db.identity import normalize_phone
 from pusula.metrics import TZ
 from pusula.panel_auth import AuthUser
 from pusula.web import cache
@@ -84,6 +85,32 @@ def share(body: ShareBody, user: AuthUser = Depends(admin_user)) -> Any:
     conversations.mark_sent(start, body.rep_id, user.email)
     cache.clear()
     return {"ok": True}
+
+
+class RequestBody(BaseModel):
+    phone: str
+    days: int = 90
+
+
+@router.get("/requests")
+def requests(user: AuthUser = Depends(admin_user)) -> Any:
+    return jsonable_encoder({"requests": conversations.load_requests()})
+
+
+@router.post("/requests")
+def create_request(body: RequestBody, user: AuthUser = Depends(admin_user)) -> Any:
+    """Telefon numarasının kayıtlı görüşmelerini özel analize alır. Analiz gece işinde
+    (talep edilenler önce) ya da gece işi elle tetiklenince yapılır."""
+    phone = normalize_phone(body.phone)
+    if phone is None:
+        raise HTTPException(status_code=400, detail="Telefon numarası geçersiz")
+    if body.days not in (30, 90, 180, 365):
+        raise HTTPException(status_code=400, detail="Süre 30, 90, 180 ya da 365 gün olmalı")
+    result = conversations.create_request(phone, body.days, user.email)
+    if not result["kayitli"]:
+        raise HTTPException(status_code=404, detail=f"{phone} ile son {body.days} günde kayıtlı görüşme yok")
+    cache.clear()
+    return {**result, "phone": phone}
 
 
 @router.get("/item/{item_id}")

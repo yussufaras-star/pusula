@@ -6,6 +6,7 @@ import { StatTile, ToneBadge } from "../components/StatTile";
 import { Modal } from "../finance/ui";
 import { ago, duration, int, minutes, num, pct, type Tone } from "../format";
 import type {
+  ConvRequest,
   ConvBug,
   ConvExample,
   ConvItemDetail,
@@ -138,6 +139,8 @@ export function ConversationsPage({ me }: { me: Me }) {
   const [openRep, setOpenRep] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<number | null>(null);
   const [guide, setGuide] = useState(false);
+  const [listOpen, setListOpen] = useState(false);
+  useEffect(() => setListOpen(false), [week]);
   const weeks = usePolling<ConvWeeks>("/api/conversations/weeks", 0);
   const { data, error, loading, refresh } = usePolling<ConvWeek>(`/api/conversations?week=${week}`, 0);
 
@@ -470,20 +473,37 @@ export function ConversationsPage({ me }: { me: Me }) {
           ) : null}
 
           <section className="card">
-            <div className="card-head">
-              <h2>Görüşmeler</h2>
+            <div
+              className="card-head clickable"
+              role="button"
+              tabIndex={0}
+              aria-expanded={listOpen}
+              onClick={() => setListOpen((v) => !v)}
+              onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setListOpen((v) => !v)}
+            >
+              <h2>
+                <span className="caret" aria-hidden>
+                  {listOpen ? "▾" : "▸"}
+                </span>{" "}
+                Görüşmeler
+              </h2>
               <span className="hint">
-                {int(items.length)} görüşme · 1 dk altı çağrılar alınmaz · ayrıntı için tıkla
+                {int(items.length)} görüşme · 1 dk altı çağrılar alınmaz ·{" "}
+                {listOpen ? "ayrıntı için satıra tıkla" : "listeyi açmak için tıkla"}
               </span>
             </div>
-            <div className="card-body">
-              {items.length ? (
-                <ItemTable items={items} showRep={isAdmin && !repFilter} onOpen={setDetailId} />
-              ) : (
-                <div className="empty">Bu hafta için kayıt yok.</div>
-              )}
-            </div>
+            {listOpen ? (
+              <div className="card-body">
+                {items.length ? (
+                  <ItemTable items={items} showRep={isAdmin && !repFilter} onOpen={setDetailId} />
+                ) : (
+                  <div className="empty">Bu hafta için kayıt yok.</div>
+                )}
+              </div>
+            ) : null}
           </section>
+
+          {isAdmin ? <RequestCard onOpen={setDetailId} /> : null}
         </>
       )}
 
@@ -822,6 +842,112 @@ function SonarGuide({ labels }: { labels: Record<string, string> }) {
             </p>
           </div>
         </div>
+      </div>
+    </section>
+  );
+}
+
+const REQUEST_DAYS = [30, 90, 180, 365];
+
+/** Özel görüşme analizi: numaranın kayıtlı görüşmeleri analiz kuyruğuna önce alınır. */
+function RequestCard({ onOpen }: { onOpen: (id: number) => void }) {
+  const [phone, setPhone] = useState("");
+  const [days, setDays] = useState(90);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [openId, setOpenId] = useState<number | null>(null);
+  const { data, refresh } = usePolling<{ requests: ConvRequest[] }>("/api/conversations/requests", 5 * 60_000);
+
+  async function submit() {
+    if (!phone.trim()) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await api<{ id: number; phone: string; kayitli: number; kisa: number; gorusme: number }>(
+        "/api/conversations/requests",
+        { method: "POST", body: JSON.stringify({ phone: phone.trim(), days }) },
+      );
+      setMsg({
+        ok: r.gorusme > 0,
+        text: r.gorusme
+          ? `${r.phone}: ${r.gorusme} görüşme analize alındı${r.kisa ? ` (${r.kisa} çağrı 1 dk altı, alınmadı)` : ""}.`
+          : `${r.phone}: ${r.kayitli} kayıtlı çağrının hepsi 1 dk altı; analiz edilecek görüşme yok.`,
+      });
+      setPhone("");
+      setOpenId(r.id);
+      refresh();
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof ApiError ? e.message : "Talep oluşturulamadı" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card">
+      <div className="card-head">
+        <h2>Özel görüşme analizi</h2>
+        <span className="hint">numaranın kayıtlı görüşmeleri, haftadan bağımsız, sıranın başına alınır</span>
+      </div>
+      <div className="card-body">
+        <div className="cv-request-form">
+          <input
+            className="f-input"
+            value={phone}
+            inputMode="tel"
+            placeholder="Telefon: 0532 123 45 67"
+            onChange={(e) => setPhone(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+            aria-label="Telefon numarası"
+          />
+          <select className="f-input sm" value={days} onChange={(e) => setDays(Number(e.target.value))} aria-label="Dönem">
+            {REQUEST_DAYS.map((d) => (
+              <option key={d} value={d}>
+                son {d} gün
+              </option>
+            ))}
+          </select>
+          <button className="btn primary" onClick={submit} disabled={busy || !phone.trim()}>
+            {busy ? "Aranıyor…" : "Analiz talep et"}
+          </button>
+        </div>
+        {msg ? <div className={`banner${msg.ok ? "" : " error"}`}>{msg.text}</div> : null}
+        <p className="muted cv-request-note">
+          Kayıtlar gece işinde (01:30) yazıya dökülüp analiz edilir; talep edilenler önce işlenir. Önceden analiz edilmiş
+          görüşmeler hemen görünür.
+        </p>
+        {data?.requests.length ? (
+          <ul className="cv-requests">
+            {data.requests.map((r) => {
+              const done = r.durum.analiz_edildi ?? 0;
+              const open = openId === r.id;
+              return (
+                <li key={r.id}>
+                  <button className="cv-request-head" onClick={() => setOpenId(open ? null : r.id)} aria-expanded={open}>
+                    <span className="caret" aria-hidden>
+                      {open ? "▾" : "▸"}
+                    </span>
+                    <b>{r.customer ?? r.phone}</b>
+                    <span className="muted">
+                      {r.customer ? `${r.phone} · ` : ""}son {r.days} gün · {ago(r.created_at, new Date())}
+                    </span>
+                    <span className="spacer" />
+                    <span className={`badge ${done === r.items.length && r.items.length ? "good" : "neutral"}`}>
+                      {done}/{r.items.length} analiz edildi
+                    </span>
+                  </button>
+                  {open ? (
+                    r.items.length ? (
+                      <ItemTable items={r.items} showRep onOpen={onOpen} />
+                    ) : (
+                      <div className="empty">Analiz edilecek görüşme yok.</div>
+                    )
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
       </div>
     </section>
   );

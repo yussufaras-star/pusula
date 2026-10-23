@@ -734,6 +734,17 @@ export interface ConvItemSummary {
   risk: number;
 }
 
+export interface ConvRequest {
+  id: number;
+  phone: string;
+  days: number;
+  customer: string | null;
+  requested_by: string | null;
+  created_at: string;
+  items: ConvItemSummary[];
+  durum: Partial<Record<ConvStatus, number>>;
+}
+
 export interface ConvSonarRef {
   behaviors: Record<string, { dim: string; name: string; def?: string }>;
   crm: Record<string, string>;
