@@ -282,22 +282,23 @@ function LiveBody({
 
       {data.portfolio ? <PortfolioCard portfolio={data.portfolio} reps={data.reps} /> : null}
 
-      <section className="card" data-share="kayip">
-        <div className="card-head">
-          <h2>Kayıp zaman</h2>
-          <span className="hint">mesai şeridi · en uzun boşluklardan 1 sa 15 dk mola düşülür</span>
-          {me.role === "admin" ? <ShareButton kart="kayip" baslik="Kayıp zaman" /> : null}
-        </div>
-        <div className="card-body">
-          <LostTime reps={data.reps} day={data.day} now={data.is_today ? data.now : null} />
-        </div>
-      </section>
+      {me.role !== "admin" ? (
+        <section className="card">
+          <div className="card-head">
+            <h2>Kayıp zaman</h2>
+            <span className="hint">mesai şeridi · en uzun boşluklardan 1 sa 15 dk mola düşülür</span>
+          </div>
+          <div className="card-body">
+            <LostTime reps={data.reps} day={data.day} now={data.is_today ? data.now : null} />
+          </div>
+        </section>
+      ) : null}
 
       {me.role === "admin" ? (
         <section className="card" data-share="temsilciler">
           <div className="card-head">
             <h2>Temsilciler</h2>
-            <span className="hint">en acil durum üstte</span>
+            <span className="hint">en acil durum üstte · altında mesai şeridi (en uzun boşluklardan 1 sa 15 dk mola düşülür)</span>
             <ShareButton kart="temsilciler" baslik="Temsilciler" />
           </div>
           <div className="card-body">
@@ -310,6 +311,7 @@ function LiveBody({
               onLeave={markLeave}
               onExcuse={excuse}
               meetings={data.meetings?.by_rep}
+              strip={{ day: data.day, now: data.is_today ? data.now : null }}
             />
           </div>
         </section>

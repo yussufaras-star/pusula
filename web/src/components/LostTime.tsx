@@ -51,12 +51,76 @@ interface Props {
   now: string | null;
 }
 
-export function LostTime({ reps, day, now }: Props) {
+export function LostLegend({ future }: { future: boolean }) {
+  return (
+    <div className="legend" style={{ marginBottom: 10 }}>
+      {(["dolu", "toplanti", "mola", "kayip", "girilmemis", "muaf"] as SegmentKind[]).map((k) => (
+        <span key={k} className="key">
+          <span className={`sw tl-${k}`} /> {KIND_LABEL[k]}
+        </span>
+      ))}
+      {future ? (
+        <span className="key">
+          <span className="sw tl-future" /> Henüz gelmedi
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/** Tek temsilcinin mesai şeridi ve mola aralıkları; ticks ile saat etiketleri şeridin altında. */
+export function LostStrip({ rep, day, now, ticks = false }: { rep: RepCard; day: string; now: string | null; ticks?: boolean }) {
   const [startH, endH] = shiftHours(day);
   const lo = startH * 60;
   const span = (endH - startH) * 60;
   const pos = (iso: string) => ((Math.min(Math.max(minuteOfDay(iso), lo), lo + span) - lo) / span) * 100;
   const nowPos = now ? pos(now) : 100;
+  const breaks = breakIntervals(rep.timeline);
+  return (
+    <div className="lost-bar-wrap">
+      <div className="lost-bar" role="img" aria-label={`${rep.name} mesai şeridi`}>
+        {rep.timeline.map((s, i) => (
+          <span
+            key={i}
+            className={`tl tl-${s.kind}`}
+            style={{ left: `${pos(s.start)}%`, width: `${Math.max(pos(s.end) - pos(s.start), 0.15)}%` }}
+            title={`${KIND_LABEL[s.kind]} · ${clock(s.start)}–${clock(s.end)} · ${minutes(
+              (new Date(s.end).getTime() - new Date(s.start).getTime()) / 60000,
+            )}`}
+          />
+        ))}
+        {nowPos < 100 ? <span className="tl tl-future" style={{ left: `${nowPos}%`, width: `${100 - nowPos}%` }} /> : null}
+      </div>
+      {ticks ? (
+        <div className="lost-ticks" aria-hidden>
+          {Array.from({ length: endH - startH + 1 }, (_, i) => startH + i).map((h) => (
+            <span key={h} style={{ left: `${((h - startH) / (endH - startH)) * 100}%` }}>
+              {String(h).padStart(2, "0")}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div className="lost-gaps" title="Günün en uzun boşluklarından mola olarak düşülen aralıklar">
+        {breaks.length ? (
+          <>
+            <span className="muted">Mola</span>
+            {breaks.map((b) => (
+              <span key={b.start}>
+                {clock(b.start)}–{clock(b.end)} <b>{minutes(b.min)}</b>
+              </span>
+            ))}
+            <span className="muted">toplam {minutes(rep.today.mola_dk)}</span>
+          </>
+        ) : (
+          <span className="muted">Henüz mola düşülmedi</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function LostTime({ reps, day, now }: Props) {
+  const [startH, endH] = shiftHours(day);
 
   const rows = useMemo(
     () =>
@@ -74,22 +138,9 @@ export function LostTime({ reps, day, now }: Props) {
 
   return (
     <div className="lost">
-      <div className="legend" style={{ marginBottom: 10 }}>
-        {(["dolu", "toplanti", "mola", "kayip", "girilmemis", "muaf"] as SegmentKind[]).map((k) => (
-          <span key={k} className="key">
-            <span className={`sw tl-${k}`} /> {KIND_LABEL[k]}
-          </span>
-        ))}
-        {now ? (
-          <span className="key">
-            <span className="sw tl-future" /> Henüz gelmedi
-          </span>
-        ) : null}
-      </div>
+      <LostLegend future={!!now} />
       <div className="lost-grid">
-        {rows.map((r) => {
-          const breaks = breakIntervals(r.timeline);
-          return (
+        {rows.map((r) => (
             <div key={r.rep_id} className="lost-row">
               <div className="lost-name">
                 <div className="name">{r.name}</div>
@@ -97,38 +148,7 @@ export function LostTime({ reps, day, now }: Props) {
                   doluluk <b>{pct(r.today.doluluk)}</b>
                 </div>
               </div>
-              <div className="lost-bar-wrap">
-                <div className="lost-bar" role="img" aria-label={`${r.name} mesai şeridi`}>
-                  {r.timeline.map((s, i) => (
-                    <span
-                      key={i}
-                      className={`tl tl-${s.kind}`}
-                      style={{ left: `${pos(s.start)}%`, width: `${Math.max(pos(s.end) - pos(s.start), 0.15)}%` }}
-                      title={`${KIND_LABEL[s.kind]} · ${clock(s.start)}–${clock(s.end)} · ${minutes(
-                        (new Date(s.end).getTime() - new Date(s.start).getTime()) / 60000,
-                      )}`}
-                    />
-                  ))}
-                  {nowPos < 100 ? (
-                    <span className="tl tl-future" style={{ left: `${nowPos}%`, width: `${100 - nowPos}%` }} />
-                  ) : null}
-                </div>
-                <div className="lost-gaps" title="Günün en uzun boşluklarından mola olarak düşülen aralıklar">
-                  {breaks.length ? (
-                    <>
-                      <span className="muted">Mola</span>
-                      {breaks.map((b) => (
-                        <span key={b.start}>
-                          {clock(b.start)}–{clock(b.end)} <b>{minutes(b.min)}</b>
-                        </span>
-                      ))}
-                      <span className="muted">toplam {minutes(r.today.mola_dk)}</span>
-                    </>
-                  ) : (
-                    <span className="muted">Henüz mola düşülmedi</span>
-                  )}
-                </div>
-              </div>
+              <LostStrip rep={r} day={day} now={now} />
               <div
                 className="lost-sum"
                 title={`Mola olarak düşülen: ${minutes(r.today.mola_dk)}${
@@ -141,8 +161,7 @@ export function LostTime({ reps, day, now }: Props) {
                 <span className="sub">kayıp zaman</span>
               </div>
             </div>
-          );
-        })}
+        ))}
         {onLeave.length ? (
           <div className="muted" style={{ fontSize: 12.5 }}>
             İzinli (ölçüme girmez): {onLeave.join(", ")}

@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 
 import { ago, clock, duration, hourLabel, int, minutes, num, pace, paceTone, pct } from "../format";
 import type { Excused, MeetingSummary, RepCard, RepStatus } from "../types";
+import { LostLegend, LostStrip } from "./LostTime";
 
 const STATUS_LABEL: Record<RepStatus, string> = {
   aktif: "Aktif",
@@ -88,6 +89,8 @@ interface Props {
   onLeave?: (repId: string, on: boolean) => void;
   onExcuse?: ExcuseHandlers;
   meetings?: Record<string, MeetingSummary>;
+  /** Verilirse her temsilcinin altında mesai şeridi (kayıp zaman) gösterilir. */
+  strip?: { day: string; now: string | null };
 }
 
 export interface ExcuseHandlers {
@@ -137,7 +140,7 @@ function ExcusedCell({ card, handlers }: { card: RepCard; handlers: ExcuseHandle
   );
 }
 
-export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now, onLeave, onExcuse, meetings }: Props) {
+export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now, onLeave, onExcuse, meetings, strip }: Props) {
   const rows = useMemo(
     () =>
       [...reps].sort(
@@ -153,7 +156,8 @@ export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now, onLeave, o
 
   return (
     <div className="table-wrap">
-      <table className="board">
+      {strip ? <LostLegend future={!!strip.now} /> : null}
+      <table className={`board${strip ? " with-strip" : ""}`}>
         <thead>
           <tr>
             <th>Temsilci</th>
@@ -174,7 +178,8 @@ export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now, onLeave, o
           {rows.map((r) => {
             const idleAlert = r.idle_min !== null && r.idle_min >= warnIdle;
             return (
-              <tr key={r.rep_id}>
+              <Fragment key={r.rep_id}>
+              <tr className={strip ? "has-strip" : undefined}>
                 <td>
                   <div className="name">{r.name}</div>
                   <div className="sub">ilk faaliyet {clock(r.first_at)}</div>
@@ -245,6 +250,20 @@ export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now, onLeave, o
                   <HourStrip card={r} nowHour={nowHour} />
                 </td>
               </tr>
+              {strip ? (
+                <tr className="strip-row">
+                  <td colSpan={12}>
+                    {r.on_leave ? (
+                      <span className="muted">İzinli — mesai şeridi ölçüme girmez</span>
+                    ) : r.timeline.length ? (
+                      <LostStrip rep={r} day={strip.day} now={strip.now} ticks />
+                    ) : (
+                      <span className="muted">Mesai şeridi yok</span>
+                    )}
+                  </td>
+                </tr>
+              ) : null}
+              </Fragment>
             );
           })}
         </tbody>
