@@ -423,9 +423,9 @@ export function ConversationsPage({ me }: { me: Me }) {
             </section>
           ) : null}
 
-          {data.ornekler?.length ? (
+          {data.ornek_temsilci?.length ? (
             <ExampleCard
-              examples={data.ornekler}
+              rows={data.ornek_temsilci}
               sonar={data.sonar}
               labels={data.score_labels}
               isAdmin={isAdmin}
@@ -549,13 +549,12 @@ export function ConversationsPage({ me }: { me: Me }) {
   );
 }
 
-const EXAMPLES_SHOWN = 3;
 const callDayFmt = new Intl.DateTimeFormat("tr-TR", { weekday: "short", day: "numeric", month: "short", timeZone: "Europe/Istanbul" });
 
 /** Örnek görüşmeler: haftanın en iyi görüşmelerinde ne yapıldığı, güçlü anlar K1→K5 sırasıyla.
  * Her görüşme kanala ayrı gönderilir. */
 function ExampleCard({
-  examples,
+  rows,
   sonar,
   labels,
   isAdmin,
@@ -563,7 +562,7 @@ function ExampleCard({
   weekText,
   onOpen,
 }: {
-  examples: ConvExample[];
+  rows: { rep_id: string; rep_name: string; ornek: ConvExample | null }[];
   sonar: ConvSonarRef;
   labels: Record<string, string>;
   isAdmin: boolean;
@@ -571,74 +570,98 @@ function ExampleCard({
   weekText: string;
   onOpen: (id: number) => void;
 }) {
-  const [all, setAll] = useState(false);
-  const rows = all ? examples : examples.slice(0, EXAMPLES_SHOWN);
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const toggle = (id: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const found = rows.filter((r) => r.ornek).length;
   return (
     <section className="card">
       <div className="card-head">
         <h2>Örnek görüşmeler{scope ? ` · ${scope}` : ""}</h2>
         <span className="hint">
-          {weekText} · haftanın en yüksek puanlı görüşmeleri · 4-5 alan anlar görüşme akışı sırasıyla
+          {weekText} · her temsilcinin haftadaki en iyi görüşmesi ({found}/{rows.length}) · satıra tıkla: 4-5 alan anlar
         </span>
       </div>
       <div className="card-body">
-        {rows.map((e, n) => (
-          <article key={e.item_id} className="cv-example" data-share={`gorusme-ornek-${e.item_id}`}>
-            <div className="cv-example-head">
-              <span className="cv-example-rank">#{n + 1}</span>
-              <div className="cv-example-title">
-                <b>{e.rep_name ?? "—"}</b>
-                <span className="muted">
-                  {" "}
-                  · {e.kind === "call" ? "telefon" : "toplantı"}
-                  {e.tur ? ` · ${TUR_LABEL[e.tur] ?? e.tur}` : ""} · {minutes((e.duration_sec ?? 0) / 60)} ·{" "}
-                  {callDayFmt.format(new Date(e.occurred_at))}
-                  {e.crm_outcome ? ` · CRM: ${e.crm_outcome}` : ""}
+        {rows.map(({ rep_id, rep_name, ornek: e }) => {
+          const isOpen = !!e && open.has(rep_id);
+          return (
+            <article key={rep_id} className={`cv-example${isOpen ? " open" : ""}`} data-share={e ? `gorusme-ornek-${e.item_id}` : undefined}>
+              <div
+                className={`cv-example-head${e ? " clickable" : ""}`}
+                role={e ? "button" : undefined}
+                tabIndex={e ? 0 : undefined}
+                aria-expanded={e ? isOpen : undefined}
+                onClick={() => e && toggle(rep_id)}
+                onKeyDown={(ev) => e && (ev.key === "Enter" || ev.key === " ") && toggle(rep_id)}
+              >
+                <span className="caret" aria-hidden data-share-skip>
+                  {e ? (isOpen ? "▾" : "▸") : "·"}
                 </span>
+                <div className="cv-example-title">
+                  <b>{rep_name}</b>
+                  {e ? (
+                    <span className="muted">
+                      {" "}
+                      · {e.kind === "call" ? "telefon" : "toplantı"}
+                      {e.tur ? ` · ${TUR_LABEL[e.tur] ?? e.tur}` : ""} · {minutes((e.duration_sec ?? 0) / 60)} ·{" "}
+                      {callDayFmt.format(new Date(e.occurred_at))}
+                      {e.crm_outcome ? ` · CRM: ${e.crm_outcome}` : ""}
+                    </span>
+                  ) : (
+                    <span className="muted"> · bu hafta örnek görüşme yok</span>
+                  )}
+                </div>
+                {e ? <Score v={e.puan} /> : null}
+                {e && isOpen && isAdmin ? (
+                  <span onClick={(ev) => ev.stopPropagation()}>
+                    <ShareButton kart={`gorusme-ornek-${e.item_id}`} baslik={`Örnek görüşme · ${rep_name} · ${weekText}`} />
+                  </span>
+                ) : null}
               </div>
-              <Score v={e.puan} />
-              {isAdmin ? (
-                <ShareButton
-                  kart={`gorusme-ornek-${e.item_id}`}
-                  baslik={`Örnek görüşme · ${e.rep_name ?? ""} · ${weekText}`}
-                />
+              {e && isOpen ? (
+                <>
+                  {e.ozet ? <p className="cv-example-sum">{e.ozet}</p> : null}
+                  <ol className="cv-example-moments">
+                    {e.anlar.map((m) => {
+                      const b = sonar.behaviors[m.kod];
+                      return (
+                        <li key={m.kod}>
+                          <div>
+                            <span className="cv-code">{m.kod}</span>
+                            <b>{b?.name ?? m.kod}</b>
+                            <span className="muted">
+                              {" "}
+                              · {b?.dim} {b?.dim ? labels[b.dim] : ""}
+                            </span>{" "}
+                            <Score v={m.puan} />
+                          </div>
+                          {m.alinti ? <blockquote className="cv-quote">“{m.alinti}”</blockquote> : null}
+                        </li>
+                      );
+                    })}
+                  </ol>
+                  {e.sonraki_adim ? (
+                    <p className="cv-example-next">
+                      <span className="label">Sonraki adım</span> {e.sonraki_adim}
+                    </p>
+                  ) : null}
+                  <button className="link-btn" onClick={() => onOpen(e.item_id)}>
+                    görüşmeyi aç
+                  </button>
+                </>
               ) : null}
-            </div>
-            {e.ozet ? <p className="cv-example-sum">{e.ozet}</p> : null}
-            <ol className="cv-example-moments">
-              {e.anlar.map((m) => {
-                const b = sonar.behaviors[m.kod];
-                return (
-                  <li key={m.kod}>
-                    <div>
-                      <span className="cv-code">{m.kod}</span>
-                      <b>{b?.name ?? m.kod}</b>
-                      <span className="muted">
-                        {" "}
-                        · {b?.dim} {b?.dim ? labels[b.dim] : ""}
-                      </span>{" "}
-                      <Score v={m.puan} />
-                    </div>
-                    {m.alinti ? <blockquote className="cv-quote">“{m.alinti}”</blockquote> : null}
-                  </li>
-                );
-              })}
-            </ol>
-            {e.sonraki_adim ? (
-              <p className="cv-example-next">
-                <span className="label">Sonraki adım</span> {e.sonraki_adim}
-              </p>
-            ) : null}
-            <button className="link-btn" onClick={() => onOpen(e.item_id)}>
-              görüşmeyi aç
-            </button>
-          </article>
-        ))}
-        {examples.length > EXAMPLES_SHOWN ? (
-          <button className="link-btn" onClick={() => setAll((v) => !v)}>
-            {all ? `İlk ${EXAMPLES_SHOWN} görüşmeyi göster` : `${examples.length} görüşmenin hepsini göster`}
-          </button>
-        ) : null}
+            </article>
+          );
+        })}
+        <p className="muted cv-legend">
+          Örnek görüşme: en az 8 davranışı puanlanmış, en az 3'ü 4-5 alan görüşmelerden ortalaması en yüksek olan.
+        </p>
       </div>
     </section>
   );

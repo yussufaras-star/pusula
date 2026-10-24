@@ -275,3 +275,15 @@ def test_share_text_has_focus_code_quote_scores_and_link() -> None:
     assert "Karşılama ve Teşhis 3,0" in text and "İtiraz ve Müzakere" not in text
     assert "CRM notu yazılan görüşme: %0,0" in text
     assert "\n\n\n" not in text
+
+
+def test_examples_by_rep_one_each_and_none_when_missing() -> None:
+    def item(i, rep, scores):
+        codes = ["B29", "B01", "B03", "B10", "B11", "B20", "B30", "B34"]
+        return {"id": i, "rep_id": rep, "analysis": {"analiz_edilebilir": True, "sonar": [
+            {"kod": k, "puan": p, "alinti": k} for k, p in zip(codes, scores)]}}
+    items = [item(1, "a", [5, 4, 4, 3, 3, 3, 3, 3]), item(2, "a", [5, 5, 4, 4, 3, 3, 3, 3]),
+             item(3, "b", [4, 4, 3, 3, 3, 3, 3, 3])]  # b'de 3 güçlü an yok
+    out = cv.examples_by_rep(items, [("a", "Ayşe"), ("b", "Beytullah"), ("c", "Can")])
+    assert [(r["rep_name"], r["ornek"]["item_id"] if r["ornek"] else None) for r in out] == [
+        ("Ayşe", 2), ("Beytullah", None), ("Can", None)]
