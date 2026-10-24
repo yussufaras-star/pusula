@@ -776,6 +776,7 @@ export interface ConvWeek {
   maliyet?: { analiz_usd: number; analiz_adet: number; haftalik_usd: number };
   bugs: ConvBug[];
   ornekler?: ConvExample[];
+  ornek_temsilci?: { rep_id: string; rep_name: string; ornek: ConvExample | null }[];
   score_labels: Record<ConvScoreKey, string>;
   sonar: ConvSonarRef;
 }

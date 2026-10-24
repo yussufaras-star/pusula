@@ -35,7 +35,7 @@ from pusula import llm, recordings, sonar41, transcribe
 from pusula.config import get_org_id
 from pusula.metrics import TZ
 from pusula.occupancy import MATCH_MIN
-from pusula.panel_data import connect
+from pusula.panel_data import connect, load_reps
 from pusula.zoho.crm import coql
 
 logger = logging.getLogger(__name__)
@@ -874,7 +874,7 @@ def score_spread(items: list[dict[str, Any]]) -> dict[str, list[int]]:
     return out
 
 
-def example_calls(items: list[dict[str, Any]], limit: int = EXAMPLE_LIMIT) -> list[dict[str, Any]]:
+def example_calls(items: list[dict[str, Any]], limit: int | None = EXAMPLE_LIMIT) -> list[dict[str, Any]]:
     """Örnek görüşmeler: yeterince davranış puanlanmış, güçlü anları çok ve ortalaması yüksek
     görüşmeler; güçlü anlar (4-5) görüşme akışı sırasıyla (K1→K5) alıntılarıyla."""
     out: list[dict[str, Any]] = []
@@ -905,7 +905,15 @@ def example_calls(items: list[dict[str, Any]], limit: int = EXAMPLE_LIMIT) -> li
             ],
         })
     out.sort(key=lambda e: (-e["puan"], -len(e["anlar"])))
-    return out[:limit]
+    return out if limit is None else out[:limit]
+
+
+def examples_by_rep(items: list[dict[str, Any]], reps: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    """Her temsilcinin haftadaki en iyi örnek görüşmesi; ölçütü karşılayan yoksa None."""
+    best: dict[str, dict[str, Any]] = {}
+    for e in example_calls(items, limit=None):
+        best.setdefault(str(e["rep_id"]), e)
+    return [{"rep_id": rep_id, "rep_name": name, "ornek": best.get(rep_id)} for rep_id, name in reps]
 
 
 def bug_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1651,6 +1659,10 @@ def load_week(week_start: date, rep_id: str | None) -> dict[str, Any]:
         "maliyet": {"analiz_usd": float(cost[0]), "analiz_adet": int(cost[1]), "haftalik_usd": float(cost[2])},
         "bugs": bug_rows(analysed),
         "ornekler": example_calls(analysed),
+        "ornek_temsilci": examples_by_rep(
+            analysed,
+            [(r.rep_id, r.full_name) for r in load_reps() if rep_id is None or r.rep_id == rep_id],
+        ),
         "score_labels": SCORE_LABELS,
         "sonar": {
             "behaviors": {

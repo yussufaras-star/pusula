@@ -3762,3 +3762,16 @@ textarea.f-input {
   border-radius: 18px;
   background: #eef1f6;
 }
+
+.cv-example-head.clickable {
+  cursor: pointer;
+}
+
+.cv-example-head .caret {
+  width: 12px;
+  color: var(--muted);
+}
+
+.cv-example:not(.open) {
+  padding: 10px 0;
+}
