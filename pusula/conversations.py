@@ -675,7 +675,10 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "kod": _CODE,
                     "puan": {"type": "integer"},
-                    "alinti": _QUOTE,
+                    "alinti": {
+                        "type": "string",
+                        "description": "Transkriptten birebir; 4-5'te temsilci → müşteri (en fazla 30 kelime)",
+                    },
                     "dogrusu": {
                         "type": "string",
                         "description": "Puan 2 ve altıysa temsilcinin o anda söylemesi gereken tek cümle; değilse boş",
@@ -759,9 +762,33 @@ SONAR-41 davranışları (kod · ad: tanım):
 Puanlama ("sonar"):
 - Görüşmede fırsatı doğan her davranışı bir kez puanla. Fırsatı hiç doğmayan davranışı listeye
   koyma (ör. itiraz gelmediyse K3; görüşme ödeme sonrası destekse K1 teşhis davranışları).
-- 1: fırsat vardı, yapılmadı ya da tersi yapıldı · 2: zayıf · 3: yeterli · 4: iyi · 5: örnek alınacak.
-- Her puana transkriptten birebir en fazla 15 kelimelik alıntı ekle. Davranış yapılmadıysa
-  fırsatın doğduğu cümleyi (çoğunlukla müşterinin) alıntıla.
+- SONAR-41 genel puanlama tablosu (41 davranışın hepsine aynı uygulanır; her basamak bir
+  öncekine tek bir gözlenebilir koşul ekler: Yaptı mı? → Doğru mu? → Müşteriye özel mi? →
+  Karşılık buldu mu? → Örnek gösterilir mi?):
+  · Boş (listeye koyma) = Fırsat yok: davranışı gerektiren an görüşmede doğmadı.
+  · 1 Kaçırıldı: fırsat vardı, davranış hiç yapılmadı. Alıntı: fırsatın doğduğu an (çoğunlukla
+    müşterinin cümlesi) ve davranışın yokluğu.
+  · 2 Denendi: yapıldı ama yanlış, yüzeysel, yönlendirici, savunmacı ya da baskıcı; müşteri
+    açılmadı, kapandı ya da rahatsız oldu. Alıntı: temsilcinin hatalı/yarım cümlesi (ve müşterinin
+    kapanan cevabı).
+  · 3 Doğru: doğru yapıldı ama kalıp; herkese söylenebilir, müşteriye özel değil. Alıntı: genel,
+    standart temsilci cümlesi.
+  · 4 Uyarlanmış: görüşmede geçen bir bilgiye dayanarak müşteriye özel yapıldı VE müşteri karşılık
+    verdi. Alıntı: temsilcinin cümlesi → müşterinin olumlu/açılan tepkisi. (Hedef seviye.)
+  · 5 Örnek: 4'ün üstüne zor bir anda yapıldı ya da görüşmeyi somut, tarihli bir adıma çevirdi;
+    eğitimde dinletilebilir. Alıntı: öncesi ve sonrası — müşterinin tavrı değişti, somut adım kabul.
+  Örnek ("Düşüneyim" itirazı): 1 "Tabii, düşünün, ben sizi ararım." · 2 "Neyi düşüneceksiniz ki?" /
+  "Bugün karar vermezseniz bu fiyat kalmaz." · 3 "Aklınıza takılan bir konu var mı?" · 4 "Eşinizin
+  servis maliyetini sorduğunu söylemiştiniz, o mu?" → "Evet, aslında o." · 5 4'teki soru +
+  "Cumartesi eşinizle test sürüşü yapalım." → "Olur."
+- Kurallar: alıntı o basamağın koşulunu kanıtlamıyorsa puanı bir alta indir; alıntı yoksa
+  davranışı puanlama. Aynı fırsatta birden fazla deneme varsa görüşmenin vardığı son durumu,
+  aynı davranış için birden fazla fırsat varsa en düşük puanı esas al.
+- Müşteriye söylenmeyen davranışlarda (B39 CRM notu) 4 ve 5 için müşteri tepkisi aranmaz: 4 =
+  nota bu görüşmeye özel ihtiyaç, engel, karar verici ve sonraki adım yazılmış; 5 = ayrıca tarihli
+  adım ve devralan birinin işini sürdürebileceği netlik.
+- Alıntılar transkriptten birebir; 4 ve 5'te temsilci ve müşteri cümlesini "→" ile birleştir
+  (toplam en fazla 30 kelime), diğerlerinde en fazla 15 kelime.
 - B35 için önceki notları kullan: takip, önceki görüşmeden somut bir referansla mı başladı.
 - Puan 2 ve altıysa "dogrusu"na temsilcinin o anda müşteriye söylemesi gereken tek, doğal bir
   cümle yaz (bu görüşmenin bağlamına göre, Rexven diliyle). Puan 3 ve üstündeyse boş bırak.

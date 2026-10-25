@@ -817,6 +817,63 @@ function BugCard({
   );
 }
 
+// SONAR-41 genel puanlama tablosu (Yusuf Aras, 25 Ekim 2026); analiz talimatı aynı tabloyu kullanır.
+const SCALE: { puan: string; ad: string; tone?: Tone; olcut: string; alinti: string; ornek: string; mesaj: string }[] = [
+  {
+    puan: "Boş",
+    ad: "Fırsat yok",
+    olcut: "Davranışı gerektiren an görüşmede doğmadı. Puanlanmaz, ortalamaya girmez.",
+    alinti: "Gerekmez",
+    ornek: "Müşteri kararı ertelemedi, satış kapandı.",
+    mesaj: "Bu görüşmede ölçülmedi.",
+  },
+  {
+    puan: "1",
+    ad: "Kaçırıldı",
+    tone: "critical",
+    olcut: "Fırsat vardı, davranış hiç yapılmadı.",
+    alinti: "Fırsatın doğduğu an (müşterinin cümlesi) ve ardından davranışın yokluğu",
+    ornek: "“Tabii, düşünün, ben sizi ararım.”",
+    mesaj: "Fırsatı görmedin.",
+  },
+  {
+    puan: "2",
+    ad: "Denendi",
+    tone: "critical",
+    olcut: "Davranış yapıldı ama yanlış, yüzeysel, yönlendirici, savunmacı ya da baskıcı. Müşteri açılmadı, kapandı ya da rahatsız oldu.",
+    alinti: "Temsilcinin hatalı / yarım cümlesi ve müşterinin kapanan cevabı",
+    ornek: "“Neyi düşüneceksiniz ki?” / “Fiyat mı yüksek geldi?” / “Bugün karar vermezseniz bu fiyat kalmaz.”",
+    mesaj: "Fırsatı gördün, yöntem yanlış.",
+  },
+  {
+    puan: "3",
+    ad: "Doğru",
+    tone: "neutral",
+    olcut: "Davranış doğru yapıldı ama kalıp; herkese söylenebilir, müşteriye özel değil.",
+    alinti: "Genel, standart temsilci cümlesi",
+    ornek: "“Aklınıza takılan bir konu var mı?”",
+    mesaj: "Doğru yaptın, şimdi bu müşteriye yap.",
+  },
+  {
+    puan: "4",
+    ad: "Uyarlanmış",
+    tone: "good",
+    olcut: "Görüşmede geçen bir bilgiye dayanarak müşteriye özel yapıldı ve müşteri karşılık verdi.",
+    alinti: "Temsilcinin cümlesi + müşterinin olumlu / açılan tepkisi",
+    ornek: "“Eşinizin servis maliyetini sorduğunu söylemiştiniz, o mu?” → “Evet, aslında o.”",
+    mesaj: "Hedef seviye bu.",
+  },
+  {
+    puan: "5",
+    ad: "Örnek",
+    tone: "good",
+    olcut: "4'ün üstüne zor bir anda yapıldı ya da görüşmeyi somut, tarihli bir adıma çevirdi. Eğitimde dinletilebilir.",
+    alinti: "Öncesi ve sonrası: müşterinin tavrı değişti, somut adım kabul edildi",
+    ornek: "4'teki soru + “Cumartesi eşinizle test sürüşü yapalım.” → “Olur.”",
+    mesaj: "Bu anı ekiple paylaşacağız.",
+  },
+];
+
 function SonarGuide({ labels }: { labels: Record<string, string> }) {
   return (
     <section className="card okr-guide">
@@ -824,6 +881,48 @@ function SonarGuide({ labels }: { labels: Record<string, string> }) {
         <h2>SONAR-41 nasıl çalışır?</h2>
       </div>
       <div className="card-body">
+        <h3 className="cv-scale-title">Puanlama tablosu</h3>
+        <p className="muted cv-scale-note">
+          41 davranışın hepsine aynı uygulanır. Her basamak bir öncekine tek bir gözlenebilir koşul ekler:{" "}
+          <b>Yaptı mı? → Doğru mu? → Müşteriye özel mi? → Karşılık buldu mu? → Örnek gösterilir mi?</b> Örnekler
+          "Düşüneyim" itirazı üzerinden.
+        </p>
+        <div className="table-wrap">
+          <table className="board cv-scale">
+            <thead>
+              <tr>
+                <th>Puan</th>
+                <th>Ölçüt</th>
+                <th>Alıntı neyi kanıtlamalı</th>
+                <th>Örnek: "Düşüneyim"</th>
+                <th>Satışçıya mesaj</th>
+              </tr>
+            </thead>
+            <tbody>
+              {SCALE.map((r) => (
+                <tr key={r.puan}>
+                  <td>
+                    {r.tone ? <span className={`badge ${r.tone}`}>{r.puan}</span> : <span className="muted">{r.puan}</span>}
+                    <div className="cv-scale-name">{r.ad}</div>
+                  </td>
+                  <td>{r.olcut}</td>
+                  <td className="muted">{r.alinti}</td>
+                  <td className="cv-scale-example">{r.ornek}</td>
+                  <td>
+                    <b>{r.mesaj}</b>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="muted cv-scale-note">
+          <b>Kurallar:</b> Alıntı o basamağın koşulunu kanıtlamıyorsa puan bir alta iner; alıntı yoksa puan yazılmaz. Aynı
+          fırsatta birden fazla deneme varsa görüşmenin vardığı son durum, aynı davranış için birden fazla fırsat varsa en
+          düşük puan esas alınır. 1 ve 2 BUG üretir; DEBUG yalnızca görüşmede geçen bilgiyle yazılır. Müşteriye
+          söylenmeyen B39'da (CRM notu) 4-5 için müşteri tepkisi aranmaz, notun özelliği ve netliği ölçülür. Puan prim ya
+          da ücrete bağlanmaz, koçluk içindir.
+        </p>
         <div className="okr-guide-grid">
           <div>
             <h3>Ne ölçer</h3>
@@ -840,13 +939,6 @@ function SonarGuide({ labels }: { labels: Record<string, string> }) {
             <p>
               Telefon kaydı (Verimor) ve toplantı kaydı (Zoho Meeting) her gece yazıya dökülür, temsilci ve müşteri ayrılır. 1
               dakikadan kısa çağrılar alınmaz. Yapay zekâ her görüşmeyi 41 davranışın tanımıyla okur.
-            </p>
-          </div>
-          <div>
-            <h3>Puan 1-5</h3>
-            <p>
-              1 fırsat vardı, yapılmadı · 2 zayıf · 3 yeterli · 4 iyi · 5 örnek alınacak. Fırsatı doğmayan davranış puanlanmaz:
-              itiraz gelmediyse K3 o görüşmede boş kalır, ortalamayı düşürmez.
             </p>
           </div>
           <div>
