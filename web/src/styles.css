@@ -3877,3 +3877,13 @@ textarea.f-input {
   max-width: 100%;
   height: auto;
 }
+
+.chart .gridline.sonar-target {
+  stroke: var(--good);
+  stroke-dasharray: 5 4;
+  opacity: 0.7;
+}
+
+.chart .sonar-target-label {
+  fill: var(--good-ink);
+}

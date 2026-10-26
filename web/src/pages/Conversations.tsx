@@ -724,6 +724,15 @@ function BugCard({
 }) {
   const [rep, setRep] = useState(pageRep);
   const [all, setAll] = useState(false);
+  const [open, setOpen] = useState(true);
+  const [openDims, setOpenDims] = useState<Set<string>>(new Set());
+  const toggleDim = (dim: string) =>
+    setOpenDims((prev) => {
+      const next = new Set(prev);
+      if (next.has(dim)) next.delete(dim);
+      else next.add(dim);
+      return next;
+    });
   useEffect(() => setRep(pageRep), [pageRep]);
 
   const dims = useMemo(() => {
@@ -754,8 +763,14 @@ function BugCard({
 
   return (
     <section className="card">
-      <div className="card-head">
-        <h2>Haftanın bug'ları{repName ? ` · ${repName}` : isAdmin ? " · ekip" : ""}</h2>
+      <div className="card-head clickable" role="button" tabIndex={0} aria-expanded={open} onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setOpen((v) => !v)}>
+        <h2>
+          <span className="caret" aria-hidden>
+            {open ? "▾" : "▸"}
+          </span>{" "}
+          Haftanın bug'ları{repName ? ` · ${repName}` : isAdmin ? " · ekip" : ""}
+        </h2>
         <span className="hint">
           {weekText} · SONAR-41'de 1-2 puan alan davranışlar, açılıştan kapanışa · {int(total)} bug, {int(codeCount)} kod
           {!all && hidden ? ` · her boyutta en sık ${BUGS_PER_DIM}` : ""}
@@ -765,6 +780,7 @@ function BugCard({
             className="f-input sm"
             data-share-skip
             value={rep}
+            onClick={(e) => e.stopPropagation()}
             onChange={(e) => setRep(e.target.value)}
             aria-label="Bug kartı temsilcisi"
           >
@@ -777,11 +793,18 @@ function BugCard({
           </select>
         ) : null}
       </div>
+      {open ? (
       <div className="card-body">
         {dims.length ? (
-          dims.map((d) => (
+          dims.map((d) => {
+            const dimOpen = openDims.has(d.dim);
+            return (
             <div key={d.dim} className="cv-bug-dim" data-share={`gorusme-bug-${d.dim}`}>
-              <div className="cv-bug-dim-head">
+              <div className="cv-bug-dim-head clickable" role="button" tabIndex={0} aria-expanded={dimOpen}
+                onClick={() => toggleDim(d.dim)} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && toggleDim(d.dim)}>
+                <span className="caret" aria-hidden data-share-skip>
+                  {dimOpen ? "▾" : "▸"}
+                </span>
                 <b>
                   {d.dim} · {labels[d.dim]}
                 </b>
@@ -789,13 +812,16 @@ function BugCard({
                   {int(d.total)} bug · {int(d.codes.length)} kod · {repName || "ekip"} · {weekText}
                 </span>
                 <div className="spacer" />
-                {isAdmin ? (
-                  <ShareButton
-                    kart={`gorusme-bug-${d.dim}`}
-                    baslik={`Haftanın bug'ları · ${d.dim} ${labels[d.dim]} · ${repName || "Ekip"} · ${weekText}`}
-                  />
+                {isAdmin && dimOpen ? (
+                  <span onClick={(e) => e.stopPropagation()}>
+                    <ShareButton
+                      kart={`gorusme-bug-${d.dim}`}
+                      baslik={`Haftanın bug'ları · ${d.dim} ${labels[d.dim]} · ${repName || "Ekip"} · ${weekText}`}
+                    />
+                  </span>
                 ) : null}
               </div>
+              {dimOpen ? (
               <ol className="cv-bugs">
                 {(all ? d.codes : d.codes.slice(0, BUGS_PER_DIM)).map((g) => {
                   const b = sonar.behaviors[g.kod];
@@ -834,8 +860,10 @@ function BugCard({
                   );
                 })}
               </ol>
+              ) : null}
             </div>
-          ))
+            );
+          })
         ) : (
           <div className="empty">Bu hafta {repName ? `${repName} için ` : ""}bug yok.</div>
         )}
@@ -845,6 +873,7 @@ function BugCard({
           </button>
         ) : null}
       </div>
+      ) : null}
     </section>
   );
 }
@@ -1199,13 +1228,25 @@ function RunNotes({ report }: { report: Record<string, unknown> }) {
 }
 
 function TeamCard({ n, weekText }: { n: NonNullable<NonNullable<ConvWeek["team"]>["narrative"]>; weekText: string }) {
+  const [open, setOpen] = useState(true);
   return (
     <section className="card" data-share="gorusme-haftanin-ozeti">
-      <div className="card-head">
-        <h2>Haftanın özeti · {weekText}</h2>
-        <span className="hint">yapay zekâ yorumu · sayılar koddan</span>
-        <ShareButton kart="gorusme-haftanin-ozeti" baslik={`Görüşme analizleri · haftanın özeti · ${weekText}`} />
+      <div className="card-head clickable" role="button" tabIndex={0} aria-expanded={open} onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setOpen((v) => !v)}>
+        <h2>
+          <span className="caret" aria-hidden data-share-skip>
+            {open ? "▾" : "▸"}
+          </span>{" "}
+          Haftanın özeti · {weekText}
+        </h2>
+        <span className="hint">Pusula'nın yorumu · sayılar koddan</span>
+        {open ? (
+          <span onClick={(e) => e.stopPropagation()}>
+            <ShareButton kart="gorusme-haftanin-ozeti" baslik={`Görüşme analizleri · haftanın özeti · ${weekText}`} />
+          </span>
+        ) : null}
       </div>
+      {open ? (
       <div className="card-body cv-team">
         <p className="cv-lead">{n.ozet}</p>
         <div className="cv-cols">
@@ -1241,6 +1282,7 @@ function TeamCard({ n, weekText }: { n: NonNullable<NonNullable<ConvWeek["team"]
           </div>
         </div>
       </div>
+      ) : null}
     </section>
   );
 }
