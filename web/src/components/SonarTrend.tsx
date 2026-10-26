@@ -20,8 +20,6 @@ interface TrendWeek {
 
 interface Trend {
   kocluk_baslangic: string;
-  oncesi: { n: number; puan_ort: number | null };
-  sonrasi: { n: number; puan_ort: number | null };
   davranis_adlari: Record<string, string>;
   score_labels: Record<string, string>;
   weeks: TrendWeek[];
@@ -35,7 +33,9 @@ const RANGES: [number, string][] = [
 
 const dayFmt = new Intl.DateTimeFormat("tr-TR", { day: "numeric", month: "short", timeZone: "UTC" });
 const fmtDay = (iso: string) => dayFmt.format(new Date(`${iso.slice(0, 10)}T00:00:00Z`));
-const DAY = 86_400_000;
+
+// Haftalık fark küçük olabilir; iki ondalık gösterilir.
+const f2 = (v: number) => v.toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function movingAvg(vals: (number | null)[], k = 3): (number | null)[] {
   return vals.map((_, i) => {
@@ -86,13 +86,9 @@ function MiniLine({
   const ticks = [domain[0], (domain[0] + domain[1]) / 2, domain[1]];
   const avg = showAvg ? movingAvg(values) : [];
 
-  // Koçluk işareti: başlangıç gününün haftası içindeki konumu.
-  const mt = new Date(`${marker}T00:00:00Z`).getTime();
-  let markerX: number | null = null;
-  weeks.forEach((w, i) => {
-    const ws = new Date(`${w.week_start}T00:00:00Z`).getTime();
-    if (mt >= ws && mt < ws + 7 * DAY) markerX = x(i) + (step || 0) * ((mt - ws) / (7 * DAY));
-  });
+  // Koçluk işareti: başlangıç haftasının noktası (karşılaştırma haftalık).
+  const mi = weeks.findIndex((w) => w.week_start.slice(0, 10) === marker.slice(0, 10));
+  const markerX: number | null = mi >= 0 ? x(mi) : null;
 
   const path = (vs: (number | null)[]) => {
     let d = "";
@@ -193,8 +189,10 @@ export function SonarTrend({ rep, scope, isAdmin }: { rep: string; scope: string
   if (!data || !data.weeks.length) return null;
 
   const start = data.kocluk_baslangic;
-  const b = data.oncesi.puan_ort;
-  const a = data.sonrasi.puan_ort;
+  // Haftalık karşılaştırma: başlangıç haftası → son hafta.
+  const base = weeks.find((w) => w.week_start.slice(0, 10) === start.slice(0, 10)) ?? null;
+  const last = weeks.length ? weeks[weeks.length - 1] : null;
+  const delta = base && last && last !== base && base.puan_ort !== null && last.puan_ort !== null ? last.puan_ort - base.puan_ort : null;
   const score = (v: number) => num(Math.round(v * 10) / 10);
   const share = (v: number) => pct(v);
 
@@ -215,8 +213,12 @@ export function SonarTrend({ rep, scope, isAdmin }: { rep: string; scope: string
           SONAR-41 gelişimi{scope ? ` · ${scope}` : ""}
         </h2>
         <span className="hint">
-          koçluk başlangıcı {fmtDay(start)} · öncesi ort. {b === null ? "—" : num(b)} ({data.oncesi.n} görüşme) ·
-          sonrası {a === null ? "henüz veri yok" : `ort. ${num(a)} (${data.sonrasi.n} görüşme)`}
+          başlangıç haftası {fmtDay(start)} ort. {base?.puan_ort == null ? "—" : f2(base.puan_ort)}
+          {last && last !== base
+            ? ` → son hafta (${fmtDay(last.week_start)}) ${last.puan_ort == null ? "—" : f2(last.puan_ort)}${
+                delta === null ? "" : ` (${delta >= 0 ? "+" : "−"}${f2(Math.abs(delta))})`
+              }`
+            : " · karşılaştırma için sonraki hafta bekleniyor"}
         </span>
         <span className="sonar-head-actions" onClick={(e) => e.stopPropagation()}>
           <select className="f-input sm" data-share-skip value={range} onChange={(e) => setRange(Number(e.target.value))} aria-label="Dönem">
@@ -233,7 +235,7 @@ export function SonarTrend({ rep, scope, isAdmin }: { rep: string; scope: string
         <div className="card-body">
           {weeks.length < 4 ? (
             <p className="muted sonar-note">
-              {weeks.length} haftalık veri var. Eğilim için en az 4 hafta gerekir; dikey çizgi koçluğun başladığı gün, kesik
+              {weeks.length} haftalık veri var. Eğilim için en az 4 hafta gerekir; dikey çizgi koçluğun başladığı hafta, kesik
               çizgi 3 haftalık ortalama (3. haftadan itibaren).
             </p>
           ) : null}
@@ -270,7 +272,7 @@ export function SonarTrend({ rep, scope, isAdmin }: { rep: string; scope: string
             />
           </div>
           <p className="muted sonar-note">
-            Dikey çizgi: SONAR-41 koçluğunun başladığı gün ({fmtDay(start)}). Nokta: haftanın değeri (fareyle görüşme sayısı),
+            Dikey çizgi: SONAR-41 koçluğunun başladığı hafta ({fmtDay(start)} haftası, temel çizgi). Nokta: haftanın değeri (fareyle görüşme sayısı),
             kesik çizgi: 3 haftalık hareketli ortalama. Haftada kişi başı 15 görüşme ölçüldüğü için tek hafta oynak olabilir;
             eğilime bakın.
           </p>
