@@ -225,6 +225,15 @@ export function ConversationsPage({ me }: { me: Me }) {
 
       {guide ? <SonarGuide labels={data?.score_labels ?? {}} /> : null}
       {error ? <div className="banner error">Analizler alınamadı: {error.message}</div> : null}
+      {data && !data.durum.analiz_edildi ? (
+        <EmptyWeek
+          week={week}
+          current={current}
+          waiting={data.durum.bekliyor + data.durum.yazildi}
+          latest={(weeks.data?.weeks ?? []).find((w) => w.analiz > 0)?.week_start ?? null}
+          onPick={setWeek}
+        />
+      ) : null}
       {weeks.data && !setup?.son_calisma ? (
         <div className="banner">
           Analiz henüz hiç çalışmadı. Kayıtlar her gece işlenir (telefon: CRM + Verimor, toplantı: Zoho Meeting).
@@ -1104,6 +1113,41 @@ function RequestCard({ onOpen }: { onOpen: (id: number) => void }) {
         ) : null}
       </div>
     </section>
+  );
+}
+
+/** Seçilen haftada analiz yoksa nedenini söyler ve analizi olan son haftaya götürür. */
+function EmptyWeek({
+  week,
+  current,
+  waiting,
+  latest,
+  onPick,
+}: {
+  week: string;
+  current: string;
+  waiting: number;
+  latest: string | null;
+  onPick: (week: string) => void;
+}) {
+  const reason =
+    week === current
+      ? "Bu haftanın görüşmeleri her gece toplanır, kotaya göre seçilip analiz edilir."
+      : waiting
+        ? `Bu haftadan ${waiting} görüşme kotayla seçildi; yapay zekâ analizi bekliyor (ANTHROPIC_API_KEY eklenince gece işlenir).`
+        : "Bu hafta için analiz edilmiş görüşme yok.";
+  return (
+    <div className="banner">
+      <strong>Bu hafta henüz analiz yok.</strong> {reason}
+      {latest && latest !== week ? (
+        <>
+          {" "}
+          <button className="link-btn" onClick={() => onPick(latest)}>
+            Analizi olan son haftayı aç ({weekLabel(latest, current)})
+          </button>
+        </>
+      ) : null}
+    </div>
   );
 }
 
