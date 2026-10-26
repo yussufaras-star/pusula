@@ -143,8 +143,9 @@ function SpreadScore({ v, spread }: { v: number | null | undefined; spread?: num
 export function ConversationsPage({ me }: { me: Me }) {
   const isAdmin = me.role === "admin";
   const current = thisMonday();
-  // Açılışta bu hafta; geçmiş haftalar listeden seçilir.
+  // Açılışta en son analiz edilen hafta; diğer haftalar listeden seçilir.
   const [week, setWeek] = useState(current);
+  const [picked, setPicked] = useState(false);
   const [repFilter, setRepFilter] = useState<string>("");
   const [openRep, setOpenRep] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<number | null>(null);
@@ -153,6 +154,15 @@ export function ConversationsPage({ me }: { me: Me }) {
   useEffect(() => setListOpen(false), [week]);
   const weeks = usePolling<ConvWeeks>("/api/conversations/weeks", 0);
   const { data, error, loading, refresh } = usePolling<ConvWeek>(`/api/conversations?week=${week}`, 0);
+
+  useEffect(() => {
+    const latest = (weeks.data?.weeks ?? []).find((w) => w.analiz > 0)?.week_start;
+    if (!picked && latest) setWeek(latest);
+  }, [weeks.data, picked]);
+  const pickWeek = (w: string) => {
+    setPicked(true);
+    setWeek(w);
+  };
 
   const weekOptions = useMemo(() => {
     const set = new Set([current, addDays(current, -7), ...(weeks.data?.weeks ?? []).map((w) => w.week_start)]);
@@ -196,7 +206,7 @@ export function ConversationsPage({ me }: { me: Me }) {
           </div>
         </div>
         <div className="controls">
-          <select className="f-input" value={week} onChange={(e) => setWeek(e.target.value)} aria-label="Hafta">
+          <select className="f-input" value={week} onChange={(e) => pickWeek(e.target.value)} aria-label="Hafta">
             {weekOptions.map((w) => (
               <option key={w} value={w}>
                 {weekLabel(w, current)}
@@ -231,7 +241,7 @@ export function ConversationsPage({ me }: { me: Me }) {
           current={current}
           waiting={data.durum.bekliyor + data.durum.yazildi}
           latest={(weeks.data?.weeks ?? []).find((w) => w.analiz > 0)?.week_start ?? null}
-          onPick={setWeek}
+          onPick={pickWeek}
         />
       ) : null}
       {weeks.data && !setup?.son_calisma ? (
