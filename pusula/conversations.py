@@ -1632,6 +1632,70 @@ def _item_summary(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# SONAR-41 koçluğunun başladığı gün (temsilcilere ilk geri bildirim); gelişim grafiğindeki işaret.
+COACHING_START = date(2026, 10, 15)
+# Gelişim grafiğinde ayrıca izlenen davranışlar: düşüneyim, tarihli takip, CRM notu.
+TREND_BEHAVIORS = ("B28", "B34", "B39")
+
+
+def trend_points(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Haftalık gelişim (saf): ortalama, boyutlar, hedef (4-5) ve bug (1-2) payı, izlenen
+    davranışlar ve "müsait misiniz" oranı. items: analiz edilmiş kayıtlar (occurred_at, analysis)."""
+    by_week: dict[date, list[dict[str, Any]]] = defaultdict(list)
+    for item in items:
+        by_week[week_start_of(item["occurred_at"].astimezone(TZ).date())].append(item)
+    out = []
+    for week in sorted(by_week):
+        stats = aggregate(by_week[week])
+        if not stats["analiz"]:
+            continue
+        scores = [
+            r["puan"] for i in by_week[week] if (i.get("analysis") or {}).get("analiz_edilebilir")
+            for r in (i["analysis"].get("sonar") or []) if (r.get("puan") or 0) > 0
+        ]
+        beh = stats.get("davranislar") or {}
+        out.append({
+            "week_start": week,
+            "n": stats["analiz"],
+            "puan_ort": stats["puan_ort"],
+            "puanlar": stats["puanlar"],
+            "hedef_payi": round(100.0 * sum(1 for s in scores if s >= STRONG_MIN) / len(scores), 1) if scores else None,
+            "bug_payi": round(100.0 * sum(1 for s in scores if s <= BUG_MAX) / len(scores), 1) if scores else None,
+            "davranislar": {k: (beh.get(k) or {}).get("ort") for k in TREND_BEHAVIORS},
+            "musait_sordu_orani": round(100.0 * (stats.get("musaitlik") or {}).get("temsilci_sordu", 0) / stats["analiz"], 1),
+        })
+    return out
+
+
+def load_trend(rep_id: str | None) -> dict[str, Any]:
+    """Analiz başladığından beri haftalık gelişim; kota dışına alınmış analizler ve özel
+    talepler (başka haftalardan gelebilir) sayılmaz."""
+    with connect() as conn:
+        _ready(conn)
+        cur = conn.execute(
+            f"""
+            SELECT occurred_at, analysis FROM conv_items
+            WHERE org_id = %s AND status = 'analiz_edildi' {"AND rep_id = %s" if rep_id else ""}
+              AND NOT coalesce((meta->>'talep')::boolean, false)
+            ORDER BY occurred_at
+            """,
+            (get_org_id(), *([rep_id] if rep_id else [])),
+        )
+        items = [{"occurred_at": o, "analysis": a, "kind": "call"} for o, a in cur.fetchall()]
+    start = datetime.combine(COACHING_START, datetime.min.time(), TZ)
+    before = aggregate([i for i in items if i["occurred_at"] < start])
+    after = aggregate([i for i in items if i["occurred_at"] >= start])
+    return {
+        "kocluk_baslangic": COACHING_START,
+        # Görüşme tarihine göre: başlangıç günü haftanın ortasına düşebilir.
+        "oncesi": {"n": before["analiz"], "puan_ort": before["puan_ort"]},
+        "sonrasi": {"n": after["analiz"], "puan_ort": after["puan_ort"]},
+        "davranis_adlari": {k: sonar41.BEHAVIORS[k]["name"] for k in TREND_BEHAVIORS},
+        "score_labels": SCORE_LABELS,
+        "weeks": trend_points(items),
+    }
+
+
 def load_week(week_start: date, rep_id: str | None) -> dict[str, Any]:
     """Haftanın panel verisi. rep_id verilirse yalnız o temsilcinin görüşmeleri."""
     start, end = week_bounds(week_start)

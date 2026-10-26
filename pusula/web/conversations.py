@@ -94,6 +94,13 @@ class RequestBody(BaseModel):
     days: int = 90
 
 
+@router.get("/trend")
+def trend(rep: str | None = None, user: AuthUser = Depends(current_user)) -> Any:
+    """SONAR-41 gelişimi: haftalık seriler. Temsilci yalnız kendi serisini görür."""
+    rep_id = selected_rep(user, rep)
+    return cache.cached(("conv-trend", rep_id), TTL, lambda: jsonable_encoder(conversations.load_trend(rep_id)))
+
+
 @router.get("/requests")
 def requests(user: AuthUser = Depends(admin_user)) -> Any:
     return jsonable_encoder({"requests": conversations.load_requests()})

@@ -261,6 +261,20 @@ def test_plan_quota_total_cap_counts_short_analysed_and_drops_extras() -> None:
     assert plan["secilen"] == [] and sorted(plan["disi"]) == [20, 21]
 
 
+def test_trend_points_weekly_shares_and_rates() -> None:
+    def item(day, scores, sordu=False):
+        codes = ["B01", "B28", "B34", "B39"]
+        return {"occurred_at": datetime(2026, 10, day, 12, tzinfo=TZ), "kind": "call", "duration_sec": 300,
+                "analysis": {"analiz_edilebilir": True, "musaitlik": {"temsilci_sordu": sordu},
+                             "sonar": [{"kod": k, "puan": p} for k, p in zip(codes, scores)]}}
+    pts = cv.trend_points([item(13, [4, 1, 2, 3], True), item(14, [5, 3, 3, 3]), item(20, [2, 2, 4, 4])])
+    assert [p["week_start"] for p in pts] == [date(2026, 10, 12), date(2026, 10, 19)]
+    first = pts[0]
+    assert first["n"] == 2 and first["hedef_payi"] == 25.0 and first["bug_payi"] == 25.0
+    assert first["davranislar"]["B28"] == 2.0 and first["musait_sordu_orani"] == 50.0
+    assert pts[1]["hedef_payi"] == 50.0
+
+
 def test_aggregate_empty_week() -> None:
     s = cv.aggregate([])
     assert s["analiz"] == 0 and s["puan_ort"] is None and s["sonraki_adim_orani"] is None
