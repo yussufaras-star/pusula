@@ -1,27 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { usePolling } from "../api";
-import { num, pct } from "../format";
 import { ShareButton } from "./ShareButton";
 
-// SONAR-41 gelişimi: haftalık seriler, koçluk başlangıcı (21 Ekim) dikey işaretle.
-// Her grafik tek ölçü ve tek eksen; kesik çizgi 3 haftalık hareketli ortalama.
+// SONAR-41 gelişimi: haftalık toplam puan ortalaması (1-5), tek grafik. Dikey işaret koçluğun
+// başladığı hafta; temsilci seçiliyse ekip çizgisi kıyas için yanında durur.
 
 interface TrendWeek {
   week_start: string;
   n: number;
   puan_ort: number | null;
-  puanlar: Record<string, number | null>;
-  hedef_payi: number | null;
-  bug_payi: number | null;
-  davranislar: Record<string, number | null>;
-  musait_sordu_orani: number | null;
 }
 
 interface Trend {
   kocluk_baslangic: string;
-  davranis_adlari: Record<string, string>;
-  score_labels: Record<string, string>;
   weeks: TrendWeek[];
 }
 
@@ -33,67 +25,45 @@ const RANGES: [number, string][] = [
 
 const dayFmt = new Intl.DateTimeFormat("tr-TR", { day: "numeric", month: "short", timeZone: "UTC" });
 const fmtDay = (iso: string) => dayFmt.format(new Date(`${iso.slice(0, 10)}T00:00:00Z`));
-
-// Haftalık fark küçük olabilir; iki ondalık gösterilir.
 const f2 = (v: number) => v.toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const key = (iso: string) => iso.slice(0, 10);
 
-function movingAvg(vals: (number | null)[], k = 3): (number | null)[] {
-  return vals.map((_, i) => {
-    const win = vals.slice(Math.max(0, i - k + 1), i + 1).filter((v): v is number => v !== null);
-    return i >= k - 1 && win.length === k ? win.reduce((a, b) => a + b, 0) / k : null;
-  });
+interface Series {
+  label: string;
+  cls: "a" | "b";
+  byWeek: Map<string, TrendWeek>;
 }
 
-/** Tek ölçülü küçük çizgi grafik; x = haftalar, dikey işaret = koçluk başlangıcı. */
-function MiniLine({
-  title,
-  weeks,
-  values,
-  domain,
-  fmt,
-  marker,
-  height = 150,
-  showAvg = true,
-}: {
-  title: string;
-  weeks: TrendWeek[];
-  values: (number | null)[];
-  domain: [number, number];
-  fmt: (v: number) => string;
-  marker: string;
-  height?: number;
-  showAvg?: boolean;
-}) {
+function TrendChart({ weeks, series, marker }: { weeks: string[]; series: Series[]; marker: string }) {
   const [hover, setHover] = useState<number | null>(null);
-  // Gerçek genişlikte çizilir: yazılar her grafikte aynı boyda kalır.
+  // Gerçek genişlikte çizilir: yazılar her ekranda aynı boyda kalır.
   const box = useRef<HTMLDivElement>(null);
-  const [W, setW] = useState(360);
+  const [W, setW] = useState(720);
   useEffect(() => {
     const el = box.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setW(Math.max(200, Math.round(el.clientWidth))));
+    const ro = new ResizeObserver(() => setW(Math.max(280, Math.round(el.clientWidth))));
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const H = height;
-  const PAD = { top: 12, right: 14, bottom: 22, left: 34 };
+  const H = 260;
+  const PAD = { top: 16, right: 64, bottom: 26, left: 34 };
   const innerW = W - PAD.left - PAD.right;
   const innerH = H - PAD.top - PAD.bottom;
   const n = weeks.length;
   const step = n > 1 ? innerW / (n - 1) : 0;
   const x = (i: number) => (n > 1 ? PAD.left + step * i : PAD.left + innerW / 2);
-  const y = (v: number) => PAD.top + innerH - ((v - domain[0]) / (domain[1] - domain[0])) * innerH;
-  const ticks = [domain[0], (domain[0] + domain[1]) / 2, domain[1]];
-  const avg = showAvg ? movingAvg(values) : [];
+  // Puanlama tablosunun basamakları: 1 kaçırıldı · 2 denendi · 3 doğru · 4 hedef · 5 örnek.
+  const y = (v: number) => PAD.top + innerH - ((v - 1) / 4) * innerH;
+  const mi = weeks.indexOf(key(marker));
+  const labelEvery = Math.ceil(n / 8);
+  const val = (s: Series, i: number) => s.byWeek.get(weeks[i])?.puan_ort ?? null;
 
-  // Koçluk işareti: başlangıç haftasının noktası (karşılaştırma haftalık).
-  const mi = weeks.findIndex((w) => w.week_start.slice(0, 10) === marker.slice(0, 10));
-  const markerX: number | null = mi >= 0 ? x(mi) : null;
-
-  const path = (vs: (number | null)[]) => {
+  const path = (s: Series) => {
     let d = "";
     let pen = false;
-    vs.forEach((v, i) => {
+    weeks.forEach((_, i) => {
+      const v = val(s, i);
       if (v === null) {
         pen = false;
         return;
@@ -103,51 +73,67 @@ function MiniLine({
     });
     return d;
   };
-  const labelEvery = Math.ceil(n / 6);
-  const hv = hover !== null ? values[hover] : null;
 
   return (
     <div className="chart sonar-mini" ref={box}>
-      <div className="sonar-mini-title">{title}</div>
-      <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} role="img" aria-label={title}>
-        {ticks.map((t) => (
+      <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} role="img" aria-label="SONAR-41 haftalık puan ortalaması">
+        {[1, 2, 3, 4, 5].map((t) => (
           <g key={t}>
-            <line className={t === domain[0] ? "baseline" : "gridline"} x1={PAD.left} x2={W - PAD.right} y1={y(t)} y2={y(t)} />
-            <text className="tick" x={PAD.left - 6} y={y(t) + 4} textAnchor="end">
-              {fmt(t)}
+            <line
+              className={t === 1 ? "baseline" : t === 4 ? "gridline sonar-target" : "gridline"}
+              x1={PAD.left}
+              x2={W - PAD.right}
+              y1={y(t)}
+              y2={y(t)}
+            />
+            <text className="tick" x={PAD.left - 8} y={y(t) + 4} textAnchor="end">
+              {t}
             </text>
           </g>
         ))}
+        <text className="tick sonar-target-label" x={W - PAD.right + 6} y={y(4) + 4}>
+          hedef
+        </text>
         {weeks.map((w, i) =>
           i % labelEvery === 0 || i === n - 1 ? (
-            <text key={w.week_start} className="tick" x={x(i)} y={H - 6} textAnchor="middle">
-              {fmtDay(w.week_start)}
+            <text key={w} className="tick" x={x(i)} y={H - 6} textAnchor="middle">
+              {fmtDay(w)}
             </text>
           ) : null,
         )}
-        {markerX !== null ? (
+        {mi >= 0 ? (
           <g className="sonar-marker">
-            <line x1={markerX} x2={markerX} y1={PAD.top} y2={PAD.top + innerH} />
-            <text x={markerX + 4} y={PAD.top + 9}>
-              koçluk
+            <line x1={x(mi)} x2={x(mi)} y1={PAD.top} y2={PAD.top + innerH} />
+            <text x={x(mi) + 4} y={PAD.top + 10}>
+              koçluk başladı
             </text>
           </g>
         ) : null}
-        {showAvg ? (
-          <g className="series ma">
-            <path d={path(avg)} />
-          </g>
-        ) : null}
-        <g className="series a">
-          <path d={path(values)} />
-          {values.map((v, i) =>
-            v === null ? null : <circle key={i} className="pt" cx={x(i)} cy={y(v)} r={hover === i ? 5 : 4} />,
-          )}
-        </g>
         {hover !== null ? <line className="crosshair" x1={x(hover)} x2={x(hover)} y1={PAD.top} y2={PAD.top + innerH} /> : null}
+        {[...series].reverse().map((s) => {
+          let lastI = -1;
+          weeks.forEach((_, i) => {
+            if (val(s, i) !== null) lastI = i;
+          });
+          const lastV = lastI >= 0 ? val(s, lastI) : null;
+          return (
+            <g key={s.label} className={`series ${s.cls}`}>
+              <path d={path(s)} />
+              {weeks.map((_, i) => {
+                const v = val(s, i);
+                return v === null ? null : <circle key={i} className="pt" cx={x(i)} cy={y(v)} r={hover === i ? 5 : 4} />;
+              })}
+              {lastV !== null ? (
+                <text className="end-label" x={x(lastI) + 8} y={y(lastV) + 4}>
+                  {f2(lastV)}
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
         {weeks.map((w, i) => (
           <rect
-            key={w.week_start}
+            key={w}
             className="hit"
             x={x(i) - (n > 1 ? step / 2 : innerW / 2)}
             y={PAD.top}
@@ -159,19 +145,19 @@ function MiniLine({
         ))}
       </svg>
       {hover !== null ? (
-        <div className="tooltip" style={{ left: `${(x(hover) / W) * 100}%`, top: `${((hv !== null ? y(hv) : PAD.top) / H) * 100}%` }}>
-          <div className="t-head">{fmtDay(weeks[hover].week_start)} haftası</div>
-          <div className="t-row">
-            <span>Değer</span>
-            <b>{hv === null ? "—" : fmt(hv)}</b>
-          </div>
-          {showAvg && avg[hover] !== null ? (
-            <div className="t-row">
-              <span>3 hafta ort.</span>
-              <b>{fmt(avg[hover] as number)}</b>
-            </div>
-          ) : null}
-          <div className="t-row muted">{weeks[hover].n} görüşme</div>
+        <div className="tooltip" style={{ left: `${(x(hover) / W) * 100}%`, top: `${(PAD.top / H) * 100}%` }}>
+          <div className="t-head">{fmtDay(weeks[hover])} haftası</div>
+          {series.map((s) => {
+            const w = s.byWeek.get(weeks[hover]);
+            return (
+              <div key={s.label} className="t-row">
+                <span>
+                  <i className={`swatch ${s.cls}`} /> {s.label}
+                </span>
+                <b>{w?.puan_ort == null ? "—" : `${f2(w.puan_ort)} · ${w.n} görüşme`}</b>
+              </div>
+            );
+          })}
         </div>
       ) : null}
     </div>
@@ -181,20 +167,31 @@ function MiniLine({
 export function SonarTrend({ rep, scope, isAdmin }: { rep: string; scope: string; isAdmin: boolean }) {
   const [open, setOpen] = useState(true);
   const [range, setRange] = useState(0);
-  const { data } = usePolling<Trend>(`/api/conversations/trend${rep ? `?rep=${rep}` : ""}`, 10 * 60_000);
-  const weeks = useMemo(() => {
-    const all = data?.weeks ?? [];
-    return range ? all.slice(-range) : all;
-  }, [data, range]);
-  if (!data || !data.weeks.length) return null;
+  const team = usePolling<Trend>("/api/conversations/trend", 10 * 60_000);
+  const own = usePolling<Trend>(rep ? `/api/conversations/trend?rep=${rep}` : "/api/conversations/trend", 10 * 60_000);
+  const data = rep ? own.data : team.data;
 
-  const start = data.kocluk_baslangic;
-  // Haftalık karşılaştırma: başlangıç haftası → son hafta.
-  const base = weeks.find((w) => w.week_start.slice(0, 10) === start.slice(0, 10)) ?? null;
-  const last = weeks.length ? weeks[weeks.length - 1] : null;
-  const delta = base && last && last !== base && base.puan_ort !== null && last.puan_ort !== null ? last.puan_ort - base.puan_ort : null;
-  const score = (v: number) => num(Math.round(v * 10) / 10);
-  const share = (v: number) => pct(v);
+  const view = useMemo(() => {
+    if (!data) return null;
+    const all = [...new Set([...(team.data?.weeks ?? []), ...data.weeks].map((w) => key(w.week_start)))].sort();
+    const weeks = range ? all.slice(-range) : all;
+    const map = (t: Trend | null | undefined) => new Map((t?.weeks ?? []).map((w) => [key(w.week_start), w]));
+    const series: Series[] = rep
+      ? [
+          { label: scope || "Temsilci", cls: "a", byWeek: map(own.data) },
+          { label: "Ekip", cls: "b", byWeek: map(team.data) },
+        ]
+      : [{ label: "Ekip", cls: "a", byWeek: map(team.data) }];
+    return { weeks, series };
+  }, [data, team.data, own.data, range, rep, scope]);
+
+  if (!data || !view || !view.weeks.length) return null;
+  const start = key(data.kocluk_baslangic);
+  const main = view.series[0].byWeek;
+  const base = main.get(start)?.puan_ort ?? null;
+  const lastWeek = [...main.keys()].sort().pop() ?? null;
+  const last = lastWeek && lastWeek !== start ? (main.get(lastWeek)?.puan_ort ?? null) : null;
+  const delta = base !== null && last !== null ? last - base : null;
 
   return (
     <section className="card" data-share="sonar-gelisim">
@@ -210,14 +207,12 @@ export function SonarTrend({ rep, scope, isAdmin }: { rep: string; scope: string
           <span className="caret" aria-hidden data-share-skip>
             {open ? "▾" : "▸"}
           </span>{" "}
-          SONAR-41 gelişimi{scope ? ` · ${scope}` : ""}
+          SONAR-41 gelişimi{scope ? ` · ${scope}` : " · ekip"}
         </h2>
         <span className="hint">
-          başlangıç haftası {fmtDay(start)} ort. {base?.puan_ort == null ? "—" : f2(base.puan_ort)}
-          {last && last !== base
-            ? ` → son hafta (${fmtDay(last.week_start)}) ${last.puan_ort == null ? "—" : f2(last.puan_ort)}${
-                delta === null ? "" : ` (${delta >= 0 ? "+" : "−"}${f2(Math.abs(delta))})`
-              }`
+          koçluğun başladığı hafta ({fmtDay(start)}) {base === null ? "—" : f2(base)}
+          {last !== null && delta !== null && lastWeek
+            ? ` → son hafta (${fmtDay(lastWeek)}) ${f2(last)} (${delta >= 0 ? "+" : "−"}${f2(Math.abs(delta))})`
             : " · karşılaştırma için sonraki hafta bekleniyor"}
         </span>
         <span className="sonar-head-actions" onClick={(e) => e.stopPropagation()}>
@@ -228,53 +223,25 @@ export function SonarTrend({ rep, scope, isAdmin }: { rep: string; scope: string
               </option>
             ))}
           </select>
-          {isAdmin ? <ShareButton kart="sonar-gelisim" baslik={`SONAR-41 gelişimi${scope ? ` · ${scope}` : ""}`} /> : null}
+          {isAdmin && open ? <ShareButton kart="sonar-gelisim" baslik={`SONAR-41 gelişimi${scope ? ` · ${scope}` : " · ekip"}`} /> : null}
         </span>
       </div>
       {open ? (
         <div className="card-body">
-          {weeks.length < 4 ? (
-            <p className="muted sonar-note">
-              {weeks.length} haftalık veri var. Eğilim için en az 4 hafta gerekir; dikey çizgi koçluğun başladığı hafta, kesik
-              çizgi 3 haftalık ortalama (3. haftadan itibaren).
-            </p>
+          {view.series.length > 1 ? (
+            <div className="legend" style={{ marginBottom: 6 }}>
+              {view.series.map((s) => (
+                <span key={s.label} className="key">
+                  <span className="sw" style={{ background: s.cls === "a" ? "var(--series-1)" : "var(--series-2)" }} /> {s.label}
+                </span>
+              ))}
+            </div>
           ) : null}
-          <div className="sonar-grid two">
-            <MiniLine title="Ortalama puan (1-5)" weeks={weeks} values={weeks.map((w) => w.puan_ort)} domain={[1, 5]} fmt={score} marker={start} height={180} />
-            <MiniLine
-              title="Hedef seviye payı · 4-5 alan davranış (%)"
-              weeks={weeks}
-              values={weeks.map((w) => w.hedef_payi)}
-              domain={[0, 100]}
-              fmt={share}
-              marker={start}
-              height={180}
-            />
-          </div>
-          <h3 className="sonar-sub">Boyutlar</h3>
-          <div className="sonar-grid five">
-            {Object.entries(data.score_labels).map(([k, label]) => (
-              <MiniLine key={k} title={`${k} · ${label}`} weeks={weeks} values={weeks.map((w) => w.puanlar[k] ?? null)} domain={[1, 5]} fmt={score} marker={start} />
-            ))}
-          </div>
-          <h3 className="sonar-sub">İzlenen davranışlar</h3>
-          <div className="sonar-grid four">
-            {Object.entries(data.davranis_adlari).map(([k, name]) => (
-              <MiniLine key={k} title={`${k} · ${name}`} weeks={weeks} values={weeks.map((w) => w.davranislar[k] ?? null)} domain={[1, 5]} fmt={score} marker={start} />
-            ))}
-            <MiniLine
-              title="“Müsait misiniz?” soran görüşme (%) · düşmesi iyi"
-              weeks={weeks}
-              values={weeks.map((w) => w.musait_sordu_orani)}
-              domain={[0, 100]}
-              fmt={share}
-              marker={start}
-            />
-          </div>
+          <TrendChart weeks={view.weeks} series={view.series} marker={start} />
           <p className="muted sonar-note">
-            Dikey çizgi: SONAR-41 koçluğunun başladığı hafta ({fmtDay(start)} haftası, temel çizgi). Nokta: haftanın değeri (fareyle görüşme sayısı),
-            kesik çizgi: 3 haftalık hareketli ortalama. Haftada kişi başı 15 görüşme ölçüldüğü için tek hafta oynak olabilir;
-            eğilime bakın.
+            Haftalık toplam SONAR-41 puanı: o hafta analiz edilen görüşmelerin 5 boyut ortalaması (1 kaçırıldı · 2 denendi · 3
+            doğru · 4 hedef · 5 örnek). Dikey çizgi koçluğun başladığı hafta; yeşil kesik çizgi hedef seviye (4).
+            {view.weeks.length < 4 ? ` Şu an ${view.weeks.length} haftalık veri var; eğilim için en az 4 hafta gerekir.` : ""}
           </p>
         </div>
       ) : null}
