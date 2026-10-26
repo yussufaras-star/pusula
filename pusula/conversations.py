@@ -777,10 +777,14 @@ Puanlama ("sonar"):
     verdi. Alıntı: temsilcinin cümlesi → müşterinin olumlu/açılan tepkisi. (Hedef seviye.)
   · 5 Örnek: 4'ün üstüne zor bir anda yapıldı ya da görüşmeyi somut, tarihli bir adıma çevirdi;
     eğitimde dinletilebilir. Alıntı: öncesi ve sonrası — müşterinin tavrı değişti, somut adım kabul.
-  Örnek ("Düşüneyim" itirazı): 1 "Tabii, düşünün, ben sizi ararım." · 2 "Neyi düşüneceksiniz ki?" /
-  "Bugün karar vermezseniz bu fiyat kalmaz." · 3 "Aklınıza takılan bir konu var mı?" · 4 "Eşinizin
-  servis maliyetini sorduğunu söylemiştiniz, o mu?" → "Evet, aslında o." · 5 4'teki soru +
-  "Cumartesi eşinizle test sürüşü yapalım." → "Olur."
+  Rexven görüşmelerinden örnekler ("düşüneyim" anı, B28): 1 müşteri eşiyle konuşacağını söyleyince
+  temsilci "Tabii tabii, nasıl isterseniz." · 2 "Sizi kararsız bırakan nokta nedir? Tedarik
+  anlamında mı sorunlar yaşıyorsunuz?" (cevabı temsilci veriyor) ya da "İndirimli olarak bugün almanız
+  daha mantıklı olur." (baskı) · 3 "Tam olarak neyi düşüneceksiniz?" (doğru ama bu müşteriye
+  bağlanmıyor) · 4 müşterinin daha önce söylediğine bağlanan soru ve müşteri açılır; ödeme itirazında:
+  "Hangi kartınız varsa söyleyin, onu size atayım." → "Garanti American Express kartından yapabilirim."
+  · 5 4'e ek olarak somut, tarihli adım kabul edilir: "...eşinizle bu akşam 20:00'de 15 dakikalık
+  online görüşme yapalım." → "Olur." (kurgusal örnek).
 - Kurallar: alıntı o basamağın koşulunu kanıtlamıyorsa puanı bir alta indir; alıntı yoksa
   davranışı puanlama. Aynı fırsatta birden fazla deneme varsa görüşmenin vardığı son durumu,
   aynı davranış için birden fazla fırsat varsa en düşük puanı esas al.

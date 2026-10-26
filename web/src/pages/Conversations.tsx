@@ -107,8 +107,9 @@ function weekLabel(start: string, current: string): string {
 function scoreTone(v: number | null | undefined): Tone {
   if (v === null || v === undefined) return "neutral";
   if (v >= 4) return "good";
+  // Puanlama tablosunun basamakları: 4 uyarlanmış · 3 doğru · 2 denendi · 1 kaçırıldı.
   if (v >= 3) return "neutral";
-  if (v >= 2.5) return "warning";
+  if (v >= 2) return "warning";
   return "critical";
 }
 
@@ -833,7 +834,7 @@ const SCALE: { puan: string; ad: string; tone?: Tone; olcut: string; alinti: str
     tone: "critical",
     olcut: "Fırsat vardı, davranış hiç yapılmadı.",
     alinti: "Fırsatın doğduğu an (müşterinin cümlesi) ve ardından davranışın yokluğu",
-    ornek: "“Tabii, düşünün, ben sizi ararım.”",
+    ornek: "Müşteri eşi ve kardeşiyle konuşacağını söyleyince temsilci: “Tabii tabii nasıl isterseniz Murat Bey.” (B28)",
     mesaj: "Fırsatı görmedin.",
   },
   {
@@ -842,7 +843,7 @@ const SCALE: { puan: string; ad: string; tone?: Tone; olcut: string; alinti: str
     tone: "critical",
     olcut: "Davranış yapıldı ama yanlış, yüzeysel, yönlendirici, savunmacı ya da baskıcı. Müşteri açılmadı, kapandı ya da rahatsız oldu.",
     alinti: "Temsilcinin hatalı / yarım cümlesi ve müşterinin kapanan cevabı",
-    ornek: "“Neyi düşüneceksiniz ki?” / “Fiyat mı yüksek geldi?” / “Bugün karar vermezseniz bu fiyat kalmaz.”",
+    ornek: "“Yani sizi kararsız bırakan nokta nedir? Tedarik anlamında mı sorunlar yaşıyorsunuz?” (B28, cevabı temsilci veriyor) · “Bir iki hafta sonrası için bence indirimli olarak bugün almanız daha mantıklı olur.” (B22, baskı)",
     mesaj: "Fırsatı gördün, yöntem yanlış.",
   },
   {
@@ -851,7 +852,7 @@ const SCALE: { puan: string; ad: string; tone?: Tone; olcut: string; alinti: str
     tone: "neutral",
     olcut: "Davranış doğru yapıldı ama kalıp; herkese söylenebilir, müşteriye özel değil.",
     alinti: "Genel, standart temsilci cümlesi",
-    ornek: "“Aklınıza takılan bir konu var mı?”",
+    ornek: "“Ya tam olarak mesela neyi düşüneceksiniz?” (B28; doğru soru, ama bu müşterinin söylediklerine bağlanmıyor)",
     mesaj: "Doğru yaptın, şimdi bu müşteriye yap.",
   },
   {
@@ -860,7 +861,7 @@ const SCALE: { puan: string; ad: string; tone?: Tone; olcut: string; alinti: str
     tone: "good",
     olcut: "Görüşmede geçen bir bilgiye dayanarak müşteriye özel yapıldı ve müşteri karşılık verdi.",
     alinti: "Temsilcinin cümlesi + müşterinin olumlu / açılan tepkisi",
-    ornek: "“Eşinizin servis maliyetini sorduğunu söylemiştiniz, o mu?” → “Evet, aslında o.”",
+    ornek: "Ödeme itirazında: “Ben hani hangi kartınız varsa bana söyleyin ben onu size atayım.” → “Birincisi garanti Amerikan Express kredi kartından yapabilirim bu ödemeyi.” (B23)",
     mesaj: "Hedef seviye bu.",
   },
   {
@@ -869,7 +870,7 @@ const SCALE: { puan: string; ad: string; tone?: Tone; olcut: string; alinti: str
     tone: "good",
     olcut: "4'ün üstüne zor bir anda yapıldı ya da görüşmeyi somut, tarihli bir adıma çevirdi. Eğitimde dinletilebilir.",
     alinti: "Öncesi ve sonrası: müşterinin tavrı değişti, somut adım kabul edildi",
-    ornek: "4'teki soru + “Cumartesi eşinizle test sürüşü yapalım.” → “Olur.”",
+    ornek: "19 Ekim haftasında 5 alan görüşme yok. İlk 5 buraya girecek.",
     mesaj: "Bu anı ekiple paylaşacağız.",
   },
 ];
@@ -885,7 +886,8 @@ function SonarGuide({ labels }: { labels: Record<string, string> }) {
         <p className="muted cv-scale-note">
           41 davranışın hepsine aynı uygulanır. Her basamak bir öncekine tek bir gözlenebilir koşul ekler:{" "}
           <b>Yaptı mı? → Doğru mu? → Müşteriye özel mi? → Karşılık buldu mu? → Örnek gösterilir mi?</b> Örnekler
-          "Düşüneyim" itirazı üzerinden.
+          19 Ekim haftasındaki gerçek Rexven görüşmelerinden; çoğu "düşüneyim" anı (B28). "Düşüneyim"de henüz 4 alan
+          görüşme olmadığı için 4 ödeme itirazından.
         </p>
         <div className="table-wrap">
           <table className="board cv-scale">
@@ -894,7 +896,7 @@ function SonarGuide({ labels }: { labels: Record<string, string> }) {
                 <th>Puan</th>
                 <th>Ölçüt</th>
                 <th>Alıntı neyi kanıtlamalı</th>
-                <th>Örnek: "Düşüneyim"</th>
+                <th>Rexven'den gerçek örnek</th>
                 <th>Satışçıya mesaj</th>
               </tr>
             </thead>
@@ -955,8 +957,10 @@ function SonarGuide({ labels }: { labels: Record<string, string> }) {
           <div>
             <h3>Renkler</h3>
             <p>
-              <span className="badge good">4+</span> iyi · <span className="badge neutral">3-3,9</span> yeterli ·{" "}
-              <span className="badge warning">2,5-2,9</span> dikkat · <span className="badge critical">2,5 altı</span> zayıf.
+              Ortalamalar puanlama tablosunun basamaklarıyla renklenir: <span className="badge good">4+</span> uyarlanmış
+              (hedef) · <span className="badge neutral">3-3,9</span> doğru ama kalıp ·{" "}
+              <span className="badge warning">2-2,9</span> deneniyor, yöntem yanlış ·{" "}
+              <span className="badge critical">2 altı</span> çoğunlukla kaçırılıyor.
             </p>
           </div>
           <div>
