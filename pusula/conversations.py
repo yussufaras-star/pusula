@@ -456,8 +456,22 @@ def plan_quota(rows: list[dict[str, Any]], elapsed_days: int, closed: bool) -> d
             r for r in items
             if r.get("kota") == "aday" or (r.get("kota") is None and r["status"] in ("bekliyor", "yazildi"))
         ]
-        need_long = max(cap_long - sum(1 for r in chosen if not short(r)), 0)
-        need_short = max(QUOTA_SHORT - sum(1 for r in chosen if short(r)), 0) if elapsed_days >= 1 or closed else 0
+        # Toplam sınır: temsilci başına haftada 15 (uzun + kısa, analiz edilmiş olanlar dahil).
+        # Analiz edilmemiş fazla seçimler geri alınır; analiz edilmiş olana dokunulmaz.
+        cap_total = cap_long + (QUOTA_SHORT if elapsed_days >= 1 or closed else 0)
+        done = [r for r in chosen if r["status"] == "analiz_edildi"]
+        waiting = sorted((r for r in chosen if r["status"] != "analiz_edildi"), key=lambda r: _stable(r["source_ref"]))
+        keep = waiting[: max(cap_total - len(done), 0)]
+        dropped = [r for r in waiting if r not in keep]
+        plan["disi" if closed else "sirada"] += sorted(r["id"] for r in dropped)
+        chosen = done + keep
+        room = max(cap_total - len(chosen), 0)
+        need_long = min(max(cap_long - sum(1 for r in chosen if not short(r)), 0), room)
+        need_short = (
+            min(max(QUOTA_SHORT - sum(1 for r in chosen if short(r)), 0), room - need_long)
+            if elapsed_days >= 1 or closed
+            else 0
+        )
         per_day = Counter(day(r) for r in chosen if not short(r))
         longs = [r for r in pool if not short(r)]
         picked: list[dict[str, Any]] = []
@@ -482,7 +496,7 @@ def plan_quota(rows: list[dict[str, Any]], elapsed_days: int, closed: bool) -> d
             ),
             key=lambda r: (0 if r.get("outcome") == "callback" else 1, _stable(r["source_ref"])),
         )
-        picked += shorts[:need_short]
+        picked += shorts[: max(need_short, 0)]
         picked_ids = {r["id"] for r in picked}
         plan["secilen"] += sorted(picked_ids)
         plan["disi" if closed else "sirada"] += sorted(r["id"] for r in pool if r["id"] not in picked_ids)

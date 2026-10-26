@@ -252,6 +252,15 @@ def test_normalize_musaitlik() -> None:
     assert s["musaitlik"] == {"adet": 1, "tuttu": 0, "kismen": 0, "birakti": 1, "net_geri_arama": 0, "temsilci_sordu": 0}
 
 
+def test_plan_quota_total_cap_counts_short_analysed_and_drops_extras() -> None:
+    # Kotadan önce analiz edilmiş 13 kısa (1-2 dk) + 2 uzun görüşme: toplam 15, yeni seçim yok.
+    done = [_q(i, "r1", 0, 90, status="analiz_edildi", kota=None) for i in range(1, 14)]
+    done += [_q(i, "r1", 1, 300, status="analiz_edildi", kota=None) for i in (14, 15)]
+    extra = [_q(20, "r1", 2, 300, status="yazildi", kota="secildi"), _q(21, "r1", 2, 300)]
+    plan = cv.plan_quota(done + extra, elapsed_days=7, closed=True)
+    assert plan["secilen"] == [] and sorted(plan["disi"]) == [20, 21]
+
+
 def test_aggregate_empty_week() -> None:
     s = cv.aggregate([])
     assert s["analiz"] == 0 and s["puan_ort"] is None and s["sonraki_adim_orani"] is None

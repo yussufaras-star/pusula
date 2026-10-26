@@ -98,10 +98,12 @@ function addDays(day: string, n: number): string {
   return iso(d);
 }
 
+/** Haftanın tarih aralığı (pazartesi–pazar); bu / geçen hafta ayrıca belirtilir. */
 function weekLabel(start: string, current: string): string {
-  if (start === current) return "Bu hafta";
-  if (start === addDays(current, -7)) return "Geçen hafta";
-  return `${dayFmt.format(new Date(`${start}T00:00:00Z`))} haftası`;
+  const range = `${dayFmt.format(new Date(`${start}T00:00:00Z`))} – ${dayFmt.format(new Date(`${addDays(start, 6)}T00:00:00Z`))}`;
+  if (start === current) return `${range} · bu hafta`;
+  if (start === addDays(current, -7)) return `${range} · geçen hafta`;
+  return range;
 }
 
 function scoreTone(v: number | null | undefined): Tone {
@@ -141,8 +143,8 @@ function SpreadScore({ v, spread }: { v: number | null | undefined; spread?: num
 export function ConversationsPage({ me }: { me: Me }) {
   const isAdmin = me.role === "admin";
   const current = thisMonday();
-  const [week, setWeek] = useState(() => addDays(current, -7));
-  const [picked, setPicked] = useState(false);
+  // Açılışta bu hafta; geçmiş haftalar listeden seçilir.
+  const [week, setWeek] = useState(current);
   const [repFilter, setRepFilter] = useState<string>("");
   const [openRep, setOpenRep] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<number | null>(null);
@@ -152,17 +154,14 @@ export function ConversationsPage({ me }: { me: Me }) {
   const weeks = usePolling<ConvWeeks>("/api/conversations/weeks", 0);
   const { data, error, loading, refresh } = usePolling<ConvWeek>(`/api/conversations?week=${week}`, 0);
 
-  // Varsayılan: geçen hafta (kapanmış); verisi yoksa analizi olan en yeni hafta.
-  useEffect(() => {
-    const list = weeks.data?.weeks ?? [];
-    if (picked || !list.length || list.some((w) => w.week_start === addDays(current, -7) && w.analiz)) return;
-    setWeek(list[0].week_start);
-  }, [weeks.data, picked, current]);
-
   const weekOptions = useMemo(() => {
     const set = new Set([current, addDays(current, -7), ...(weeks.data?.weeks ?? []).map((w) => w.week_start)]);
-    return [...set].sort().reverse().slice(0, 8);
+    return [...set].sort().reverse().slice(0, 12);
   }, [current, weeks.data]);
+  const analysedIn = useMemo(
+    () => new Map((weeks.data?.weeks ?? []).map((w) => [w.week_start, w.analiz])),
+    [weeks.data],
+  );
 
   const items = useMemo(
     () => (data?.items ?? []).filter((i) => !repFilter || i.rep_id === repFilter),
@@ -197,13 +196,14 @@ export function ConversationsPage({ me }: { me: Me }) {
           </div>
         </div>
         <div className="controls">
-          <div className="chips" role="group" aria-label="Hafta">
+          <select className="f-input" value={week} onChange={(e) => setWeek(e.target.value)} aria-label="Hafta">
             {weekOptions.map((w) => (
-              <button key={w} className={`chip${week === w ? " on" : ""}`} onClick={() => { setWeek(w); setPicked(true); }} aria-pressed={week === w}>
+              <option key={w} value={w}>
                 {weekLabel(w, current)}
-              </button>
+                {analysedIn.get(w) ? ` · ${analysedIn.get(w)} analiz` : ""}
+              </option>
             ))}
-          </div>
+          </select>
           {isAdmin && repOptions.length ? (
             <select value={repFilter} onChange={(e) => setRepFilter(e.target.value)} aria-label="Temsilci">
               <option value="">Tüm ekip</option>
