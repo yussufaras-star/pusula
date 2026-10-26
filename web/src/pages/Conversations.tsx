@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 
 import { api, ApiError, usePolling } from "../api";
 import { ShareButton } from "../components/ShareButton";
+import { SonarTrend } from "../components/SonarTrend";
 import { StatTile, ToneBadge } from "../components/StatTile";
 import { Modal } from "../finance/ui";
 import { ago, duration, int, minutes, num, pct, type Tone } from "../format";
@@ -319,6 +320,12 @@ export function ConversationsPage({ me }: { me: Me }) {
               />
             ) : null}
           </div>
+
+          <SonarTrend
+            rep={repFilter}
+            scope={repFilter ? (repOptions.find(([id]) => id === repFilter)?.[1] ?? "") : ""}
+            isAdmin={isAdmin}
+          />
 
           {isAdmin && !repFilter && data.team?.narrative ? (
             <TeamCard
