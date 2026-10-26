@@ -1632,8 +1632,9 @@ def _item_summary(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# SONAR-41 koçluğunun başladığı gün (temsilcilere ilk geri bildirim); gelişim grafiğindeki işaret.
-COACHING_START = date(2026, 10, 15)
+# SONAR-41 koçluğunun başladığı hafta (pazartesi); gelişim grafiğindeki işaret ve
+# haftalık karşılaştırmanın temel çizgisi.
+COACHING_START = date(2026, 10, 12)
 # Gelişim grafiğinde ayrıca izlenen davranışlar: düşüneyim, tarihli takip, CRM notu.
 TREND_BEHAVIORS = ("B28", "B34", "B39")
 
@@ -1682,14 +1683,8 @@ def load_trend(rep_id: str | None) -> dict[str, Any]:
             (get_org_id(), *([rep_id] if rep_id else [])),
         )
         items = [{"occurred_at": o, "analysis": a, "kind": "call"} for o, a in cur.fetchall()]
-    start = datetime.combine(COACHING_START, datetime.min.time(), TZ)
-    before = aggregate([i for i in items if i["occurred_at"] < start])
-    after = aggregate([i for i in items if i["occurred_at"] >= start])
     return {
-        "kocluk_baslangic": COACHING_START,
-        # Görüşme tarihine göre: başlangıç günü haftanın ortasına düşebilir.
-        "oncesi": {"n": before["analiz"], "puan_ort": before["puan_ort"]},
-        "sonrasi": {"n": after["analiz"], "puan_ort": after["puan_ort"]},
+        "kocluk_baslangic": week_start_of(COACHING_START),
         "davranis_adlari": {k: sonar41.BEHAVIORS[k]["name"] for k in TREND_BEHAVIORS},
         "score_labels": SCORE_LABELS,
         "weeks": trend_points(items),
