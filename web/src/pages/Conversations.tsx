@@ -223,7 +223,7 @@ export function ConversationsPage({ me }: { me: Me }) {
         </div>
       </div>
 
-      {guide ? <SonarGuide labels={data?.score_labels ?? {}} /> : null}
+      {guide ? <SonarGuide labels={data?.score_labels ?? {}} isAdmin={isAdmin} /> : null}
       {error ? <div className="banner error">Analizler alınamadı: {error.message}</div> : null}
       {data && !data.durum.analiz_edildi ? (
         <EmptyWeek
@@ -310,7 +310,12 @@ export function ConversationsPage({ me }: { me: Me }) {
             ) : null}
           </div>
 
-          {isAdmin && !repFilter && data.team?.narrative ? <TeamCard n={data.team.narrative} /> : null}
+          {isAdmin && !repFilter && data.team?.narrative ? (
+            <TeamCard
+              n={data.team.narrative}
+              weekText={`${dayFmt.format(new Date(`${data.week_start}T00:00:00Z`))} – ${dayFmt.format(new Date(`${data.week_end}T00:00:00Z`))}`}
+            />
+          ) : null}
 
           {data.reps.length ? (
             <section className="card" data-share="gorusme-temsilciler">
@@ -884,11 +889,12 @@ const SCALE: { puan: string; ad: string; tone?: Tone; olcut: string; alinti: str
   },
 ];
 
-function SonarGuide({ labels }: { labels: Record<string, string> }) {
+function SonarGuide({ labels, isAdmin }: { labels: Record<string, string>; isAdmin: boolean }) {
   return (
-    <section className="card okr-guide">
+    <section className="card okr-guide" data-share="sonar41-rehber">
       <div className="card-head">
         <h2>SONAR-41 nasıl çalışır?</h2>
+        {isAdmin ? <ShareButton kart="sonar41-rehber" baslik="SONAR-41 nasıl çalışır?" /> : null}
       </div>
       <div className="card-body">
         <h3 className="cv-scale-title">Puanlama tablosu</h3>
@@ -1175,12 +1181,13 @@ function RunNotes({ report }: { report: Record<string, unknown> }) {
   );
 }
 
-function TeamCard({ n }: { n: NonNullable<NonNullable<ConvWeek["team"]>["narrative"]> }) {
+function TeamCard({ n, weekText }: { n: NonNullable<NonNullable<ConvWeek["team"]>["narrative"]>; weekText: string }) {
   return (
-    <section className="card">
+    <section className="card" data-share="gorusme-haftanin-ozeti">
       <div className="card-head">
-        <h2>Haftanın özeti</h2>
+        <h2>Haftanın özeti · {weekText}</h2>
         <span className="hint">yapay zekâ yorumu · sayılar koddan</span>
+        <ShareButton kart="gorusme-haftanin-ozeti" baslik={`Görüşme analizleri · haftanın özeti · ${weekText}`} />
       </div>
       <div className="card-body cv-team">
         <p className="cv-lead">{n.ozet}</p>
