@@ -575,7 +575,7 @@ export function ConversationsPage({ me }: { me: Me }) {
       )}
 
       {detailId !== null && data ? (
-        <ItemDetail id={detailId} sonar={data.sonar} labels={data.score_labels} onClose={() => setDetailId(null)} />
+        <ItemDetail id={detailId} sonar={data.sonar} labels={data.score_labels} isAdmin={isAdmin} onClose={() => setDetailId(null)} />
       ) : null}
     </div>
   );
@@ -1451,11 +1451,13 @@ function ItemDetail({
   id,
   sonar,
   labels,
+  isAdmin,
   onClose,
 }: {
   id: number;
   sonar: ConvSonarRef;
   labels: Record<string, string>;
+  isAdmin: boolean;
   onClose: () => void;
 }) {
   const [row, setRow] = useState<ConvItemDetail | null>(null);
@@ -1476,10 +1478,22 @@ function ItemDetail({
       {!row ? (
         !err ? <div className="skeleton" /> : null
       ) : (
-        <div className="cv-detail">
-          <div className="muted">
-            {dateTime.format(new Date(row.occurred_at))} · {duration(row.duration_sec)} · CRM sonucu:{" "}
-            {row.crm_outcome ?? "girilmemiş"}
+        <div className="cv-detail" data-share={`gorusme-detay-${row.id}`}>
+          <div className="cv-detail-head">
+            <div>
+              {/* Görselde de görüşmenin kimliği dursun (modal başlığı görüntüye girmez). */}
+              <b className="cv-detail-title">{title}</b>
+              <div className="muted">
+                {dateTime.format(new Date(row.occurred_at))} · {duration(row.duration_sec)} · CRM sonucu:{" "}
+                {row.crm_outcome ?? "girilmemiş"}
+              </div>
+            </div>
+            {isAdmin && a?.analiz_edilebilir ? (
+              <ShareButton
+                kart={`gorusme-detay-${row.id}`}
+                baslik={`Görüşme analizi · ${row.rep_name ?? ""} · ${dateTime.format(new Date(row.occurred_at))}`}
+              />
+            ) : null}
           </div>
           {!a ? (
             <p className="muted">{STATUS_LABEL[row.status]}{row.error ? ` · ${row.error}` : ""}</p>
@@ -1555,7 +1569,7 @@ function ItemDetail({
             </>
           )}
           {row.transcript ? (
-            <div>
+            <div data-share-skip>
               <button className="btn" onClick={() => setShowTranscript((v) => !v)}>
                 {showTranscript ? "Transkripti gizle" : "Transkripti göster"}
               </button>
