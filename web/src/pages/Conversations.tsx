@@ -575,7 +575,14 @@ export function ConversationsPage({ me }: { me: Me }) {
       )}
 
       {detailId !== null && data ? (
-        <ItemDetail id={detailId} sonar={data.sonar} labels={data.score_labels} isAdmin={isAdmin} onClose={() => setDetailId(null)} />
+        <ItemDetail
+          id={detailId}
+          sonar={data.sonar}
+          labels={data.score_labels}
+          isAdmin={isAdmin}
+          isExample={(data.ornek_temsilci ?? []).some((r) => r.ornek?.item_id === detailId)}
+          onClose={() => setDetailId(null)}
+        />
       ) : null}
     </div>
   );
@@ -1452,12 +1459,15 @@ function ItemDetail({
   sonar,
   labels,
   isAdmin,
+  isExample,
   onClose,
 }: {
   id: number;
   sonar: ConvSonarRef;
   labels: Record<string, string>;
   isAdmin: boolean;
+  /** Temsilcinin haftalık örnek görüşmesi: başlık ve Cliq görseli "Örnek görüşme" olur. */
+  isExample: boolean;
   onClose: () => void;
 }) {
   const [row, setRow] = useState<ConvItemDetail | null>(null);
@@ -1482,6 +1492,7 @@ function ItemDetail({
           <div className="cv-detail-head">
             <div>
               {/* Görselde de görüşmenin kimliği dursun (modal başlığı görüntüye girmez). */}
+              {isExample ? <span className="badge good cv-detail-tag">Örnek görüşme</span> : null}
               <b className="cv-detail-title">{title}</b>
               <div className="muted">
                 {dateTime.format(new Date(row.occurred_at))} · {duration(row.duration_sec)} · CRM sonucu:{" "}
@@ -1491,7 +1502,7 @@ function ItemDetail({
             {isAdmin && a?.analiz_edilebilir ? (
               <ShareButton
                 kart={`gorusme-detay-${row.id}`}
-                baslik={`Görüşme analizi · ${row.rep_name ?? ""} · ${dateTime.format(new Date(row.occurred_at))}`}
+                baslik={`${isExample ? "Örnek görüşme" : "Görüşme analizi"} · ${row.rep_name ?? ""} · ${dateTime.format(new Date(row.occurred_at))}`}
               />
             ) : null}
           </div>
