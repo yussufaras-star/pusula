@@ -903,7 +903,7 @@ const SCALE: { puan: string; ad: string; tone?: Tone; olcut: string; alinti: str
     tone: "critical",
     olcut: "Davranış yapıldı ama yanlış, yüzeysel, yönlendirici, savunmacı ya da baskıcı. Müşteri açılmadı, kapandı ya da rahatsız oldu.",
     alinti: "Temsilcinin hatalı / yarım cümlesi ve müşterinin kapanan cevabı",
-    ornek: "“Yani sizi kararsız bırakan nokta nedir? Tedarik anlamında mı sorunlar yaşıyorsunuz?” (B28, cevabı temsilci veriyor) · “Bir iki hafta sonrası için bence indirimli olarak bugün almanız daha mantıklı olur.” (B22, baskı)",
+    ornek: "“Yani sizi kararsız bırakan nokta nedir? Tedarik anlamında mı sorunlar yaşıyorsunuz?” (B28; soru iyi başlıyor ama ikinci cümlede cevabı temsilci veriyor, müşteri kendi engelini söyleyemiyor) · “Bir iki hafta sonrası için bence indirimli olarak bugün almanız daha mantıklı olur.” (B22; soru yok, baskı var)",
     mesaj: "Fırsatı gördün, yöntem yanlış.",
   },
   {
@@ -912,7 +912,7 @@ const SCALE: { puan: string; ad: string; tone?: Tone; olcut: string; alinti: str
     tone: "neutral",
     olcut: "Davranış doğru yapıldı ama kalıp; herkese söylenebilir, müşteriye özel değil.",
     alinti: "Genel, standart temsilci cümlesi",
-    ornek: "“Ya tam olarak mesela neyi düşüneceksiniz?” (B28; doğru soru, ama bu müşterinin söylediklerine bağlanmıyor)",
+    ornek: "“Ya tam olarak mesela neyi düşüneceksiniz?” (B28; açık soru, sözü müşteriye bırakıyor, bu yüzden 2'den iyi. Ama müşterinin az önce söylediği eş ve kardeş konusuna bağlanmıyor, her müşteriye sorulabilir. 4 için: “Eşiniz ve kardeşinizle konuşunca en çok neyi soracaklar?”, kurgusal)",
     mesaj: "Doğru yaptın, şimdi bu müşteriye yap.",
   },
   {
