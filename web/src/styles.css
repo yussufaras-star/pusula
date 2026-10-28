@@ -3887,3 +3887,16 @@ textarea.f-input {
 .chart .sonar-target-label {
   fill: var(--good-ink);
 }
+
+.cv-detail-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.cv-detail-title {
+  display: block;
+  font-size: 15px;
+  margin-bottom: 2px;
+}
