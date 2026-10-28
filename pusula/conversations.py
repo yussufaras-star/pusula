@@ -793,9 +793,10 @@ Puanlama ("sonar"):
     eğitimde dinletilebilir. Alıntı: öncesi ve sonrası — müşterinin tavrı değişti, somut adım kabul.
   Rexven görüşmelerinden örnekler ("düşüneyim" anı, B28): 1 müşteri eşiyle konuşacağını söyleyince
   temsilci "Tabii tabii, nasıl isterseniz." · 2 "Sizi kararsız bırakan nokta nedir? Tedarik
-  anlamında mı sorunlar yaşıyorsunuz?" (cevabı temsilci veriyor) ya da "İndirimli olarak bugün almanız
-  daha mantıklı olur." (baskı) · 3 "Tam olarak neyi düşüneceksiniz?" (doğru ama bu müşteriye
-  bağlanmıyor) · 4 müşterinin daha önce söylediğine bağlanan soru ve müşteri açılır; ödeme itirazında:
+  anlamında mı sorunlar yaşıyorsunuz?" (soru iyi başlıyor ama cevabı temsilci veriyor, müşteri kendi
+  engelini söyleyemiyor) ya da "İndirimli olarak bugün almanız daha mantıklı olur." (baskı) · 3 "Tam
+  olarak neyi düşüneceksiniz?" (açık soru, sözü müşteriye bırakıyor; ama eş/kardeş konusuna
+  bağlanmıyor, her müşteriye sorulabilir) · 4 müşterinin daha önce söylediğine bağlanan soru ve müşteri açılır; ödeme itirazında:
   "Hangi kartınız varsa söyleyin, onu size atayım." → "Garanti American Express kartından yapabilirim."
   · 5 4'e ek olarak somut, tarihli adım kabul edilir: "...eşinizle bu akşam 20:00'de 15 dakikalık
   online görüşme yapalım." → "Olur." (kurgusal örnek).
