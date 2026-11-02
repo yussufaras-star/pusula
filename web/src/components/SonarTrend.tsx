@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { usePolling } from "../api";
+import { weekCode } from "../format";
 import { ShareButton } from "./ShareButton";
 
 // SONAR-41 gelişimi: haftalık toplam puan ortalaması (1-5), tek grafik. Dikey işaret koçluğun
@@ -97,7 +98,7 @@ function TrendChart({ weeks, series, marker }: { weeks: string[]; series: Series
         {weeks.map((w, i) =>
           i % labelEvery === 0 || i === n - 1 ? (
             <text key={w} className="tick" x={x(i)} y={H - 6} textAnchor="middle">
-              {fmtDay(w)}
+              {weekCode(w)}
             </text>
           ) : null,
         )}
@@ -146,7 +147,7 @@ function TrendChart({ weeks, series, marker }: { weeks: string[]; series: Series
       </svg>
       {hover !== null ? (
         <div className="tooltip" style={{ left: `${(x(hover) / W) * 100}%`, top: `${(PAD.top / H) * 100}%` }}>
-          <div className="t-head">{fmtDay(weeks[hover])} haftası</div>
+          <div className="t-head">{weekCode(weeks[hover])} · {fmtDay(weeks[hover])} haftası</div>
           {series.map((s) => {
             const w = s.byWeek.get(weeks[hover]);
             return (
@@ -210,9 +211,9 @@ export function SonarTrend({ rep, scope, isAdmin }: { rep: string; scope: string
           SONAR-41 gelişimi{scope ? ` · ${scope}` : " · ekip"}
         </h2>
         <span className="hint">
-          koçluğun başladığı hafta ({fmtDay(start)}) {base === null ? "—" : f2(base)}
+          koçluğun başladığı hafta ({weekCode(start)}) {base === null ? "—" : f2(base)}
           {last !== null && delta !== null && lastWeek
-            ? ` → son hafta (${fmtDay(lastWeek)}) ${f2(last)} (${delta >= 0 ? "+" : "−"}${f2(Math.abs(delta))})`
+            ? ` → son hafta (${weekCode(lastWeek)}) ${f2(last)} (${delta >= 0 ? "+" : "−"}${f2(Math.abs(delta))})`
             : " · karşılaştırma için sonraki hafta bekleniyor"}
         </span>
         <span className="sonar-head-actions" onClick={(e) => e.stopPropagation()}>
