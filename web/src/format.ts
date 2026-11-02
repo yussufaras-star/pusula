@@ -53,6 +53,18 @@ export function ago(iso: string | null | undefined, now: Date): string {
 
 export const hourLabel = (h: number): string => `${String(h).padStart(2, "0")}:00`;
 
+/** Pazartesi (YYYY-AA-GG) → "Q4W5". Hafta, perşembesinin düştüğü çeyreğe sayılır (ISO hafta
+ *  kuralı): W1 çeyreğin ilk perşembesini içeren haftadır. Başka yılsa yıl eklenir ("Q4W5 '25"). */
+export function weekCode(monday: string, thisYear?: number): string {
+  const thu = new Date(`${monday.slice(0, 10)}T00:00:00Z`);
+  thu.setUTCDate(thu.getUTCDate() + 3);
+  const y = thu.getUTCFullYear();
+  const q = Math.floor(thu.getUTCMonth() / 3);
+  const days = (thu.getTime() - Date.UTC(y, q * 3, 1)) / 86_400_000;
+  const code = `Q${q + 1}W${Math.floor(days / 7) + 1}`;
+  return thisYear !== undefined && y !== thisYear ? `${code} '${String(y).slice(2)}` : code;
+}
+
 /** Gerçekleşen / beklenen. Beklenen yoksa null. */
 export function pace(actual: number | null, expected: number | null): number | null {
   if (actual === null || expected === null || expected <= 0) return null;

@@ -5,7 +5,7 @@ import { ShareButton } from "../components/ShareButton";
 import { SonarTrend } from "../components/SonarTrend";
 import { StatTile, ToneBadge } from "../components/StatTile";
 import { Modal } from "../finance/ui";
-import { ago, duration, int, minutes, num, pct, type Tone } from "../format";
+import { ago, duration, int, minutes, num, pct, type Tone, weekCode } from "../format";
 import type {
   ConvRequest,
   ConvBug,
@@ -99,12 +99,17 @@ function addDays(day: string, n: number): string {
   return iso(d);
 }
 
-/** Haftanın tarih aralığı (pazartesi–pazar); bu / geçen hafta ayrıca belirtilir. */
+/** Kısa hafta etiketi: "Q4W5 · 26 Eki" (pazartesi); bu / geçen hafta ayrıca belirtilir. */
 function weekLabel(start: string, current: string): string {
-  const range = `${dayFmt.format(new Date(`${start}T00:00:00Z`))} – ${dayFmt.format(new Date(`${addDays(start, 6)}T00:00:00Z`))}`;
-  if (start === current) return `${range} · bu hafta`;
-  if (start === addDays(current, -7)) return `${range} · geçen hafta`;
-  return range;
+  const label = `${weekCode(start, Number(current.slice(0, 4)))} · ${dayFmt.format(new Date(`${start}T00:00:00Z`))}`;
+  if (start === current) return `${label} · bu hafta`;
+  if (start === addDays(current, -7)) return `${label} · geçen hafta`;
+  return label;
+}
+
+/** Başlık ve paylaşımlar için: "Q4W5 · 26 Eki – 1 Kas". */
+function weekTitle(start: string): string {
+  return `${weekCode(start)} · ${dayFmt.format(new Date(`${start}T00:00:00Z`))} – ${dayFmt.format(new Date(`${addDays(start, 6)}T00:00:00Z`))}`;
 }
 
 function scoreTone(v: number | null | undefined): Tone {
@@ -169,6 +174,7 @@ export function ConversationsPage({ me }: { me: Me }) {
     const set = new Set([current, addDays(current, -7), ...(weeks.data?.weeks ?? []).map((w) => w.week_start)]);
     return [...set].sort().reverse().slice(0, 12);
   }, [current, weeks.data]);
+  const weekIdx = weekOptions.indexOf(week);
   const analysedIn = useMemo(
     () => new Map((weeks.data?.weeks ?? []).map((w) => [w.week_start, w.analiz])),
     [weeks.data],
@@ -200,21 +206,41 @@ export function ConversationsPage({ me }: { me: Me }) {
           <h1>Görüşme Analizleri</h1>
           <div className="sub">
             {data
-              ? `${dayFmt.format(new Date(`${data.week_start}T00:00:00Z`))} – ${dayFmt.format(new Date(`${data.week_end}T00:00:00Z`))} · telefon görüşmeleri ve toplantılar`
+              ? `${weekTitle(data.week_start)} · telefon görüşmeleri ve toplantılar`
               : "…"}
             {loading ? " · yükleniyor…" : ""}
             {setup?.son_calisma ? ` · son analiz ${ago(setup.son_calisma, new Date())}` : ""}
           </div>
         </div>
         <div className="controls">
-          <select className="f-input" value={week} onChange={(e) => pickWeek(e.target.value)} aria-label="Hafta">
-            {weekOptions.map((w) => (
-              <option key={w} value={w}>
-                {weekLabel(w, current)}
-                {analysedIn.get(w) ? ` · ${analysedIn.get(w)} analiz` : ""}
-              </option>
-            ))}
-          </select>
+          <div className="week-step">
+            <button
+              className="btn"
+              onClick={() => pickWeek(weekOptions[weekIdx + 1])}
+              disabled={weekIdx < 0 || weekIdx >= weekOptions.length - 1}
+              aria-label="Önceki hafta"
+              title="Önceki hafta"
+            >
+              ‹
+            </button>
+            <select className="f-input" value={week} onChange={(e) => pickWeek(e.target.value)} aria-label="Hafta">
+              {weekOptions.map((w) => (
+                <option key={w} value={w}>
+                  {weekLabel(w, current)}
+                  {analysedIn.get(w) ? "" : " · analiz yok"}
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn"
+              onClick={() => pickWeek(weekOptions[weekIdx - 1])}
+              disabled={weekIdx <= 0}
+              aria-label="Sonraki hafta"
+              title="Sonraki hafta"
+            >
+              ›
+            </button>
+          </div>
           {isAdmin && repOptions.length ? (
             <select value={repFilter} onChange={(e) => setRepFilter(e.target.value)} aria-label="Temsilci">
               <option value="">Tüm ekip</option>
@@ -330,7 +356,7 @@ export function ConversationsPage({ me }: { me: Me }) {
           {isAdmin && !repFilter && data.team?.narrative ? (
             <TeamCard
               n={data.team.narrative}
-              weekText={`${dayFmt.format(new Date(`${data.week_start}T00:00:00Z`))} – ${dayFmt.format(new Date(`${data.week_end}T00:00:00Z`))}`}
+              weekText={`${weekTitle(data.week_start)}`}
             />
           ) : null}
 
@@ -344,7 +370,7 @@ export function ConversationsPage({ me }: { me: Me }) {
                 {isAdmin && !repFilter ? (
                   <ShareButton
                     kart="gorusme-temsilciler"
-                    baslik={`Görüşme Analizleri · ${dayFmt.format(new Date(`${data.week_start}T00:00:00Z`))} – ${dayFmt.format(new Date(`${data.week_end}T00:00:00Z`))}`}
+                    baslik={`Görüşme Analizleri · ${weekTitle(data.week_start)}`}
                   />
                 ) : null}
               </div>
@@ -462,7 +488,7 @@ export function ConversationsPage({ me }: { me: Me }) {
               labels={data.score_labels}
               isAdmin={isAdmin}
               scope={repFilter ? (repOptions.find(([id]) => id === repFilter)?.[1] ?? "") : ""}
-              weekText={`${dayFmt.format(new Date(`${data.week_start}T00:00:00Z`))} – ${dayFmt.format(new Date(`${data.week_end}T00:00:00Z`))}`}
+              weekText={`${weekTitle(data.week_start)}`}
               onOpen={setDetailId}
             />
           ) : null}
@@ -475,7 +501,7 @@ export function ConversationsPage({ me }: { me: Me }) {
               reps={repOptions}
               isAdmin={isAdmin}
               pageRep={repFilter}
-              weekText={`${dayFmt.format(new Date(`${data.week_start}T00:00:00Z`))} – ${dayFmt.format(new Date(`${data.week_end}T00:00:00Z`))}`}
+              weekText={`${weekTitle(data.week_start)}`}
               onOpen={setDetailId}
             />
           ) : null}
