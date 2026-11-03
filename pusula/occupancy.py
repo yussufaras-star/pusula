@@ -13,6 +13,9 @@ damgalarından bir şeride dökülür:
   12 Ekim; Zoho mesajı tek tek değil konuşma olarak tutar).
 - Gelmeyen toplantı: Zoho Meeting odası açılmadan CRM'de "katılmadı"
   girildiyse planlanan başlangıçtan 10 dk bekleme dolu (yönetici kuralı).
+- Yöneticiyle iç toplantı ("Mentörlük Görüşmesi-<Temsilci>", Zoho Meeting,
+  her ayın ilk salısı): temsilcinin katılımı, rapor yoksa planlanan süre
+  toplantı sayılır (internal_meetings; yönetici kararı, 3 Kasım).
 - CRM işlemi (not, görev, lead/deal/contact oluşturma veya değiştirme):
   işlemden önceki 2 dk dolu. Zoho kayıt başına yalnız son değişikliği
   verdiğinden alt sınırdır.
@@ -367,6 +370,7 @@ def fetch_intervals(
                 if busy is not None:
                     rows.append((rep_id, day, busy[0], busy[1], "toplanti"))
         rows.extend(_crm_rows(conn, span, rep_ids=rep_ids, isodow=isodow))
+        rows.extend(_internal_rows(conn, span, rep_ids=rep_ids, isodow=isodow))
     for rep_id, day, start, end, kind in rows:
         out[(str(rep_id), day)].append((start.astimezone(TZ), end.astimezone(TZ), kind))
     return dict(out)
@@ -402,6 +406,34 @@ def _crm_rows(
             " AND extract(isodow FROM a.acted_at AT TIME ZONE 'Europe/Istanbul')::int"
             " = ANY(%s)"
         )
+        params.append([int(d) for d in isodow])
+    return [tuple(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def _internal_rows(
+    conn: Any,
+    span: Span,
+    *,
+    rep_ids: Sequence[str] | None,
+    isodow: Sequence[int] | None,
+) -> list[tuple[str, date, datetime, datetime, str]]:
+    """Yöneticiyle iç toplantılar (internal_meetings): toplantı. Tablo yoksa boş."""
+    exists = conn.execute("SELECT to_regclass('internal_meetings')").fetchone()
+    if not exists or exists[0] is None:
+        return []
+    sql = """
+        SELECT m.rep_id, m.day, m.start_at, least(m.end_at, now()), 'toplanti'
+        FROM internal_meetings m
+        JOIN reps r ON r.org_id = m.org_id AND r.rep_id = m.rep_id
+        WHERE m.org_id = %s AND r.category = 'sales' AND r.active
+          AND m.start_at >= %s AND m.start_at < %s AND m.start_at <= now()
+    """
+    params: list[Any] = [get_org_id(), span.start, span.end]
+    if rep_ids:
+        sql += " AND m.rep_id = ANY(%s)"
+        params.append(list(rep_ids))
+    if isodow:
+        sql += " AND extract(isodow FROM m.start_at AT TIME ZONE 'Europe/Istanbul')::int = ANY(%s)"
         params.append([int(d) for d in isodow])
     return [tuple(row) for row in conn.execute(sql, params).fetchall()]
 

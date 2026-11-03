@@ -9,6 +9,12 @@ Yetki ayrı bir refresh token'dadır (ZOHO_MEETING_REFRESH_TOKEN; kapsam
 ZohoMeeting.meeting.READ + ZohoMeeting.manageOrg.READ). CRM token'ına
 dokunulmaz. Değişken yoksa senkron atlanır.
 
+Yöneticinin temsilciyle iç toplantısı ("Mentörlük Görüşmesi-<Temsilci>", her ayın
+ilk salısı, yönetici kararı 3 Kasım) temsilcinin doluluğuna toplantı olarak girer
+(internal_meetings). Temsilci katılımcı raporunda adıyla görünür; katılımı varsa
+gerçek giriş-çıkış, yoksa planlanan süre sayılır. Toplantılar tekrarlayan olduğu
+için rapor yalnız son tekrarı verir; eski tekrarlar plan süresiyle kalır.
+
 Uçlar (meeting.zoho.com/api/v2):
 - user.json → zsoid (kuruluş no)
 - {zsoid}/sessions.json?listtype=past → toplantılar, yeniden eskiye
@@ -19,10 +25,12 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -46,6 +54,7 @@ RULE_V = 2
 MAX_FAIL_STREAK = 10
 _TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 _TOKEN_TTL = 55 * 60
+_IST = ZoneInfo("Europe/Istanbul")
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS meeting_sessions (
@@ -68,7 +77,23 @@ CREATE INDEX IF NOT EXISTS idx_meeting_sessions_rep_time
 ALTER TABLE meeting_sessions ADD COLUMN IF NOT EXISTS customer_join timestamptz;
 ALTER TABLE meeting_sessions ADD COLUMN IF NOT EXISTS customer_leave timestamptz;
 ALTER TABLE meeting_sessions ADD COLUMN IF NOT EXISTS rule_v int NOT NULL DEFAULT 1;
+CREATE TABLE IF NOT EXISTS internal_meetings (
+    org_id       text NOT NULL DEFAULT 'rexven',
+    meeting_key  text NOT NULL,
+    rep_id       text NOT NULL,
+    day          date NOT NULL,
+    start_at     timestamptz NOT NULL,
+    end_at       timestamptz NOT NULL,
+    topic        text,
+    source       text NOT NULL,
+    fetched_at   timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (org_id, meeting_key, rep_id, day),
+    CHECK (end_at > start_at)
+);
 """
+
+# "Mentörlük Görüşmesi-Beytullah Aras" (Mentorluk / tire / iki nokta toleranslı).
+INTERNAL_TOPIC = re.compile(r"^\s*ment[oö]rl[uü]k\s+g[oö]r[uü][sş]mesi\s*[-–—:]\s*(.+?)\s*$", re.IGNORECASE)
 
 _lock = threading.Lock()
 _token: tuple[str, float] | None = None
@@ -198,6 +223,44 @@ def busy_interval(
     return (presenter_join, end) if end > presenter_join else None
 
 
+def _norm_name(name: str) -> str:
+    text = name.replace("İ", "i").replace("I", "ı").casefold()
+    return " ".join(text.split())
+
+
+def internal_rows(
+    session: dict[str, Any],
+    participants: list[dict[str, Any]],
+    reps_by_name: dict[str, str],
+    now: datetime,
+) -> list[dict[str, Any]]:
+    """Saf: iç toplantı oturumu → temsilcinin dolu aralığı (yoksa boş liste)."""
+    match = INTERNAL_TOPIC.match(str(session.get("topic") or ""))
+    if not match:
+        return []
+    name = _norm_name(match.group(1))
+    rep_id = reps_by_name.get(name)
+    planned = _ms(session.get("startTimeMillisec") or session.get("startTimeMillis"))
+    if rep_id is None or planned is None or planned > now:
+        return []
+    day = planned.astimezone(_IST).date()
+    presenter = (session.get("presenterEmail") or "").strip().lower()
+    for part in participants:
+        who = _norm_name(str(part.get("email") or part.get("name") or ""))
+        if part.get("role") == "presenter" or who == presenter or who != name:
+            continue
+        join, leave = _ms(part.get("joinTime")), _ms(part.get("leaveTime"))
+        # Rapor tekrarlayan toplantının son tekrarını verir: başka güne aitse plan.
+        if join and join.astimezone(_IST).date() == day:
+            end = min(leave, now) if leave and leave > join else now
+            if end > join:
+                return [{"rep_id": rep_id, "day": day, "start_at": join, "end_at": end, "source": "katilim"}]
+    end = min(planned + timedelta(milliseconds=float(session.get("duration") or 0)), now)
+    if end <= planned:
+        return []
+    return [{"rep_id": rep_id, "day": day, "start_at": planned, "end_at": end, "source": "plan"}]
+
+
 def _zsoid() -> str:
     body = _get("user.json")
     zsoid = (body.get("userDetails") or {}).get("zsoid")
@@ -244,6 +307,40 @@ def _final_keys(conn: Any, keys: list[str]) -> set[str]:
     return {str(r[0]) for r in rows}
 
 
+def _sync_internal(
+    conn: Any, zsoid: str, sessions: list[dict[str, Any]], reps_by_name: dict[str, str], now: datetime
+) -> int:
+    """İç toplantıları (Mentörlük Görüşmesi-<Temsilci>) internal_meetings'e yazar."""
+    written = 0
+    reports: dict[str, list[dict[str, Any]]] = {}
+    for session in sessions:
+        if not INTERNAL_TOPIC.match(str(session.get("topic") or "")):
+            continue
+        key = str(session.get("meetingKey"))
+        if key not in reports:
+            try:
+                body = _get(f"{zsoid}/participant/{key}.json", {"index": 1, "count": 100})
+                reports[key] = body.get("participants") or []
+            except httpx.HTTPError as exc:
+                logger.warning("İç toplantı raporu alınamadı (%s): %s", key, exc)
+                reports[key] = []
+        for row in internal_rows(session, reports[key], reps_by_name, now):
+            conn.execute(
+                """
+                INSERT INTO internal_meetings (org_id, meeting_key, rep_id, day, start_at, end_at, topic, source, fetched_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now())
+                ON CONFLICT (org_id, meeting_key, rep_id, day) DO UPDATE SET
+                    start_at = EXCLUDED.start_at, end_at = EXCLUDED.end_at,
+                    topic = EXCLUDED.topic, source = EXCLUDED.source, fetched_at = now()
+                """,
+                (get_org_id(), key, row["rep_id"], row["day"], row["start_at"], row["end_at"],
+                 session.get("topic"), row["source"]),
+            )
+            written += 1
+    conn.commit()
+    return written
+
+
 def sync_meetings(
     now: datetime, *, lookback: timedelta = timedelta(days=2), budget_sec: float | None = None
 ) -> dict[str, Any]:
@@ -266,6 +363,14 @@ def sync_meetings(
                 (get_org_id(),),
             ).fetchall()
         }
+        reps_by_name = {
+            _norm_name(str(name)): str(rep_id)
+            for rep_id, name in conn.execute(
+                "SELECT rep_id, full_name FROM reps WHERE org_id = %s AND category = 'sales' AND full_name IS NOT NULL",
+                (get_org_id(),),
+            ).fetchall()
+        }
+        report["ic_toplanti"] = _sync_internal(conn, zsoid, sessions, reps_by_name, now)
         final = _final_keys(conn, [str(s.get("meetingKey")) for s in sessions])
         for session in sessions:
             key = str(session.get("meetingKey"))
