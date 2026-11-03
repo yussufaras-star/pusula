@@ -26,9 +26,10 @@ zamandır. Doluluk = dolu / (dolu + kayıp).
 Sonucu girilmemiş, bitmiş toplantının süresi kayıptır ve moladan düşülmez;
 şeritte ayrı ("girilmemis") görünür, kayip_dk içinde sayılır.
 
-Panelden girilen muaf süre (eğitim vb.) içindeki boşluk ne mola ne kayıptır;
-şeritte "muaf" görünür, doluluk paydasına girmez. Aralıkta yapılan faaliyet
-yine dolu sayılır.
+Panelden girilen muaf süre (eğitim, iç toplantı vb.) aralığın tamamıdır: içinde
+faaliyet ya da sonucu girilmemiş toplantı olsa da şeritte tek "muaf" blok görünür,
+ne dolu ne mola ne kayıp sayılır, doluluk paydasına girmez (yönetici kararı,
+3 Kasım). Arama/toplantı sayıları etkilenmez; yalnız zaman hesabı.
 
 Panelden izinli işaretlenen temsilci-günü ölçüme girmez. Hiç faaliyeti
 olmayan gün de (işaretlenmemiş izin, rapor) girmez; yalnız süren gün
@@ -134,6 +135,13 @@ def _subtract(
     return pieces
 
 
+def _minus(spans: list[Interval], off: list[Interval]) -> list[Interval]:
+    """Aralıklardan off'u çıkarır."""
+    if not off:
+        return spans
+    return [(a, b) for span in spans for a, b, kind in _subtract(span, off, covered="off") if kind == "bos"]
+
+
 def day_timeline(
     intervals: Iterable[Interval],
     day: date,
@@ -149,7 +157,7 @@ def day_timeline(
     pending: sonucu girilmemiş toplantılar; dolu değil, kayıptır, mola olmaz.
     meetings: dolu aralıkların toplantı olan kısmı; şeritte "toplanti"
     görünür, toplamda dolu sayılır (intervals içinde de olmalıdır).
-    excused: muaf süreler; kalan boşluğun bu kısmı "muaf", mola olmaz.
+    excused: muaf süreler; aralığın tamamı "muaf" (içindeki faaliyet dahil).
     """
     timeline = DayTimeline(day)
     bounds = shift_bounds(day)
@@ -158,11 +166,12 @@ def day_timeline(
     lo, hi = bounds[0], min(bounds[1], cut)
     if hi <= lo:
         return timeline
-    busy = merge((max(a, lo), min(b, hi)) for a, b in intervals if b > lo and a < hi)
-    covers = merge((max(a, lo), min(b, hi)) for a, b in pending if b > lo and a < hi)
+    off = merge((max(a, lo), min(b, hi)) for a, b in excused if b > lo and a < hi)
+    busy = _minus(merge((max(a, lo), min(b, hi)) for a, b in intervals if b > lo and a < hi), off)
+    covers = _minus(merge((max(a, lo), min(b, hi)) for a, b in pending if b > lo and a < hi), off)
     gaps: list[Interval] = []
     cursor = lo
-    for a, b in busy:
+    for a, b in merge([*busy, *off]):
         if a > cursor:
             gaps.append((cursor, a))
         cursor = max(cursor, b)
@@ -180,15 +189,7 @@ def day_timeline(
         gaps = [g for g in gaps if g not in flow]
         busy = merge([*busy, *flow])
     pieces = [piece for gap in gaps for piece in _subtract(gap, covers)]
-    off = merge((max(a, lo), min(b, hi)) for a, b in excused if b > lo and a < hi)
-    if off:
-        pieces = [
-            part
-            for piece in pieces
-            for part in (
-                _subtract((piece[0], piece[1]), off, covered="muaf") if piece[2] == "bos" else [piece]
-            )
-        ]
+    pieces += [(a, b, "muaf") for a, b in off]
 
     # Mola serbest boşlukların en uzunlarından; eşitlikte erken olan. Baştan kesilir.
     remaining = mola_dk

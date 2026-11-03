@@ -61,8 +61,8 @@ def set_leave(rep_id: str, day: date, on: bool, *, by: str) -> None:
 
 # --- muaf süre ------------------------------------------------------------------
 # Gün içinde yöneticinin elle girdiği saat aralığı (eğitim, iç toplantı vb.).
-# O aralıktaki boşluk kayıp ve mola sayılmaz; doluluk paydasından düşer.
-# Aralıkta yapılan faaliyet yine dolu sayılır.
+# Aralığın tamamı muaf: içindeki faaliyet ya da sonucu girilmemiş toplantı onu bölmez,
+# kayıp, mola ve dolu sayılmaz; doluluk paydasından düşer (yönetici kararı, 3 Kasım).
 
 EXCUSED_SQL = """
 CREATE TABLE IF NOT EXISTS rep_excused (
