@@ -388,7 +388,7 @@ def share_card(body: ShareCardBody, user: AuthUser = Depends(admin_user)) -> dic
 
 @app.post("/api/excused")
 def add_excused_time(body: ExcusedBody, user: AuthUser = Depends(admin_user)) -> dict[str, Any]:
-    """Muaf süre ekler (eğitim vb.): o aralık kayıp ve mola sayılmaz."""
+    """Muaf süre ekler (eğitim vb.): aralığın tamamı muaf, içindeki faaliyet onu bölmez."""
     require_database()
     try:
         day = date.fromisoformat(body.day)

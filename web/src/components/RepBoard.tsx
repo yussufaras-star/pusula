@@ -115,7 +115,7 @@ function ExcusedCell({ card, handlers }: { card: RepCard; handlers: ExcuseHandle
   return (
     <div className="excused">
       {card.excused.map((x: Excused) => (
-        <div key={x.id} className="sub" title="Bu aralık kayıp ve mola sayılmaz">
+        <div key={x.id} className="sub" title="Aralığın tamamı muaf: içindeki arama ya da toplantı onu bölmez, doluluğa girmez">
           {clock(x.start)}–{clock(x.end)} {x.reason ?? "muaf"}{" "}
           <button className="link-btn" aria-label="Muaf süreyi sil" onClick={() => handlers.remove(x.id)}>
             ×
@@ -270,7 +270,7 @@ export function RepBoard({ reps, nowHour, warnIdle, crmTracking, now, onLeave, o
       </table>
       <p className="muted" style={{ fontSize: 12, margin: "10px 0 0" }}>
         Hareketsizlik: mesai içinde son arama, toplantı, WhatsApp veya CRM işleminden bu yana
-        geçen süre; süren toplantı hareketsizlik sayılmaz. İzinli gün doluluğa ve ekip beklentisine girmez; muaf süre (eğitim vb.) kayıp ve mola sayılmaz, o sırada dürtme gitmez. Veri tazeliğiyle sınırlıdır. Tempo çizgisi: son 90 günde aynı gün tipinde bu
+        geçen süre; süren toplantı hareketsizlik sayılmaz. İzinli gün doluluğa ve ekip beklentisine girmez; muaf süre (eğitim, iç toplantı vb.) aralığın tamamıdır, içindeki faaliyet onu bölmez ve doluluğa girmez, o sırada dürtme gitmez. Veri tazeliğiyle sınırlıdır. Tempo çizgisi: son 90 günde aynı gün tipinde bu
         saate kadar yapılan ortalama.
       </p>
     </div>

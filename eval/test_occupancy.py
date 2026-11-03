@@ -149,11 +149,25 @@ def test_excused_time_is_neither_lost_nor_break() -> None:
     assert row["muaf_dk"] == pytest.approx(60)
 
 
-def test_activity_inside_excused_window_still_counts_as_busy() -> None:
+def test_excused_window_is_one_block_even_with_activity_inside() -> None:
+    # Yönetici kararı (3 Kasım): muaf aralığın tamamıdır; içindeki faaliyet onu bölmez.
     busy = [(at(9), at(18))]
     t = day_timeline(busy, MONDAY, at(23), excused=[(at(10), at(11))])
-    assert t.total("dolu") == pytest.approx(540)
-    assert t.total("muaf") == 0
+    assert t.total("dolu") == pytest.approx(480)
+    assert t.total("muaf") == pytest.approx(60)
+    assert [s.kind for s in t.segments] == ["dolu", "muaf", "dolu"]
+
+
+def test_pending_meeting_inside_excused_window_is_not_lost() -> None:
+    # 16:18-17:08 iç toplantı; 17:00 müşteri randevusu sonucu girilmemiş.
+    busy = [(at(9), at(16, 18)), (at(17, 30), at(18))]
+    t = day_timeline(
+        busy, MONDAY, at(23), pending=[(at(17), at(17, 30))], excused=[(at(16, 18), at(17, 8))]
+    )
+    assert t.total("muaf") == pytest.approx(50)
+    assert t.total("girilmemis") == pytest.approx(22)
+    muaf = [s for s in t.segments if s.kind == "muaf"]
+    assert len(muaf) == 1 and (muaf[0].start, muaf[0].end) == (at(16, 18), at(17, 8))
 
 
 def test_excused_windows_reach_timelines_for() -> None:
