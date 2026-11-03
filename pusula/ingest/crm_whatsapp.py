@@ -6,6 +6,11 @@ o konuşmanın son mesaj zamanıdır. source_ref = id + message_time:
 zaman değişince yeni olay yazılır, eskisi durur. İki senkron arasında
 aynı konuşmaya art arda giden mesajlar tek olayda birleşir.
 
+Otomasyon (yeni lead gelir gelmez giden karşılama mesajı) sayılmaz: yanıtlayanı
+(replied_by) satış temsilcisi olmayan giden konuşma otomasyondur. Temsilcinin elle
+attığı mesajda replied_by her zaman dolu; boş olanların ~%98'i lead açıldıktan
+sonraki 1 saat içinde gidiyor (2026-11 ölçümü).
+
 COQL bu modülde scope vermiyor; çekim get_records ile.
 Mesaj gövdesi alınmaz ve yazılmaz — doluluk için zaman ve temsilci yeter.
 """
@@ -125,6 +130,8 @@ class CrmWhatsappIngester(Ingester):
         rep_id, rep_source = self._resolve_rep(payload)
         if rep_id is None:
             return self._skip("no_sales_rep", payload)
+        if rep_source != "replied_by":
+            return self._skip("otomasyon", payload)
 
         zoho_lead_id, zoho_contact_id = _sender_ids(payload.get("sender__s"))
         phone = _phone(payload.get("mobile_number__s"))
