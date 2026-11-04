@@ -71,6 +71,8 @@ def create_week(
     txs = store.load_transactions(conn, year_first - timedelta(days=1), None)
     ic_txs = store.load_transactions(conn, None, end) if include_intercompany else []
     names = {c.id: c.name for c in companies}
+    # ABD vergisi yalnız ABD şirketine (LLC); AŞ / GmbH bilançosuna girmez
+    us = {c.id for c in companies if c.country == "US"}
     wallets = store.load_wallets(conn)
     tax_settings = {c: store.load_tax_settings(conn, c) for c in ids}
     created: list[int] = []
@@ -96,7 +98,11 @@ def create_week(
             week_date,
             ic,
             wallets=tax.wallets_on(wallets, company_id, as_of),
-            tax_due=tax_due(tax_settings[company_id], accounts_, wallets, own, fx_table, end, as_of),
+            tax_due=(
+                tax_due(tax_settings[company_id], accounts_, wallets, own, fx_table, end, as_of)
+                if company_id in us
+                else []
+            ),
             balances=balances,
         )
         for line in lines:

@@ -61,3 +61,37 @@ def test_closed_week_is_noop_when_all_done(fake) -> None:
 def test_explicit_week(fake) -> None:
     weekly.create_closed_week(object(), date(2026, 11, 4), date(2026, 11, 2))
     assert fake["calls"][0][0] == date(2026, 11, 2) and fake["calls"][0][2] == ["llc", "tr"]
+
+
+def test_us_tax_only_on_us_company(monkeypatch) -> None:
+    """ABD vergisi satırı yalnız LLC bilançosuna; AŞ'ye girmez."""
+    companies = [
+        FinCompany(id="llc", name="Rexven LLC", country="US", base_currency="USD", sort=1),
+        FinCompany(id="tr", name="Rexven TR", country="TR", base_currency="TRY", sort=3),
+    ]
+    seen = {}
+
+    class Fx:
+        def latest_rates(self, day=None):
+            return {}
+
+    for name, value in {
+        "load_companies": lambda conn: companies,
+        "load_snapshots": lambda conn: [],
+        "load_accounts": lambda conn: [],
+        "load_planned": lambda conn: [],
+        "load_transactions": lambda conn, start=None, end=None: [],
+        "load_wallets": lambda conn: [],
+        "load_tax_settings": lambda conn, c: None,
+        "insert_snapshot": lambda conn, c, week, fx: {"llc": 1, "tr": 2}[c],
+        "insert_line": lambda conn, sid, values: 0,
+    }.items():
+        monkeypatch.setattr(weekly.store, name, value)
+    monkeypatch.setattr(weekly, "load_fx", lambda conn, since=None: Fx())
+    monkeypatch.setattr(weekly, "intercompany_balances", lambda *a: [])
+    monkeypatch.setattr(weekly, "tax_due", lambda *a: [("ABD vergisi", 1)])
+    monkeypatch.setattr(
+        weekly, "build_week_lines", lambda company_id, *a, tax_due, **k: seen.setdefault(company_id, list(tax_due)) and []
+    )
+    assert weekly.create_week(object(), date(2026, 10, 26), date(2026, 11, 4)) == [1, 2]
+    assert seen == {"llc": [("ABD vergisi", 1)], "tr": []}
