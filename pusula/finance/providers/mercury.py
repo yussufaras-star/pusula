@@ -34,7 +34,7 @@ from pusula.finance.providers.base import (
 
 BASE = "https://api.mercury.com/api/v1"
 PAGE = 500
-MAX_PAGES = 40
+MAX_PAGES = 100
 SKIP_STATUSES = {"failed", "cancelled", "pending"}
 
 

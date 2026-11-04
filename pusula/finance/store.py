@@ -352,9 +352,9 @@ def apply_wallet_deposits(conn: psycopg.Connection, since: date | None = None) -
     return len(rows)
 
 
-def last_fx_date(conn: psycopg.Connection) -> date | None:
-    row = conn.execute("SELECT max(date) FROM fin_fx_rates").fetchone()
-    return row[0] if row else None
+def fx_date_range(conn: psycopg.Connection) -> tuple[date | None, date | None]:
+    row = conn.execute("SELECT min(date), max(date) FROM fin_fx_rates").fetchone()
+    return (row[0], row[1]) if row else (None, None)
 
 
 # --- ekran verisi -------------------------------------------------------------------

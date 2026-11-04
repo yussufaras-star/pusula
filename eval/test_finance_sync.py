@@ -63,9 +63,9 @@ def test_account_since() -> None:
     synced = _account(last_synced_at=NOW - timedelta(days=1))
     assert sync.account_since(synced, NOW) == NOW - timedelta(days=8)
     old = _account(last_synced_at=NOW - timedelta(days=900))
-    assert sync.account_since(old, NOW) == NOW - timedelta(days=400)
+    assert sync.account_since(old, NOW) == NOW - timedelta(days=730)
     assert sync.account_since(synced, NOW, days=30) == NOW - timedelta(days=30)
-    assert sync.account_since(synced, NOW, days=5000) == NOW - timedelta(days=400)
+    assert sync.account_since(synced, NOW, days=5000) == NOW - timedelta(days=730)
 
 
 def test_one_failure_does_not_stop_others() -> None:
