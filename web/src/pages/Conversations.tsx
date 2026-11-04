@@ -190,6 +190,8 @@ export function ConversationsPage({ me }: { me: Me }) {
     return [...m.entries()].sort((a, b) => a[1].localeCompare(b[1], "tr"));
   }, [data]);
 
+  // Temsilci yalnız kendi verisini görür; başlıklar "ekip" değil kendi adını yazar.
+  const ownName = isAdmin ? "" : (repOptions[0]?.[1] ?? me.full_name ?? "");
   const stats: ConvStats | null = isAdmin
     ? repFilter
       ? (data?.reps.find((r) => r.rep_id === repFilter)?.stats ?? null)
@@ -349,7 +351,7 @@ export function ConversationsPage({ me }: { me: Me }) {
 
           <SonarTrend
             rep={repFilter}
-            scope={repFilter ? (repOptions.find(([id]) => id === repFilter)?.[1] ?? "") : ""}
+            scope={repFilter ? (repOptions.find(([id]) => id === repFilter)?.[1] ?? "") : ownName}
             isAdmin={isAdmin}
           />
 
@@ -487,7 +489,7 @@ export function ConversationsPage({ me }: { me: Me }) {
               sonar={data.sonar}
               labels={data.score_labels}
               isAdmin={isAdmin}
-              scope={repFilter ? (repOptions.find(([id]) => id === repFilter)?.[1] ?? "") : ""}
+              scope={repFilter ? (repOptions.find(([id]) => id === repFilter)?.[1] ?? "") : ownName}
               weekText={`${weekTitle(data.week_start)}`}
               onOpen={setDetailId}
             />
@@ -500,7 +502,7 @@ export function ConversationsPage({ me }: { me: Me }) {
               labels={data.score_labels}
               reps={repOptions}
               isAdmin={isAdmin}
-              pageRep={repFilter}
+              pageRep={isAdmin ? repFilter : (repOptions[0]?.[0] ?? "")}
               weekText={`${weekTitle(data.week_start)}`}
               onOpen={setDetailId}
             />
