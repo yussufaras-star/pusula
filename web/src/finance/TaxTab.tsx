@@ -326,9 +326,13 @@ function WalletCard({
                     </td>
                     <td>{day(w.as_of)}</td>
                     <td>
-                      <button className="btn sm" onClick={() => onEdit(w)}>
-                        Düzenle
-                      </button>
+                      {w.source === "rexven" ? (
+                        <span className="badge">otomatik</span>
+                      ) : (
+                        <button className="btn sm" onClick={() => onEdit(w)}>
+                          Düzenle
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

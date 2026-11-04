@@ -123,24 +123,30 @@ def fetch(account: FinAccount, since: datetime, client: httpx.Client) -> Adapter
     for begin, end in windows(since.date(), today):
         query = f"?BeginDate={begin.isoformat()}&EndDate={end.isoformat()}"
         value = _value(_get(client, f"/v3/accounts/{suffix}/transactions", query))
-        rows = value.get("accountActivities") if isinstance(value, dict) else None
-        for row in rows or []:
-            reference = row.get("transactionReference")
-            if not reference or not row.get("date") or row.get("amount") is None:
-                continue
-            amount = num(row["amount"])
-            description = " ".join(str(row.get("description") or "").split())
-            txs.append(
-                NormTx(
-                    external_id=f"kt:{reference}",
-                    booked_at=local_day(str(row["date"])),
-                    amount=amount,
-                    description=description,
-                    counterparty=bank_counterparty(description, amount),
-                    currency=_currency(row.get("fxCode")),
-                )
-            )
+        txs += activities(value.get("accountActivities") if isinstance(value, dict) else None)
     return AdapterResult(balance=balance, transactions=txs)
+
+
+def activities(rows: object) -> list[NormTx]:
+    """accountActivities → hareketler. Rexven internal API aynı biçimi döner."""
+    txs: list[NormTx] = []
+    for row in rows if isinstance(rows, list) else []:
+        reference = row.get("transactionReference")
+        if not reference or not row.get("date") or row.get("amount") is None:
+            continue
+        amount = num(row["amount"])
+        description = " ".join(str(row.get("description") or "").split())
+        txs.append(
+            NormTx(
+                external_id=f"kt:{reference}",
+                booked_at=local_day(str(row["date"])),
+                amount=amount,
+                description=description,
+                counterparty=bank_counterparty(description, amount),
+                currency=_currency(row.get("fxCode")),
+            )
+        )
+    return txs
 
 
 def _currency(code: object) -> str | None:

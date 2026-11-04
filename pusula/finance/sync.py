@@ -3,6 +3,8 @@
 Tetikler: paneldeki buton (POST /api/finance/sync, dakikada en fazla bir),
 cron ucu (GET /api/cron/finance-sync) ve GitHub Actions (günde 2 kez,
 scripts/finance_sync.py). Eşzamanlı çalıştırmalar advisory lock ile tekildir.
+Rexven hesapları ve platform cüzdanları yalnız NetBird'e katılan GitHub
+senkronunda (REXVEN_NETBIRD=1) güncellenir.
 
 Hesaplar sırayla, her biri kendi işleminde senkronlanır: bir hesabın hatası
 sync_error'a kısa mesaj olarak yazılır, diğerlerine devam edilir. Vercel 60 sn
@@ -26,7 +28,7 @@ import httpx
 
 from pusula.db.models import FinAccount, FinCompany
 from pusula.finance import fx, store
-from pusula.finance.providers import ADAPTERS
+from pusula.finance.providers import ADAPTERS, rexven
 from pusula.finance.providers.base import HTTP_TIMEOUT, AdapterResult, ProviderError
 from pusula.metrics import TZ
 from pusula.panel_data import connect
@@ -160,6 +162,18 @@ def sync_fx(now: datetime) -> dict[str, Any]:
     return {"ok": True, "rows": count}
 
 
+def sync_wallets(http: httpx.Client, now: datetime) -> dict[str, Any]:
+    """Rexven platform cüzdan toplamları → fin_wallets (günde bir satır)."""
+    try:
+        totals, skipped = rexven.wallet_totals(http)
+        with connect() as conn:
+            rows = store.save_platform_wallets(conn, totals, now.date())
+    except Exception as exc:
+        logger.warning("cuzdan senkronu basarisiz (%s)", type(exc).__name__)
+        return {"ok": False, "error": short_error(exc)}
+    return {"ok": True, "rows": rows, "skipped": skipped}
+
+
 def _sync_account(
     account: FinAccount,
     companies: Sequence[FinCompany],
@@ -222,6 +236,9 @@ def run_finance_sync(
         with connect() as conn:
             accounts = store.load_sync_accounts(conn, account_id)
             companies = store.load_companies(conn)
+        # Rexven yalnız NetBird içinden erişilir (GitHub senkronu); başka yerde atlanır
+        if not rexven.reachable():
+            accounts = [a for a in accounts if a.provider != "rexven"]
         with httpx.Client(timeout=HTTP_TIMEOUT) as http:
             results = run_accounts(
                 accounts,
@@ -229,6 +246,7 @@ def run_finance_sync(
                 budget_sec,
                 started,
             )
+            wallets_report = sync_wallets(http, now) if rexven.reachable() and account_id is None else None
         own = categorized = 0
         try:
             # Yeni gelenler eski hareketlerle de eşleşebilir: ilk senkron penceresi + pay
@@ -251,4 +269,5 @@ def run_finance_sync(
         "accounts": results,
         "own_transfers": own,
         "categorized": categorized,
+        **({"wallets": wallets_report} if wallets_report is not None else {}),
     }

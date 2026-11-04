@@ -135,7 +135,7 @@ Currency = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
 CredentialKey = Annotated[str, Field(pattern=r"^[A-Z0-9_]+$")]
 Money = Annotated[Decimal, Field(max_digits=18, decimal_places=2)]
 AccountType = Literal["bank", "fintech", "payment", "card", "shipping", "other"]
-Provider = Literal["mercury", "wise", "stripe", "revolut", "kuveytturk", "garanti", "csv", "manual"]
+Provider = Literal["mercury", "wise", "stripe", "revolut", "kuveytturk", "garanti", "rexven", "csv", "manual"]
 CategoryKind = Literal["in", "out", "transfer"]
 TxSource = Literal["api", "csv", "manual"]
 FlowDirection = Literal["in", "out"]
@@ -151,7 +151,7 @@ DecisionStatus = Literal["acik", "aksiyon", "devam", "tamam", "iptal"]
 DecisionPriority = Literal["yuksek", "orta", "dusuk"]
 
 # API ile senkronize edilen sağlayıcılar; credential_key zorunlu.
-API_PROVIDERS: frozenset[str] = frozenset({"mercury", "wise", "stripe", "revolut", "kuveytturk", "garanti"})
+API_PROVIDERS: frozenset[str] = frozenset({"mercury", "wise", "stripe", "revolut", "kuveytturk", "garanti", "rexven"})
 
 
 class FinCompany(BaseModel):
@@ -336,14 +336,16 @@ class FinCategoryRule(BaseModel):
 
 
 WalletKind = Literal["seller", "producer"]
+WalletSource = Literal["manual", "rexven"]
 Rate = Annotated[Decimal, Field(ge=0, le=1, max_digits=6, decimal_places=4)]
 
 
 class FinWallet(BaseModel):
-    """fin_wallets tablosu: elle girilen satıcı / üretici cüzdan bakiyesi.
+    """fin_wallets tablosu: satıcı / üretici cüzdan bakiyesi.
 
     Satıcı cüzdanı: satıcıların yüklediği, henüz harcanmamış para (borç).
     Üretici cüzdanı: üreticilere ödenecek tutar (borç); negatifse avans.
+    source 'rexven': platformdan günlük otomatik toplam (elle değişmez).
     """
 
     id: int | None = None
@@ -356,6 +358,7 @@ class FinWallet(BaseModel):
     notes: str | None = None
     active: bool = True
     sort: int = 0
+    source: WalletSource = "manual"
     updated_at: datetime | None = None
 
 

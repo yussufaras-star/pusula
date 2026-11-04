@@ -1,6 +1,13 @@
 # Finans senkronu: ECB kurları + API'li banka hesapları (Mercury, Wise,
-# Stripe, Revolut). Günde 2 kez, 08:00 ve 17:00 İstanbul (UTC+3).
-# Panelde "Hesapları güncelle" butonu (POST /api/finance/sync) anlık yoldur.
+# Stripe, Revolut) + Rexven (AŞ Kuveyt Türk hesapları, platform cüzdanları).
+# Günde 2 kez, 08:00 ve 17:00 İstanbul (UTC+3).
+# Panelde "Hesapları güncelle" butonu (POST /api/finance/sync) anlık yoldur;
+# Rexven'e yalnız NetBird içinden erişildiği için buton onu güncellemez.
+#
+# Rexven: NETBIRD_SETUP_KEY (yeniden kullanılabilir, ephemeral) varsa iş
+# NetBird'e katılır ve REXVEN_NETBIRD=1 verir. Refresh token veritabanında
+# (fin_provider_tokens) durur ve her çalışmada yenilenir; REXVEN_API_REFRESH_TOKEN
+# yalnız zincir koparsa yeniden başlatmak içindir.
 #
 # Sağlayıcı anahtarları yalnız repo secrets'tan, tek tek verilir:
 # MERCURY_API_TOKEN, WISE_API_TOKEN, STRIPE_RESTRICTED_KEY, KUVEYT_TURK_*,
@@ -28,6 +35,8 @@ permissions:
 env:
   PYTHONUNBUFFERED: "1"
   DATABASE_URL_POOLED: ${{ secrets.DATABASE_URL_POOLED }}
+  # adım 'if' koşulu yalnız iş düzeyi env'i görür
+  NETBIRD_SETUP_KEY: ${{ secrets.NETBIRD_SETUP_KEY }}
 
 jobs:
   finance-sync:
@@ -41,6 +50,18 @@ jobs:
           cache: pip
       - name: Bağımlılıkları kur
         run: python -m pip install -r requirements.txt
+      - name: NetBird'e katıl (Rexven)
+        if: env.NETBIRD_SETUP_KEY != ''
+        run: |
+          curl -fsSL https://pkgs.netbird.io/install.sh | sh
+          sudo netbird up --setup-key "$NETBIRD_SETUP_KEY" --hostname "gh-finans-$GITHUB_RUN_ID"
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null -m 5 https://rexapi-internal.rexven.com/; then
+              echo "REXVEN_NETBIRD=1" >> "$GITHUB_ENV"; echo "Rexven erişilebilir"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::warning::NetBird bağlandı ama Rexven API'ye ulaşılamadı; Rexven atlanıyor"
       - name: Finans senkronu
         env:
           MERCURY_API_TOKEN: ${{ secrets.MERCURY_API_TOKEN }}
@@ -59,5 +80,9 @@ jobs:
           GARANTI_UNIT_NUMBER: ${{ secrets.GARANTI_UNIT_NUMBER }}
           GARANTI_ACCOUNT_NUMBER: ${{ secrets.GARANTI_ACCOUNT_NUMBER }}
           GARANTI_IBAN: ${{ secrets.GARANTI_IBAN }}
+          REXVEN_API_REFRESH_TOKEN: ${{ secrets.REXVEN_API_REFRESH_TOKEN }}
           DAYS: ${{ inputs.days }}
         run: python scripts/finance_sync.py ${DAYS:+--days "$DAYS"}
+      - name: NetBird'den ayrıl
+        if: always() && env.REXVEN_NETBIRD == '1'
+        run: sudo netbird down || true

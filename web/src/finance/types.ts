@@ -30,7 +30,7 @@ export interface Meta extends FxMeta {
   categories: Category[];
 }
 
-export type Provider = "mercury" | "wise" | "stripe" | "revolut" | "kuveytturk" | "garanti" | "csv" | "manual";
+export type Provider = "mercury" | "wise" | "stripe" | "revolut" | "kuveytturk" | "garanti" | "rexven" | "csv" | "manual";
 export type AccountType = "bank" | "fintech" | "payment" | "card" | "shipping" | "other";
 
 export interface Account {
@@ -327,6 +327,7 @@ export interface Wallet {
   notes: string | null;
   active: boolean;
   sort: number;
+  source: "manual" | "rexven"; // rexven: platformdan günlük otomatik toplam
   updated_at: string | null;
   current: boolean; // bugünkü hesapta kullanılan (adına göre en son giriş)
   year_start: boolean; // 1 Ocak hesabında kullanılan

@@ -122,6 +122,10 @@ def test_schema_has_finance_tables_and_lock_guards() -> None:
 def test_schema_stores_no_bank_credentials() -> None:
     sql = SCHEMA.read_text(encoding="utf-8")
     finance = sql[sql.index("CREATE TABLE IF NOT EXISTS fin_companies") :]
+    # Tek istisna: Rexven refresh token'ı her kullanımda yenilenir (3 gün, yalnız
+    # okuma); senkronun yazabildiği tek kalıcı yer burası.
+    rotating = finance.index("CREATE TABLE IF NOT EXISTS fin_provider_tokens")
+    finance = finance[:rotating] + finance[finance.index(");", rotating) :]
     columns = re.findall(r"^\s{4}([a-z_]+)\s+(?:text|bytea|jsonb)", finance, re.M)
     for column in columns:
         assert not re.search(r"token|secret|password|api_key", column), column

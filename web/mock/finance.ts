@@ -646,11 +646,11 @@ export function mockFinance(method: string, url: string): unknown {
     const [start, end] = range(q);
     const llcCash = cash(["llc"]);
     const wallets = [
-      { id: 1, company_id: "llc", kind: "seller", name: "Toplam", balance: 412_300, balance_usd: 412_300, currency: "USD", as_of: addDays(TODAY, -2), notes: "Platform admin paneli", active: true, sort: 0, updated_at: ago(30), current: true, year_start: false },
-      { id: 5, company_id: "llc", kind: "seller", name: "Toplam", balance: 298_000, balance_usd: 298_000, currency: "USD", as_of: `${TODAY.slice(0, 4)}-01-01`, notes: null, active: true, sort: 0, updated_at: ago(30), current: false, year_start: true },
-      { id: 2, company_id: "llc", kind: "producer", name: "ASPOL PRINT INC", balance: 96_400, balance_usd: 96_400, currency: "USD", as_of: addDays(TODAY, -1), notes: null, active: true, sort: 0, updated_at: ago(20), current: true, year_start: false },
-      { id: 3, company_id: "llc", kind: "producer", name: "Atolye LLC", balance: 41_250, balance_usd: 41_250, currency: "USD", as_of: addDays(TODAY, -1), notes: null, active: true, sort: 1, updated_at: ago(20), current: true, year_start: false },
-      { id: 4, company_id: "llc", kind: "producer", name: "Zanaart LLC", balance: -8_000, balance_usd: -8_000, currency: "USD", as_of: addDays(TODAY, -6), notes: "avans", active: true, sort: 2, updated_at: ago(140), current: true, year_start: false },
+      { id: 1, company_id: "llc", kind: "seller", name: "Rexven platformu", balance: 412_300, balance_usd: 412_300, currency: "USD", as_of: TODAY, notes: "1000 cüzdan · otomatik", active: true, sort: 0, source: "rexven", updated_at: ago(30), current: true, year_start: false },
+      { id: 5, company_id: "llc", kind: "seller", name: "Toplam", balance: 298_000, balance_usd: 298_000, currency: "USD", as_of: `${TODAY.slice(0, 4)}-01-01`, notes: null, active: true, sort: 0, source: "manual", updated_at: ago(30), current: false, year_start: true },
+      { id: 2, company_id: "llc", kind: "producer", name: "ASPOL PRINT INC", balance: 96_400, balance_usd: 96_400, currency: "USD", as_of: addDays(TODAY, -1), notes: null, active: true, sort: 0, source: "manual", updated_at: ago(20), current: true, year_start: false },
+      { id: 3, company_id: "llc", kind: "producer", name: "Atolye LLC", balance: 41_250, balance_usd: 41_250, currency: "USD", as_of: addDays(TODAY, -1), notes: null, active: true, sort: 1, source: "manual", updated_at: ago(20), current: true, year_start: false },
+      { id: 4, company_id: "llc", kind: "producer", name: "Zanaart LLC", balance: -8_000, balance_usd: -8_000, currency: "USD", as_of: addDays(TODAY, -6), notes: "avans", active: true, sort: 2, source: "manual", updated_at: ago(140), current: true, year_start: false },
     ] as const;
     const seller = 412_300;
     const producer = 96_400 + 41_250 - 8_000;
