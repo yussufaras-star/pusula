@@ -1,7 +1,7 @@
 """Banka adaptörleri: sahte HTTP yanıtlarıyla (ağ yok)."""
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -202,6 +202,28 @@ def test_wise_refunded_transfer_keeps_both_legs(monkeypatch) -> None:
         ("TRANSFER-9:iade", D("50509.57")), ("TRANSFER-9", D("-50509.57")), ("TRANSFER-8", D("100")),
     ]
     assert sum(t.amount for t in result.transactions if t.external_id.startswith("TRANSFER-9")) == 0
+
+
+def test_wise_long_history_in_yearly_windows(monkeypatch) -> None:
+    """Ekstre en fazla 469 gün: 2 yıllık geçmiş ardışık, örtüşmeyen yıllık parçalarla istenir."""
+    monkeypatch.setenv("WISE_TOKEN_GMBH", "w")
+    windows = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/balances" in request.url.path:
+            return httpx.Response(200, json=[{"id": 77, "currency": "EUR", "amount": {"value": 1}}])
+        start, end = request.url.params["intervalStart"], request.url.params["intervalEnd"]
+        windows.append((datetime.fromisoformat(start), datetime.fromisoformat(end)))
+        return httpx.Response(200, json={"transactions": [
+            {"referenceNumber": f"T-{len(windows)}", "date": start, "amount": {"value": 5, "currency": "EUR"}, "details": {}},
+        ]})
+
+    account = _account("wise", company_id="gmbh", currency="EUR", credential_key="GMBH", provider_account_id="12:77")
+    since = datetime.now(TZ) - timedelta(days=700)
+    result = wise(account, since, _client(handler))
+    assert len(windows) == 2 and windows[0][0] == since and windows[0][1] == windows[1][0]
+    assert all((end - start).days <= 365 for start, end in windows)
+    assert [t.external_id for t in result.transactions] == ["T-1", "T-2"]
 
 
 def test_wise_sca_keeps_balance_and_warns(monkeypatch) -> None:

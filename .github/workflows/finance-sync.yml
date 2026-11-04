@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       days:
-        description: "Geriye bakış (gün); boşsa son senkrondan"
+        description: "Geriye bakış (gün, en fazla 730); boşsa son senkrondan"
         required: false
 
 concurrency:

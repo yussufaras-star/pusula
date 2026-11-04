@@ -40,7 +40,7 @@ DEFAULT_BUDGET_SEC = 40.0
 # İlk senkronda geriye bakış; sonrakilerde son senkrondan bu kadar önce
 # (geç kesinleşen hareketler için örtüşme; çift kaydı ON CONFLICT önler).
 FIRST_DAYS = 90
-MAX_DAYS = 400
+MAX_DAYS = 730  # geçmiş doldurma: 2 yıl
 OVERLAP = timedelta(days=7)
 FX_BACKFILL_DAYS = 400
 # GitHub Actions'ta toJSON(secrets) içinden yalnız bu adlar ortama alınır.
@@ -145,20 +145,29 @@ def run_accounts(
     return results
 
 
-def sync_fx(now: datetime) -> dict[str, Any]:
-    """Son kayıtlı günden bugüne ECB kurları; tablo boşsa 400 gün geriye."""
+def sync_fx(now: datetime, days: int | None = None) -> dict[str, Any]:
+    """Son kayıtlı günden bugüne ECB kurları; tablo boşsa 400 gün geriye.
+
+    days verilirse (geçmiş doldurma) kurların başı da o güne kadar uzatılır.
+    """
     today = now.date()
     with connect() as conn:
-        last = store.last_fx_date(conn)
-    if last is not None and last >= today:
-        return {"ok": True, "rows": 0}
-    start = (last + timedelta(days=1)) if last else today - timedelta(days=FX_BACKFILL_DAYS)
-    try:
-        rates = fx.fetch_ecb_rates(start, today)
-    except httpx.HTTPError as exc:
-        return {"ok": False, "error": f"Kur alınamadı ({type(exc).__name__})"}
-    with connect() as conn:
-        count = fx.save_rates(conn, rates)
+        first, last = store.fx_date_range(conn)
+    ranges = []
+    if days is not None and first is not None:
+        need = today - timedelta(days=min(days, MAX_DAYS))
+        if need < first:
+            ranges.append((need, first - timedelta(days=1)))
+    if last is None or last < today:
+        ranges.append(((last + timedelta(days=1)) if last else today - timedelta(days=FX_BACKFILL_DAYS), today))
+    count = 0
+    for start, end in ranges:
+        try:
+            rates = fx.fetch_ecb_rates(start, end)
+        except httpx.HTTPError as exc:
+            return {"ok": False, "error": f"Kur alınamadı ({type(exc).__name__})"}
+        with connect() as conn:
+            count += fx.save_rates(conn, rates)
     return {"ok": True, "rows": count}
 
 
@@ -228,7 +237,7 @@ def run_finance_sync(
                 return {"skipped": "yeni_guncellendi", "last_run": last.isoformat()}
 
         try:
-            fx_report = sync_fx(now)
+            fx_report = sync_fx(now, days)
         except Exception as exc:
             logger.warning("kur senkronu basarisiz (%s)", type(exc).__name__)
             fx_report = {"ok": False, "error": short_error(exc)}

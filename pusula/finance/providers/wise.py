@@ -11,7 +11,7 @@ yükleme (CSV) kullanılabilir.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 
@@ -30,6 +30,9 @@ from pusula.finance.providers.base import (
 
 BASE = "https://api.wise.com"
 SCA_WARNING = "Wise: hareketler için SCA gerekli, yalnız bakiye güncellendi"
+
+# Ekstre aralığı en fazla 469 gün; uzun geçmiş yıllık parçalarla istenir.
+WINDOW = timedelta(days=365)
 
 # Giden transferin iade bacağı: referans + bu ek (çıkış bacağı referansın kendisi).
 REFUND_SUFFIX = ":iade"
@@ -54,27 +57,34 @@ def fetch(account: FinAccount, since: datetime, client: httpx.Client) -> Adapter
         raise ProviderError("Wise: balance bulunamadı")
     balance = num((found.get("amount") or {}).get("value"))
 
-    try:
-        statement = request_json(
-            client,
-            "Wise",
-            "GET",
-            f"{BASE}/v1/profiles/{profile_id}/balance-statements/{balance_id}/statement.json",
-            headers=headers,
-            params={
-                "currency": account.currency,
-                "intervalStart": since.isoformat(),
-                "intervalEnd": datetime.now(since.tzinfo).isoformat(),
-                "type": "COMPACT",
-            },
-        )
-    except ProviderHttpError as exc:
-        if exc.status == 403 and "x-2fa-approval" in exc.headers:
-            return AdapterResult(balance=balance, transactions=[], warning=SCA_WARNING)
-        raise
+    rows = []
+    now = datetime.now(since.tzinfo)
+    start = since
+    while start < now:
+        end = min(start + WINDOW, now)
+        try:
+            statement = request_json(
+                client,
+                "Wise",
+                "GET",
+                f"{BASE}/v1/profiles/{profile_id}/balance-statements/{balance_id}/statement.json",
+                headers=headers,
+                params={
+                    "currency": account.currency,
+                    "intervalStart": start.isoformat(),
+                    "intervalEnd": end.isoformat(),
+                    "type": "COMPACT",
+                },
+            )
+        except ProviderHttpError as exc:
+            if exc.status == 403 and "x-2fa-approval" in exc.headers:
+                return AdapterResult(balance=balance, transactions=[], warning=SCA_WARNING)
+            raise
+        rows.extend(statement.get("transactions") or [])
+        start = end
 
     txs: list[NormTx] = []
-    for row in statement.get("transactions") or []:
+    for row in rows:
         amount = row.get("amount") or {}
         if not row.get("referenceNumber") or not row.get("date") or amount.get("value") is None:
             continue

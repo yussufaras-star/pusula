@@ -27,7 +27,7 @@ from pusula.finance.providers.base import (
 )
 
 BASE = "https://api.stripe.com/v1"
-MAX_PAGES = 100
+MAX_PAGES = 500  # 50.000 hareket: 2 yıllık geçmiş doldurma
 # Ondalıksız para birimleri (100'e bölünmez).
 ZERO_DECIMAL = frozenset(
     {"bif", "clp", "djf", "gnf", "jpy", "kmf", "krw", "mga", "pyg", "rwf", "ugx", "vnd", "vuv", "xaf", "xof", "xpf"}
