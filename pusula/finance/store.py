@@ -32,6 +32,7 @@ from pusula.db.models import (
     FinWallet,
 )
 from pusula.finance.analytics import OWN_CATEGORY, OWN_MATCH_DAYS, auto_intercompany, categorize, own_transfers
+from pusula.finance.providers.rexven import WalletTotal
 from pusula.finance.statement import Parsed, bank_counterparty
 from pusula.finance.tax import WALLET_CATEGORY, WALLET_COMPANIES, is_wallet_deposit
 
@@ -373,7 +374,7 @@ DECISION_COLUMNS = (
 )
 SNAPSHOT_COLUMNS = "id, company_id, week_date, locked, locked_at, fx, notes, created_at"
 LINE_COLUMNS = "id, snapshot_id, side, section, group_name, label, amount, currency, origin, sort"
-WALLET_COLUMNS = "id, company_id, kind, name, balance, currency, as_of, notes, active, sort, updated_at"
+WALLET_COLUMNS = "id, company_id, kind, name, balance, currency, as_of, notes, active, sort, source, updated_at"
 SETTINGS_COLUMNS = (
     "company_id, year_start_net_assets, distributions, contributions, structure, dividend_ratio,"
     " fdii_share, partners, updated_at"
@@ -454,6 +455,22 @@ def load_row(conn: psycopg.Connection, table: str, row_id: int) -> dict | None:
 def load_wallets(conn: psycopg.Connection) -> list[FinWallet]:
     rows = _rows(conn, f"SELECT {WALLET_COLUMNS} FROM fin_wallets ORDER BY company_id, kind, sort, name")
     return [FinWallet(**r) for r in rows]
+
+
+PLATFORM_WALLET_NAME = "Rexven platformu"
+
+
+def save_platform_wallets(conn: psycopg.Connection, totals: Sequence[WalletTotal], day: date) -> int:
+    """Rexven cüzdan toplamları: (şirket, tür) başına günde bir satır; aynı gün yeniden yazılır."""
+    for t in totals:
+        conn.execute(
+            "INSERT INTO fin_wallets (company_id, kind, name, balance, currency, as_of, notes, source)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, 'rexven')"
+            " ON CONFLICT (company_id, kind, name, as_of) DO UPDATE SET balance = EXCLUDED.balance,"
+            " currency = EXCLUDED.currency, notes = EXCLUDED.notes, source = 'rexven'",
+            (t.company_id, t.kind, PLATFORM_WALLET_NAME, t.balance, t.currency, day, f"{t.count} cüzdan · otomatik"),
+        )
+    return len(totals)
 
 
 def load_tax_settings(conn: psycopg.Connection, company_id: str) -> FinTaxSettings:

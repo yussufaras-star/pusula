@@ -536,7 +536,7 @@ CREATE TABLE IF NOT EXISTS fin_accounts (
     currency             text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
     -- 'csv' ekstre yüklemesi, 'manual' elle bakiye; diğerleri API senkronu.
     provider             text NOT NULL DEFAULT 'manual'
-        CHECK (provider IN ('mercury', 'wise', 'stripe', 'revolut', 'kuveytturk', 'garanti', 'csv', 'manual')),
+        CHECK (provider IN ('mercury', 'wise', 'stripe', 'revolut', 'kuveytturk', 'garanti', 'rexven', 'csv', 'manual')),
     -- Sağlayıcıdaki hesap kimliği. Wise: '<profileId>:<balanceId>'.
     provider_account_id  text,
     -- Ortam değişkeni son eki (ör. LLC → MERCURY_TOKEN_LLC). Değer değil, ad.
@@ -552,10 +552,10 @@ CREATE TABLE IF NOT EXISTS fin_accounts (
     CHECK (provider IN ('csv', 'manual') OR credential_key IS NOT NULL)
 );
 
--- Geçiş: yeni API sağlayıcıları (Kuveyt Türk, Garanti) için kısıt güncellenir.
+-- Geçiş: yeni API sağlayıcıları (Kuveyt Türk, Garanti, Rexven) için kısıt güncellenir.
 ALTER TABLE fin_accounts DROP CONSTRAINT IF EXISTS fin_accounts_provider_check;
 ALTER TABLE fin_accounts ADD CONSTRAINT fin_accounts_provider_check
-    CHECK (provider IN ('mercury', 'wise', 'stripe', 'revolut', 'kuveytturk', 'garanti', 'csv', 'manual'));
+    CHECK (provider IN ('mercury', 'wise', 'stripe', 'revolut', 'kuveytturk', 'garanti', 'rexven', 'csv', 'manual'));
 
 CREATE TABLE IF NOT EXISTS fin_categories (
     id    text PRIMARY KEY,
@@ -915,6 +915,25 @@ CREATE TRIGGER fin_wallets_touch
     BEFORE UPDATE ON fin_wallets
     FOR EACH ROW EXECUTE FUNCTION fin_touch_updated_at();
 
+-- Geçiş: Rexven platform cüzdanları her gün otomatik yazılır (source
+-- 'rexven'); aynı ad günlük satırlarla tarihçe tutar, geçmiş hafta
+-- bilançosu o günün bakiyesini bulur.
+ALTER TABLE fin_wallets ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'manual';
+ALTER TABLE fin_wallets DROP CONSTRAINT IF EXISTS fin_wallets_source_check;
+ALTER TABLE fin_wallets ADD CONSTRAINT fin_wallets_source_check CHECK (source IN ('manual', 'rexven'));
+ALTER TABLE fin_wallets DROP CONSTRAINT IF EXISTS fin_wallets_company_id_kind_name_key;
+ALTER TABLE fin_wallets DROP CONSTRAINT IF EXISTS fin_wallets_company_kind_name_day_key;
+ALTER TABLE fin_wallets ADD CONSTRAINT fin_wallets_company_kind_name_day_key UNIQUE (company_id, kind, name, as_of);
+
+-- Rexven internal API refresh token'ı: her kullanımda yenisi döner, eskisi
+-- geçersizleşir; tek kopya burada (ortam değişkeni yalnız ilk / yeniden başlatma).
+CREATE TABLE IF NOT EXISTS fin_provider_tokens (
+    provider       text PRIMARY KEY,
+    refresh_token  text NOT NULL,
+    expires_at     timestamptz,
+    updated_at     timestamptz NOT NULL DEFAULT now()
+);
+
 -- Vergi ayarı (şirket başına). Kâr = bugünkü net varlık − yıl başı net
 -- varlık + kâr dağıtımı − konulan sermaye; senaryolar bu kârı ortaklık /
 -- C-Corp olarak vergiler. partners: [{"name": "...", "share": "0.06"}].
@@ -985,7 +1004,7 @@ BEGIN
     FOREACH t IN ARRAY ARRAY[
         'fin_companies', 'fin_accounts', 'fin_categories', 'fin_transactions', 'fin_fx_rates',
         'fin_planned_items', 'fin_snapshots', 'fin_snapshot_lines', 'fin_decisions',
-        'fin_category_rules', 'fin_wallets', 'fin_tax_settings'
+        'fin_category_rules', 'fin_wallets', 'fin_tax_settings', 'fin_provider_tokens'
     ]
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);

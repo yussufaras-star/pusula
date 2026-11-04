@@ -667,7 +667,9 @@ def tax_view(
                 "year_start": id(w) in start_wallets,
             }
             for w in wallets
+            # otomatik günlük satırlardan yalnız hesapta kullanılanlar
             if w.company_id == company_id
+            and (w.source == "manual" or id(w) in current_wallets or id(w) in start_wallets)
         ],
         "deposits": {
             "usd": money(dep.usd),

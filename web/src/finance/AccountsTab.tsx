@@ -12,6 +12,7 @@ const PROVIDER_LABEL: Record<Provider, string> = {
   revolut: "Revolut Business API",
   kuveytturk: "Kuveyt Türk API",
   garanti: "Garanti BBVA API",
+  rexven: "Rexven API (Kuveyt Türk)",
   csv: "Ekstre yükleme",
   manual: "Elle bakiye",
 };
@@ -23,7 +24,7 @@ const TYPE_LABEL: Record<AccountType, string> = {
   shipping: "Kargo bakiyesi",
   other: "Diğer",
 };
-const API: Provider[] = ["mercury", "wise", "stripe", "revolut", "kuveytturk", "garanti"];
+const API: Provider[] = ["mercury", "wise", "stripe", "revolut", "kuveytturk", "garanti", "rexven"];
 const ID_HINT: Partial<Record<Provider, string>> = {
   mercury: "Mercury hesap id",
   wise: "<profileId>:<balanceId>",
@@ -31,6 +32,7 @@ const ID_HINT: Partial<Record<Provider, string>> = {
   revolut: "Revolut hesap id",
   kuveytturk: "hesap ek numarası (ana 1, cüzdan 2, döviz 101)",
   garanti: "hesap numarası",
+  rexven: "Kuveyt Türk hesap ek numarası (ana 1, cüzdan 2, döviz 101)",
 };
 
 export function AccountsTab({ scope, meta, tick, reload }: TabProps) {
@@ -269,6 +271,8 @@ function AccountForm({
               hint={
                 f.provider === "kuveytturk" || f.provider === "garanti"
                   ? `ortam değişkenleri: ${f.provider === "garanti" ? "GARANTI_*" : "KUVEYT_TURK_*"} · ek yalnız etiket (ör. TR)`
+                  : f.provider === "rexven"
+                  ? "token veritabanında, kendini yeniler; yalnız NetBird'li GitHub senkronunda güncellenir · ek yalnız etiket (ör. REXVEN)"
                   : f.provider === "revolut"
                   ? `ortam değişkeni: REVOLUT_*_${f.credential_key.toUpperCase() || "<EK>"}`
                   : `ortak: ${f.provider === "stripe" ? "STRIPE_RESTRICTED_KEY" : `${f.provider.toUpperCase()}_API_TOKEN`} · şirkete özel varsa ${f.provider === "stripe" ? "STRIPE_KEY" : `${f.provider.toUpperCase()}_TOKEN`}_${f.credential_key.toUpperCase() || "<EK>"}`

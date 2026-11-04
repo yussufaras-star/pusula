@@ -46,6 +46,8 @@ def main() -> int:
     failed = [str(r.get("name")) for r in report.get("accounts", []) if r.get("error")]
     if not report.get("fx", {}).get("ok"):
         failed.append("kurlar")
+    if report.get("wallets", {}).get("ok") is False:
+        failed.append("cuzdanlar")
     if failed:
         print(f"hata: basarisiz: {', '.join(failed)}")
         return 1

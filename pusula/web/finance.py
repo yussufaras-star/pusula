@@ -737,13 +737,23 @@ def create_wallet(payload: dict[str, Any] = Body(...)) -> Any:
     return _create("fin_wallets", FinWallet, {"as_of": _now().date().isoformat(), **_wallet_stamp(payload)})
 
 
+def _manual_wallet(wallet_id: int) -> None:
+    """Rexven'den gelen günlük toplam elle değiştirilmez; ertesi senkron ezerdi."""
+    with connect() as conn:
+        row = store.load_row(conn, "fin_wallets", wallet_id)
+    if row is not None and row.get("source") == "rexven":
+        raise HTTPException(status_code=400, detail="Rexven'den otomatik gelen cüzdan elle değiştirilemez")
+
+
 @router.patch("/wallets/{wallet_id}")
 def patch_wallet(wallet_id: int, payload: dict[str, Any] = Body(...)) -> Any:
+    _manual_wallet(wallet_id)
     return _patch("fin_wallets", FinWallet, wallet_id, _wallet_stamp(payload))
 
 
 @router.delete("/wallets/{wallet_id}")
 def delete_wallet(wallet_id: int) -> Any:
+    _manual_wallet(wallet_id)
     return _delete("fin_wallets", wallet_id)
 
 
