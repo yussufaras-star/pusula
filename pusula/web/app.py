@@ -51,6 +51,7 @@ from pusula.panel_auth import (
     password_matches,
     resolve_user,
 )
+from pusula import panel_passwords
 from pusula.panel_data import DateWindow, load_rep_by_email, load_reps
 from pusula.panel_profile import PROFILE_WARNING, performance_profiles
 from pusula.web import cache
@@ -93,6 +94,15 @@ app.include_router(ceo_router)
 class LoginBody(BaseModel):
     email: str
     password: str
+
+
+class PasswordBody(BaseModel):
+    current: str
+    new: str
+
+
+class RepPasswordBody(BaseModel):
+    rep_id: str
 
 
 class LeaveBody(BaseModel):
@@ -185,16 +195,24 @@ def health() -> dict[str, Any]:
 
 @app.post("/api/login")
 def login(body: LoginBody, response: Response) -> dict[str, str]:
-    secrets = passwords()
     email = normalize_login_email(body.email)
-    expected = lookup_secret_password(secrets, email)
-    if expected is None or not password_matches(body.password, expected):
-        raise HTTPException(status_code=401, detail="Kullanıcı adı veya şifre hatalı")
-    rep = None
-    if email != ADMIN_EMAIL:
-        require_database()
-        rep = load_rep_by_email(email)
-    user = resolve_user(email, body.password, secrets, rep)
+    # Temsilcinin panelden verilmiş şifresi varsa yalnız o geçer; yoksa Vercel'deki.
+    stored = None
+    if email != ADMIN_EMAIL and (os.environ.get("DATABASE_URL_POOLED") or os.environ.get("DATABASE_URL")):
+        stored = panel_passwords.lookup(email)
+    if stored is not None:
+        rep = load_rep_by_email(email) if panel_passwords.verify_password(body.password, stored.password_hash) else None
+        user = AuthUser(email=email, role="rep", rep_id=rep.rep_id, full_name=rep.full_name) if rep else None
+    else:
+        secrets = passwords()
+        expected = lookup_secret_password(secrets, email)
+        if expected is None or not password_matches(body.password, expected):
+            raise HTTPException(status_code=401, detail="Kullanıcı adı veya şifre hatalı")
+        rep = None
+        if email != ADMIN_EMAIL:
+            require_database()
+            rep = load_rep_by_email(email)
+        user = resolve_user(email, body.password, secrets, rep)
     if user is None:
         raise HTTPException(status_code=401, detail="Kullanıcı adı veya şifre hatalı")
     response.set_cookie(
@@ -224,7 +242,70 @@ def me(user: AuthUser = Depends(current_user)) -> dict[str, Any]:
         "full_name": user.full_name,
         "org_id": get_org_id(),
         "finance": finance_allowed(user),
+        "must_change": _must_change(user),
     }
+
+
+def _must_change(user: AuthUser) -> bool:
+    if user.role != "rep":
+        return False
+    try:
+        stored = panel_passwords.lookup(user.email)
+    except Exception:  # noqa: BLE001 — /api/me şifre tablosu yüzünden düşmesin
+        logger.exception("şifre durumu okunamadı")
+        return False
+    return bool(stored and stored.must_change)
+
+
+@app.post("/api/me/password")
+def change_password(body: PasswordBody, user: AuthUser = Depends(current_user)) -> dict[str, str]:
+    """Temsilci kendi şifresini değiştirir. Yönetici şifresi Vercel'de kalır."""
+    if user.role != "rep":
+        raise HTTPException(status_code=400, detail="Yönetici şifresi Vercel'deki PUSULA_PASSWORDS_JSON ayarından değişir")
+    require_database()
+    stored = panel_passwords.lookup(user.email)
+    if stored is not None:
+        ok = panel_passwords.verify_password(body.current, stored.password_hash)
+    else:
+        expected = lookup_secret_password(passwords(), user.email)
+        ok = expected is not None and password_matches(body.current, expected)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Mevcut şifre hatalı")
+    problem = panel_passwords.validate_new(body.new)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+    if body.new == body.current:
+        raise HTTPException(status_code=400, detail="Yeni şifre eskisiyle aynı olamaz")
+    panel_passwords.set_password(user.email, body.new, must_change=False, by=user.email)
+    return {"ok": "true"}
+
+
+@app.get("/api/users")
+def users(user: AuthUser = Depends(admin_user)) -> Any:
+    """Temsilciler ve şifre durumu: panel (bu ekrandan), vercel (eski ayar) ya da yok."""
+    require_database()
+    try:
+        env = passwords()
+    except HTTPException:
+        env = {}
+    rows = panel_passwords.list_reps()
+    for row in rows:
+        row["kaynak"] = (
+            "panel" if row["updated_at"] else "vercel" if lookup_secret_password(env, row["email"]) else None
+        )
+    return jsonable_encoder(rows)
+
+
+@app.post("/api/users/password")
+def reset_password(body: RepPasswordBody, user: AuthUser = Depends(admin_user)) -> dict[str, str]:
+    """Temsilciye yeni ilk şifre üretir; düz metin yalnız bu yanıtta döner."""
+    require_database()
+    row = next((r for r in panel_passwords.list_reps() if r["rep_id"] == body.rep_id), None)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Aktif satış temsilcisi bulunamadı")
+    password = panel_passwords.generate_password()
+    panel_passwords.set_password(row["email"], password, must_change=True, by=user.email)
+    return {"email": row["email"], "full_name": row["full_name"], "password": password}
 
 
 @app.get("/api/reps")
