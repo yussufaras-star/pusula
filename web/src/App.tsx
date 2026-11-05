@@ -145,7 +145,7 @@ export function App() {
         <div className="spacer" />
         <div className="user">
           <span>{me.full_name ?? me.email}</span>
-          {me.role === "rep" ? (
+          {me.own_password ? (
             <button className="btn" onClick={() => setPwOpen(true)}>
               Şifremi değiştir
             </button>

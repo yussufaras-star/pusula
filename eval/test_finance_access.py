@@ -55,6 +55,7 @@ def test_rep_never_sees_finance() -> None:
 
 def test_admin_list_restricts_admins() -> None:
     assert can_view_finance(ADMIN, None)
+    assert not can_view_finance(OTHER_ADMIN, None)
     allowed = frozenset({"yusuf.aras@rexven.com"})
     assert can_view_finance(ADMIN, allowed)
     assert not can_view_finance(OTHER_ADMIN, allowed)

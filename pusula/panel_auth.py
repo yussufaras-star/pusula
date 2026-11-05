@@ -100,9 +100,10 @@ def parse_finance_emails(raw: str | None) -> frozenset[str] | None:
 
 
 def can_view_finance(user: AuthUser, allowed: frozenset[str] | None) -> bool:
-    """Finans yalnız yönetici içindir; liste tanımlıysa yalnız listedeki yönetici."""
+    """Finans yalnız yönetici içindir; liste tanımlıysa listedeki, değilse ana yönetici."""
     if user.role != "admin":
         return False
     if allowed is None:
-        return True
+        # Liste tanımsızsa yalnız ana yönetici: panelden eklenen yönetici finansı görmez.
+        return normalize_login_email(user.email) == ADMIN_EMAIL
     return normalize_login_email(user.email) in allowed

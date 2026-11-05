@@ -9,10 +9,12 @@ import json
 import logging
 import os
 import time
+from typing import Any
 
 from fastapi import Depends, Header, HTTPException, Request
 
 from pusula.panel_auth import (
+    ADMIN_EMAIL,
     FINANCE_EMAILS_ENV,
     AuthUser,
     can_view_finance,
@@ -90,10 +92,41 @@ def decode_session(token: str | None) -> AuthUser | None:
     )
 
 
+# Çıkarılan / rolü değişen kullanıcının açık oturumu en geç bu kadar sürede kapanır.
+ACCESS_TTL = 60.0
+_access: dict[str, tuple[float, Any]] = {}
+
+
+def _access_state(email: str) -> Any:
+    """panel_passwords kaydı (yoksa None); kısa önbellekli. Veritabanı yoksa / hata olursa None."""
+    hit = _access.get(email)
+    if hit is not None and time.monotonic() - hit[0] < ACCESS_TTL:
+        return hit[1]
+    if not (os.environ.get("DATABASE_URL_POOLED") or os.environ.get("DATABASE_URL")):
+        return None
+    try:
+        from pusula import panel_passwords
+
+        state = panel_passwords.lookup(email)
+    except Exception:  # noqa: BLE001 — erişim kontrolü yüzünden tüm panel düşmesin
+        logger.exception("erişim durumu okunamadı")
+        return None
+    _access[email] = (time.monotonic(), state)
+    return state
+
+
+def forget_access(email: str) -> None:
+    _access.pop(email.strip().lower(), None)
+
+
 def current_user(request: Request) -> AuthUser:
     user = decode_session(request.cookies.get(COOKIE_NAME))
     if user is None:
         raise HTTPException(status_code=401, detail="Oturum gerekli")
+    if user.email != ADMIN_EMAIL:
+        state = _access_state(user.email)
+        if state is not None and (not state.active or state.role != user.role):
+            raise HTTPException(status_code=401, detail="Oturum gerekli")
     return user
 
 

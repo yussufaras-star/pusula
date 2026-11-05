@@ -56,6 +56,7 @@ from pusula.panel_data import DateWindow, load_rep_by_email, load_reps
 from pusula.panel_profile import PROFILE_WARNING, performance_profiles
 from pusula.web import cache
 from pusula.web.auth import (
+    forget_access,
     COOKIE_NAME,
     SESSION_SECONDS,
     admin_user,
@@ -101,8 +102,13 @@ class PasswordBody(BaseModel):
     new: str
 
 
-class RepPasswordBody(BaseModel):
-    rep_id: str
+class UserBody(BaseModel):
+    email: str
+
+
+class AddUserBody(BaseModel):
+    email: str
+    role: str
 
 
 class LeaveBody(BaseModel):
@@ -196,23 +202,20 @@ def health() -> dict[str, Any]:
 @app.post("/api/login")
 def login(body: LoginBody, response: Response) -> dict[str, str]:
     email = normalize_login_email(body.email)
-    # Temsilcinin panelden verilmiş şifresi varsa yalnız o geçer; yoksa Vercel'deki.
+    # Panelde kaydı olan kişi: kapatıldıysa giremez; şifresi varsa yalnız o geçer.
     stored = None
-    if email != ADMIN_EMAIL and (os.environ.get("DATABASE_URL_POOLED") or os.environ.get("DATABASE_URL")):
+    if email != ADMIN_EMAIL and _db_configured():
         stored = panel_passwords.lookup(email)
-    if stored is not None:
-        rep = load_rep_by_email(email) if panel_passwords.verify_password(body.password, stored.password_hash) else None
-        user = AuthUser(email=email, role="rep", rep_id=rep.rep_id, full_name=rep.full_name) if rep else None
+    if stored is not None and not stored.active:
+        raise HTTPException(status_code=401, detail="Kullanıcı adı veya şifre hatalı")
+    if stored is not None and stored.password_hash:
+        ok = panel_passwords.verify_password(body.password, stored.password_hash)
     else:
-        secrets = passwords()
-        expected = lookup_secret_password(secrets, email)
-        if expected is None or not password_matches(body.password, expected):
-            raise HTTPException(status_code=401, detail="Kullanıcı adı veya şifre hatalı")
-        rep = None
-        if email != ADMIN_EMAIL:
-            require_database()
-            rep = load_rep_by_email(email)
-        user = resolve_user(email, body.password, secrets, rep)
+        expected = lookup_secret_password(passwords(), email)
+        ok = expected is not None and password_matches(body.password, expected)
+    if not ok:
+        raise HTTPException(status_code=401, detail="Kullanıcı adı veya şifre hatalı")
+    user = _login_user(email, stored)
     if user is None:
         raise HTTPException(status_code=401, detail="Kullanıcı adı veya şifre hatalı")
     response.set_cookie(
@@ -225,6 +228,22 @@ def login(body: LoginBody, response: Response) -> dict[str, str]:
         path="/",
     )
     return {"email": user.email, "role": user.role}
+
+
+def _db_configured() -> bool:
+    return bool(os.environ.get("DATABASE_URL_POOLED") or os.environ.get("DATABASE_URL"))
+
+
+def _login_user(email: str, stored: panel_passwords.Stored | None) -> AuthUser | None:
+    """Şifre doğrulandıktan sonra oturum kullanıcısı: ana yönetici, eklenen yönetici ya da temsilci."""
+    if email == ADMIN_EMAIL:
+        return AuthUser(email=email, role="admin", rep_id=None, full_name=None)
+    require_database()
+    if stored is not None and stored.role == "admin":
+        who = panel_passwords.person(email)
+        return AuthUser(email=email, role="admin", rep_id=None, full_name=(who or {}).get("full_name"))
+    rep = load_rep_by_email(email)
+    return AuthUser(email=email, role="rep", rep_id=rep.rep_id, full_name=rep.full_name) if rep else None
 
 
 @app.post("/api/logout")
@@ -243,11 +262,13 @@ def me(user: AuthUser = Depends(current_user)) -> dict[str, Any]:
         "org_id": get_org_id(),
         "finance": finance_allowed(user),
         "must_change": _must_change(user),
+        # Ana yöneticinin şifresi Vercel'de; diğer herkes panelden değiştirir.
+        "own_password": user.email != ADMIN_EMAIL,
     }
 
 
 def _must_change(user: AuthUser) -> bool:
-    if user.role != "rep":
+    if user.email == ADMIN_EMAIL:
         return False
     try:
         stored = panel_passwords.lookup(user.email)
@@ -260,8 +281,8 @@ def _must_change(user: AuthUser) -> bool:
 @app.post("/api/me/password")
 def change_password(body: PasswordBody, user: AuthUser = Depends(current_user)) -> dict[str, str]:
     """Temsilci kendi şifresini değiştirir. Yönetici şifresi Vercel'de kalır."""
-    if user.role != "rep":
-        raise HTTPException(status_code=400, detail="Yönetici şifresi Vercel'deki PUSULA_PASSWORDS_JSON ayarından değişir")
+    if user.email == ADMIN_EMAIL:
+        raise HTTPException(status_code=400, detail="Ana yönetici şifresi Vercel'deki PUSULA_PASSWORDS_JSON ayarından değişir")
     require_database()
     stored = panel_passwords.lookup(user.email)
     if stored is not None:
@@ -282,30 +303,72 @@ def change_password(body: PasswordBody, user: AuthUser = Depends(current_user)) 
 
 @app.get("/api/users")
 def users(user: AuthUser = Depends(admin_user)) -> Any:
-    """Temsilciler ve şifre durumu: panel (bu ekrandan), vercel (eski ayar) ya da yok."""
+    """Kullanıcılar ve eklenebilecek Zoho kullanıcıları. kaynak: panel | vercel | None."""
     require_database()
     try:
         env = passwords()
     except HTTPException:
         env = {}
-    rows = panel_passwords.list_reps()
-    for row in rows:
-        row["kaynak"] = (
-            "panel" if row["updated_at"] else "vercel" if lookup_secret_password(env, row["email"]) else None
-        )
-    return jsonable_encoder(rows)
+    data = panel_passwords.list_users(ADMIN_EMAIL)
+    for row in data["users"]:
+        if row["ana"]:
+            row["kaynak"] = "vercel"
+        elif not row["active"]:
+            row["kaynak"] = None
+        else:
+            row["kaynak"] = "panel" if row["panel"] else "vercel" if lookup_secret_password(env, row["email"]) else None
+    return jsonable_encoder(data)
+
+
+def _target(email: str, user: AuthUser) -> dict[str, Any]:
+    email = normalize_login_email(email)
+    if email in (ADMIN_EMAIL, user.email):
+        raise HTTPException(status_code=400, detail="Ana yöneticiyi ve kendinizi buradan değiştiremezsiniz")
+    who = panel_passwords.person(email)
+    if who is None:
+        raise HTTPException(status_code=404, detail="Zoho'da aktif kullanıcı bulunamadı")
+    return {**who, "email": email}
+
+
+@app.post("/api/users")
+def add_user(body: AddUserBody, user: AuthUser = Depends(admin_user)) -> dict[str, str]:
+    """Kullanıcı ekler (ya da geri açar) ve ilk şifreyi üretir; düz şifre yalnız bu yanıtta."""
+    require_database()
+    who = _target(body.email, user)
+    if body.role not in panel_passwords.ROLES:
+        raise HTTPException(status_code=400, detail="Rol temsilci ya da yönetici olmalı")
+    if body.role == "rep" and who["category"] != "sales":
+        raise HTTPException(status_code=400, detail="Temsilci rolü yalnız Zoho'da satış ekibindeki kişiye verilir")
+    password = panel_passwords.generate_password()
+    panel_passwords.grant(who["email"], body.role, password, by=user.email)
+    forget_access(who["email"])
+    return {"email": who["email"], "full_name": who["full_name"], "password": password}
+
+
+@app.post("/api/users/remove")
+def remove_user(body: UserBody, user: AuthUser = Depends(admin_user)) -> dict[str, str]:
+    """Erişimi kapatır: giriş ve açık oturum biter (en geç 1 dk)."""
+    require_database()
+    who = _target(body.email, user)
+    panel_passwords.revoke(who["email"], by=user.email)
+    forget_access(who["email"])
+    return {"ok": "true"}
 
 
 @app.post("/api/users/password")
-def reset_password(body: RepPasswordBody, user: AuthUser = Depends(admin_user)) -> dict[str, str]:
-    """Temsilciye yeni ilk şifre üretir; düz metin yalnız bu yanıtta döner."""
+def reset_password(body: UserBody, user: AuthUser = Depends(admin_user)) -> dict[str, str]:
+    """Yeni ilk şifre üretir; rol değişmez. Düz şifre yalnız bu yanıtta döner."""
     require_database()
-    row = next((r for r in panel_passwords.list_reps() if r["rep_id"] == body.rep_id), None)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Aktif satış temsilcisi bulunamadı")
+    who = _target(body.email, user)
+    stored = panel_passwords.lookup(who["email"])
+    if stored is not None and not stored.active:
+        raise HTTPException(status_code=400, detail="Erişimi kapalı; önce yeniden ekleyin")
+    if stored is None and who["category"] != "sales":
+        raise HTTPException(status_code=400, detail="Bu kişi kullanıcı değil; önce ekleyin")
     password = panel_passwords.generate_password()
-    panel_passwords.set_password(row["email"], password, must_change=True, by=user.email)
-    return {"email": row["email"], "full_name": row["full_name"], "password": password}
+    panel_passwords.set_password(who["email"], password, must_change=True, by=user.email)
+    forget_access(who["email"])
+    return {"email": who["email"], "full_name": who["full_name"], "password": password}
 
 
 @app.get("/api/reps")
