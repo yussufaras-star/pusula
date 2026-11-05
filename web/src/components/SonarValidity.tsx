@@ -36,6 +36,14 @@ interface Validity {
   guven: "ön sonuç" | "orta" | "yüksek";
 }
 
+interface Payload {
+  kocluk: Validity;
+  havuz: Validity | null;
+  havuz_durum: { toplam: number; analiz: number; sirada: number; hata: number };
+}
+
+type Scope = "havuz" | "kocluk";
+
 const dayFmt = new Intl.DateTimeFormat("tr-TR", { day: "numeric", month: "long", timeZone: "UTC" });
 const f2 = (v: number | null | undefined) =>
   v === null || v === undefined ? "—" : v.toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -153,9 +161,15 @@ function Dumbbell({ data }: { data: Validity }) {
 const CONF_TONE = { "ön sonuç": "warning", orta: "neutral", yüksek: "good" } as const;
 
 export function SonarValidity({ isAdmin }: { isAdmin: boolean }) {
-  const { data, error } = usePolling<Validity>("/api/conversations/validity", 0);
+  const { data: payload, error } = usePolling<Payload>("/api/conversations/validity", 0);
+  const [picked, setPicked] = useState<Scope | null>(null);
   if (error) return null;
-  if (!data) return <div className="skeleton" />;
+  if (!payload) return <div className="skeleton" />;
+  const pool = payload.havuz;
+  const poolReady = !!pool && pool.satisli.n >= 30 && pool.satissiz.n >= 30;
+  const scope: Scope = picked ?? (poolReady ? "havuz" : "kocluk");
+  const data = scope === "havuz" && pool ? pool : payload.kocluk;
+  const st = payload.havuz_durum;
   if (!data.satisli.n || !data.satissiz.n) return null;
 
   const bands = data.dilimler.filter((b) => b.n > 0);
@@ -169,9 +183,24 @@ export function SonarValidity({ isAdmin }: { isAdmin: boolean }) {
       <div className="card-head">
         <h2>SONAR-41 tutarlılık analizi</h2>
         <span className="hint">puan satışı gösteriyor mu · {dayFmt.format(new Date(`${data.since}T00:00:00Z`))}'dan beri</span>
-        {isAdmin ? <ShareButton kart="sonar-tutarlilik" baslik="SONAR-41 tutarlılık analizi" /> : null}
+        {pool ? (
+          <div className="chips" role="group" aria-label="Kapsam" data-share-skip>
+            {(["havuz", "kocluk"] as const).map((k) => (
+              <button key={k} className={`chip${scope === k ? " on" : ""}`} onClick={() => setPicked(k)} aria-pressed={scope === k}>
+                {k === "havuz" ? "2026 havuzu" : "Koçluk dönemi"}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {isAdmin ? <ShareButton kart="sonar-tutarlilik" baslik={`SONAR-41 tutarlılık analizi · ${scope === "havuz" ? "2026 havuzu" : "koçluk dönemi"}`} /> : null}
       </div>
       <div className="card-body">
+        {st.toplam && st.sirada ? (
+          <div className="banner" data-share-skip>
+            2026 havuzu işleniyor: {int(st.toplam)} görüşmeden {int(st.analiz)} analiz edildi, {int(st.sirada)} sırada
+            {st.hata ? `, ${int(st.hata)} kayıt alınamadı` : ""}. Gece işinde tamamlanır.
+          </div>
+        ) : null}
         <p className="sv-lead">
           Satışla biten görüşmeler ortalama <b>{f2(data.satisli.ort)}</b>, satış olmayanlar <b>{f2(data.satissiz.ort)}</b>{" "}
           puan aldı.
@@ -238,6 +267,9 @@ export function SonarValidity({ isAdmin }: { isAdmin: boolean }) {
         </div>
 
         <p className="muted fn-note">
+          {scope === "havuz"
+            ? "2026 havuzu: satışa dönmüş görüşmelerin hepsi ve satışa dönmemiş görüşmelerden aylara orantılı rastgele örnek; satış oranı örnek ağırlığıyla hesaplanır. Verimor kayıtları ~3 ay sakladığı için havuz Ağustos'tan başlar. "
+            : "Koçluk dönemi: haftalık analiz edilen görüşmeler (temsilci başına haftada ~15, kota seçimi). "}
           Görüşmeden sonraki {data.pencere_gun} gün içinde (aynı gün dahil) aynı müşteriye satış kapandıysa görüşme "satışla
           biten" sayılır; müşteri kişi kaydı üzerinden satışa bağlanır. Daha önce satın almış müşterilerin görüşmeleri
           (destek, yenileme) analize girmez. Görüşme puanı beş başlığın ortalamasıdır. Bu analiz ilişkiyi gösterir; örneklem

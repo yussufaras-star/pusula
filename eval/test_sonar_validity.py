@@ -36,3 +36,11 @@ def test_controls_interest_and_pre_sale_calls() -> None:
     assert (k["ilgili_satisli"]["n"], k["ilgili_satissiz"]["n"]) == (2, 1)
     assert k["ilgili_satissiz"]["ort"] == 2.5
     assert (k["satis_oncesi"]["n"], k["satis_oncesi"]["ort"]) == (1, 2.8)  # aynı gün satış hariç
+
+
+def test_band_rate_uses_sample_weight() -> None:
+    # 1 satışlı (ağırlık 1) + 2 örneklenmiş satışsız (her biri 4 görüşmeyi temsil eder)
+    calls = [Call({"K1": 3.5}, 0, 4), Call({"K1": 3.2}, None, 3, 4.0), Call({"K1": 3.4}, None, 3, 4.0)]
+    band = build(calls, SINCE)["dilimler"][-1]
+    assert (band["n"], band["satis"]) == (3, 1)
+    assert band["oran"] == round(100 / 9, 1)  # 1 / (1 + 8)
