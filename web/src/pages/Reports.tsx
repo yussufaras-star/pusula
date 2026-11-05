@@ -10,6 +10,7 @@ import { SyncButton } from "../components/SyncButton";
 import { SourceYield } from "../components/SourceYield";
 import { CiroTrendCard, RepCiroChange } from "../components/CiroTrend";
 import { LeadCiro } from "../components/LeadCiro";
+import { LeadFlow } from "../components/LeadFlow";
 import { ago, duration, int, num, pct, tl, tlShort } from "../format";
 import type { CiroMonth, Me, ReportRow, SalesReport } from "../types";
 
@@ -182,6 +183,16 @@ export function ReportsPage({ me }: { me: Me }) {
               </div>
             </section>
           ) : null}
+
+          <section className="card">
+            <div className="card-head">
+              <h2>Lead akışı</h2>
+              <span className="hint">haftalık gelen lead · temsilci başına günlük lead · önceki haftaya göre %</span>
+            </div>
+            <div className="card-body">
+              <LeadFlow ranked={isAdmin} />
+            </div>
+          </section>
 
           <section className="card">
             <div className="card-head">
