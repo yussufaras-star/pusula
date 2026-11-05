@@ -170,7 +170,7 @@ export interface SnapshotLine {
   label: string;
   amount: number;
   currency: string;
-  origin: "account" | "planned" | "intercompany" | "wallet" | "tax" | "manual";
+  origin: "account" | "planned" | "intercompany" | "wallet" | "receivable" | "tax" | "manual";
   sort: number;
 }
 

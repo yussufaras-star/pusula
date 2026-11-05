@@ -82,6 +82,7 @@ def test_us_tax_only_on_us_company(monkeypatch) -> None:
         "load_planned": lambda conn: [],
         "load_transactions": lambda conn, start=None, end=None: [],
         "load_wallets": lambda conn: [],
+        "load_receivables": lambda conn: [],
         "load_tax_settings": lambda conn, c: None,
         "insert_snapshot": lambda conn, c, week, fx: {"llc": 1, "tr": 2}[c],
         "insert_line": lambda conn, sid, values: 0,
@@ -95,3 +96,19 @@ def test_us_tax_only_on_us_company(monkeypatch) -> None:
     )
     assert weekly.create_week(object(), date(2026, 10, 26), date(2026, 11, 4)) == [1, 2]
     assert seen == {"llc": [("ABD vergisi", 1)], "tr": []}
+
+
+def test_receivables_on_latest_per_source() -> None:
+    from decimal import Decimal
+
+    from pusula.db.models import FinReceivable
+
+    rows = [
+        FinReceivable(company_id="tr", source="lidio", as_of=date(2026, 11, 1), amount=Decimal("100")),
+        FinReceivable(company_id="tr", source="lidio", as_of=date(2026, 11, 4), amount=Decimal("200")),
+        FinReceivable(company_id="tr", source="iyzico", as_of=date(2026, 10, 30), amount=Decimal("50")),
+        FinReceivable(company_id="llc", source="lidio", as_of=date(2026, 11, 1), amount=Decimal("9")),
+    ]
+    got = {r.source: r.amount for r in weekly.receivables_on(rows, "tr", date(2026, 11, 1))}
+    assert got == {"lidio": Decimal("100"), "iyzico": Decimal("50")}
+    assert {r.amount for r in weekly.receivables_on(rows, "tr", None)} == {Decimal("200"), Decimal("50")}

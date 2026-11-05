@@ -26,7 +26,7 @@ from typing import Any
 
 import httpx
 
-from pusula.db.models import FinAccount, FinCompany
+from pusula.db.models import FinAccount, FinCompany, FinReceivable
 from pusula.finance import fx, store
 from pusula.finance.providers import ADAPTERS, rexven
 from pusula.finance.providers.base import HTTP_TIMEOUT, AdapterResult, ProviderError
@@ -183,6 +183,25 @@ def sync_wallets(http: httpx.Client, now: datetime) -> dict[str, Any]:
     return {"ok": True, "rows": rows, "skipped": skipped}
 
 
+def sync_receivables(http: httpx.Client, now: datetime) -> dict[str, Any]:
+    """iyzico / Lidio'da bekleyen net tahsilat (AŞ, TL) → fin_receivables (günde bir satır)."""
+    today = now.date()
+    out: dict[str, Any] = {"ok": True}
+    rows = []
+    for source, pending in (("lidio", rexven.lidio_pending), ("iyzico", rexven.iyzico_pending)):
+        try:
+            amount = pending(http, today)
+        except Exception as exc:
+            logger.warning("%s bekleyen tahsilat basarisiz (%s)", source, type(exc).__name__)
+            out = {**out, "ok": False, source: short_error(exc)}
+            continue
+        rows.append(FinReceivable(company_id="tr", source=source, as_of=today, amount=amount.quantize(Decimal("0.01")), notes="otomatik"))
+        out[source] = str(amount.quantize(Decimal("0.01")))
+    with connect() as conn:
+        store.save_receivables(conn, rows)
+    return out
+
+
 def _sync_account(
     account: FinAccount,
     companies: Sequence[FinCompany],
@@ -224,8 +243,13 @@ def run_finance_sync(
     days: int | None = None,
     budget_sec: float = DEFAULT_BUDGET_SEC,
     min_gap_sec: float | None = None,
+    provider: str | None = None,
 ) -> dict[str, Any]:
-    """min_gap_sec: son çalıştırmadan bu kadar geçmediyse hiçbir şey yapmaz (buton)."""
+    """min_gap_sec: son çalıştırmadan bu kadar geçmediyse hiçbir şey yapmaz (buton).
+
+    provider: yalnız bu sağlayıcının hesapları (ör. 'rexven': NetBird'e bağlı
+    yerel bilgisayardan; diğer sağlayıcıların anahtarları orada yok).
+    """
     now = now or datetime.now(TZ)
     started = time.monotonic()
     with connect() as lock_conn:
@@ -248,6 +272,8 @@ def run_finance_sync(
         # Rexven yalnız NetBird içinden erişilir (GitHub senkronu); başka yerde atlanır
         if not rexven.reachable():
             accounts = [a for a in accounts if a.provider != "rexven"]
+        if provider is not None:
+            accounts = [a for a in accounts if a.provider == provider]
         with httpx.Client(timeout=HTTP_TIMEOUT) as http:
             results = run_accounts(
                 accounts,
@@ -255,7 +281,9 @@ def run_finance_sync(
                 budget_sec,
                 started,
             )
-            wallets_report = sync_wallets(http, now) if rexven.reachable() and account_id is None else None
+            platform = rexven.reachable() and account_id is None and provider in (None, "rexven")
+            wallets_report = sync_wallets(http, now) if platform else None
+            receivables_report = sync_receivables(http, now) if platform else None
         own = categorized = 0
         try:
             # Yeni gelenler eski hareketlerle de eşleşebilir: ilk senkron penceresi + pay
@@ -279,4 +307,5 @@ def run_finance_sync(
         "own_transfers": own,
         "categorized": categorized,
         **({"wallets": wallets_report} if wallets_report is not None else {}),
+        **({"receivables": receivables_report} if receivables_report is not None else {}),
     }
