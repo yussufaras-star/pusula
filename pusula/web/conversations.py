@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from pusula import conversations
 from pusula.scoreboard import load_scoreboard
+from pusula.sonar_validity import load_validity
 from pusula.block_share import post_cliq
 from pusula.db.identity import normalize_phone
 from pusula.metrics import TZ
@@ -107,6 +108,12 @@ def scoreboard(week: str | None = None, user: AuthUser = Depends(admin_user)) ->
     """Haftalık puan tablosu (K1-K5, gelişim ve puan sıralaması). Yalnız yönetici."""
     start = _week(week)
     return cache.cached(("conv-scoreboard", start.isoformat()), TTL, lambda: jsonable_encoder(load_scoreboard(start)))
+
+
+@router.get("/validity")
+def validity(user: AuthUser = Depends(current_user)) -> Any:
+    """SONAR-41 tutarlılık analizi: satışlı / satışsız görüşmelerin puanı. Ekip geneli, isim yok."""
+    return cache.cached(("conv-validity",), TTL, lambda: jsonable_encoder(load_validity()))
 
 
 @router.get("/requests")

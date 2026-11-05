@@ -2486,6 +2486,116 @@ table.meet-list {
   font-size: 12.5px;
 }
 
+/* --- SONAR-41 tutarlılık ---------------------------------------------------- */
+
+.sv-lead {
+  font-size: 15px;
+  line-height: 1.5;
+  margin: 2px 0 6px;
+}
+
+.sv-msg {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--good-wash);
+  font-size: 13.5px;
+}
+
+.sv-conf {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.chart .sv-val {
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+
+.chart .sv-band {
+  fill: var(--ink);
+  font-weight: 600;
+}
+
+.chart .sv-dim {
+  fill: var(--ink-2);
+}
+
+.chart .sv-dim.top,
+.chart .sv-gap.top {
+  fill: var(--ink);
+  font-weight: 700;
+}
+
+.chart .sv-gap {
+  font-size: 12px;
+  fill: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart .sv-bar {
+  stroke: var(--axis);
+  stroke-width: 3;
+}
+
+.chart .sv-dot.no,
+.sv-key.no {
+  fill: var(--muted);
+  background: var(--muted);
+}
+
+.chart .sv-dot.yes,
+.sv-key.yes {
+  fill: var(--series-1);
+  background: var(--series-1);
+}
+
+.sv-legend {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.sv-key {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: -1px;
+}
+
+.sv-checks {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .sv-checks {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.sv-check {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.sv-check-label {
+  font-weight: 600;
+  color: var(--ink-2);
+  margin-bottom: 4px;
+}
+
 /* --- finans -------------------------------------------------------------- */
 
 /* Şirket renkleri sabit (kategorik 1-3, iki temada doğrulandı). Giriş/çıkış

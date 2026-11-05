@@ -4,6 +4,7 @@ import { api, ApiError, usePolling } from "../api";
 import { Scoreboard } from "../components/Scoreboard";
 import { ShareButton } from "../components/ShareButton";
 import { SonarTrend } from "../components/SonarTrend";
+import { SonarValidity } from "../components/SonarValidity";
 import { StatTile, ToneBadge } from "../components/StatTile";
 import { Modal } from "../finance/ui";
 import { ago, duration, int, minutes, num, pct, type Tone, weekCode } from "../format";
@@ -355,6 +356,8 @@ export function ConversationsPage({ me }: { me: Me }) {
             scope={repFilter ? (repOptions.find(([id]) => id === repFilter)?.[1] ?? "") : ownName}
             isAdmin={isAdmin}
           />
+
+          <SonarValidity isAdmin={isAdmin} />
 
           {isAdmin && !repFilter && data.durum.analiz_edildi ? <Scoreboard week={data.week_start} /> : null}
 
