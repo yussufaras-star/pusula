@@ -14,7 +14,7 @@ from decimal import Decimal
 
 import psycopg
 
-from pusula.db.models import FinAccount, FinSnapshotLine, FinTaxSettings, FinTransaction, FinWallet
+from pusula.db.models import FinAccount, FinReceivable, FinSnapshotLine, FinTaxSettings, FinTransaction, FinWallet
 from pusula.finance import store, tax
 from pusula.finance.fx import FxTable, load_fx
 from pusula.finance.snapshot import build_week_lines, intercompany_balances, previous_snapshot, week_end
@@ -41,8 +41,8 @@ def create_week(
     copy_previous: bool = True,
     include_intercompany: bool = False,
 ) -> list[int]:
-    """Yeni hafta: hesap bakiyeleri + açık planlı kalemler + cüzdanlar + tahmini
-    vergi + önceki elle girilenler.
+    """Yeni hafta: hesap bakiyeleri + açık planlı kalemler + cüzdanlar + ödeme
+    kuruluşunda bekleyen tahsilat + tahmini vergi + önceki elle girilenler.
 
     Bilanço tarihi (haftanın pazarı) bugünden önceyse hesap bakiyeleri o günün
     sonuna geri hesaplanır (güncel bakiye − sonraki hareketler), cüzdanlar o
@@ -74,6 +74,7 @@ def create_week(
     # ABD vergisi yalnız ABD şirketine (LLC); AŞ / GmbH bilançosuna girmez
     us = {c.id for c in companies if c.country == "US"}
     wallets = store.load_wallets(conn)
+    receivables = store.load_receivables(conn)
     tax_settings = {c: store.load_tax_settings(conn, c) for c in ids}
     created: list[int] = []
     for company_id in ids:
@@ -98,6 +99,7 @@ def create_week(
             week_date,
             ic,
             wallets=tax.wallets_on(wallets, company_id, as_of),
+            receivables=receivables_on(receivables, company_id, as_of),
             tax_due=(
                 tax_due(tax_settings[company_id], accounts_, wallets, own, fx_table, end, as_of)
                 if company_id in us
@@ -109,6 +111,16 @@ def create_week(
             store.insert_line(conn, snapshot_id, line.__dict__)
         created.append(snapshot_id)
     return created
+
+
+def receivables_on(rows: Sequence[FinReceivable], company_id: str, day: date | None) -> list[FinReceivable]:
+    """Kaynak başına 'day'e kadarki son değer; day None ise en son."""
+    latest: dict[str, FinReceivable] = {}
+    for r in rows:
+        if r.company_id == company_id and (day is None or r.as_of <= day):
+            if r.source not in latest or r.as_of >= latest[r.source].as_of:
+                latest[r.source] = r
+    return list(latest.values())
 
 
 def auto_companies(conn: psycopg.Connection) -> list[str]:

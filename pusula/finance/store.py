@@ -25,6 +25,7 @@ from pusula.db.models import (
     FinCompany,
     FinDecision,
     FinPlannedItem,
+    FinReceivable,
     FinSnapshot,
     FinSnapshotLine,
     FinTaxSettings,
@@ -455,6 +456,24 @@ def load_row(conn: psycopg.Connection, table: str, row_id: int) -> dict | None:
 def load_wallets(conn: psycopg.Connection) -> list[FinWallet]:
     rows = _rows(conn, f"SELECT {WALLET_COLUMNS} FROM fin_wallets ORDER BY company_id, kind, sort, name")
     return [FinWallet(**r) for r in rows]
+
+
+def load_receivables(conn: psycopg.Connection) -> list[FinReceivable]:
+    rows = _rows(conn, "SELECT company_id, source, as_of, amount, currency, notes FROM fin_receivables ORDER BY as_of")
+    return [FinReceivable(**r) for r in rows]
+
+
+def save_receivables(conn: psycopg.Connection, rows: Sequence[FinReceivable]) -> int:
+    """(şirket, kaynak, gün) başına bir satır; aynı gün yeniden yazılır."""
+    for r in rows:
+        conn.execute(
+            "INSERT INTO fin_receivables (company_id, source, as_of, amount, currency, notes)"
+            " VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (company_id, source, as_of)"
+            " DO UPDATE SET amount = EXCLUDED.amount, currency = EXCLUDED.currency,"
+            " notes = EXCLUDED.notes, updated_at = now()",
+            (r.company_id, r.source, r.as_of, r.amount, r.currency, r.notes),
+        )
+    return len(rows)
 
 
 PLATFORM_WALLET_NAME = "Rexven platformu"

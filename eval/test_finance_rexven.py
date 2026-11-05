@@ -177,3 +177,40 @@ def test_netbird_yoksa_erisilemez(monkeypatch):
     assert not rexven.reachable()
     monkeypatch.setenv("REXVEN_NETBIRD", "1")
     assert rexven.reachable()
+
+
+def _payback(trans: str, pay: str, amount: str, kind: str = "Credit") -> dict:
+    return {"transType": kind, "transDate": f"{trans} 10:00:00", "paybackDate": pay, "paybackAmount": amount}
+
+
+def test_lidio_bekleyen_odeme_planindan():
+    """İşlem günü ≤ gün < ödeme günü olan plan satırları; iade satırı eksi."""
+    txs = [
+        {"paymentInfo": {"paybackTransactionList": [_payback("29.10.2026", "16.11.2026", "5059.87")]}},
+        {"paymentInfo": {"paybackTransactionList": [_payback("20.10.2026", "05.11.2026", "1000")]}},
+        {"paymentInfo": {"paybackTransactionList": [_payback("01.11.2026", "10.11.2026", "-300", "Debit")]}},
+        {"paymentInfo": {"paybackTransactionList": []}},
+    ]
+    assert rexven.lidio_pending_on(txs, date(2026, 10, 28)) == D("1000")
+    assert rexven.lidio_pending_on(txs, date(2026, 11, 4)) == D("5759.87")
+    assert rexven.lidio_pending_on(txs, date(2026, 11, 5)) == D("4759.87")  # 5 Kasım'da yattı
+
+
+def test_iyzico_bekleyen_odeme_ve_iade():
+    sale = {"transactionType": "PAYMENT", "transactionId": 1, "price": 1000, "merchantPayoutAmount": 960}
+    other = {"transactionType": "PAYMENT", "transactionId": 2, "price": 500, "merchantPayoutAmount": 480}
+    refund = {"transactionType": "REFUND", "transactionId": 9, "paymentTxId": 1, "price": 500}
+    days = {
+        date(2026, 11, 1): ([sale, other], []),
+        date(2026, 11, 3): ([refund], []),
+        date(2026, 11, 5): ([], [{"paymentTransactionId": "1", "payoutType": "MERCHANT_PAYOUT", "payoutAmount": 960}]),
+        date(2026, 11, 8): ([], [{"paymentTransactionId": "1", "payoutType": "MERCHANT_REFUND", "payoutAmount": -480}]),
+    }
+    on = lambda d: rexven.iyzico_pending_on(days, date(2026, 11, d))
+    assert on(1) == D("1440")
+    assert on(3) == D("960")  # iade düşülecek: 480
+    assert on(5) == D("0")  # satış 1 ödendi; iade henüz düşülmedi
+    assert on(8) == D("480")  # iade ödemeden düşüldü
+    # düşülme kaydı yoksa satışın net tutarı iade oranında
+    del days[date(2026, 11, 8)]
+    assert on(8) == D("0")

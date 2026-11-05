@@ -25,6 +25,7 @@ from pusula.db.models import (
     FinCompany,
     FinDecision,
     FinPlannedItem,
+    FinReceivable,
     FinSnapshot,
     FinSnapshotLine,
     FinTransaction,
@@ -102,6 +103,7 @@ SECTIONS: tuple[Section, ...] = (
 SECTION_BY_KEY: dict[str, Section] = {s.key: s for s in SECTIONS}
 
 CASH = "Hazır değerler"
+RECEIVABLE_LABEL = {"iyzico": "iyzico", "lidio": "Lidio"}
 INVENTORY = "Stoklar"
 IC_RECEIVABLE = "Şirketler arası alacaklar"
 IC_PAYABLE = "Şirketler arası borçlar"
@@ -206,6 +208,7 @@ def build_week_lines(
     intercompany: Sequence[tuple[str, str, Decimal]] = (),
     *,
     wallets: Iterable[FinWallet] = (),
+    receivables: Iterable[FinReceivable] = (),
     tax_due: Sequence[tuple[str, Decimal]] = (),
     balances: Mapping[int, Decimal] | None = None,
 ) -> list[DraftLine]:
@@ -220,6 +223,7 @@ def build_week_lines(
     - Şirketler arası net transferler: alacak / borç (USD).
     - Cüzdanlar: satıcı cüzdanı → Alınan avanslar; üretici bakiyesi →
       Ticari borçlar (negatifse verilen avans).
+    - Ödeme kuruluşunda bekleyen net tahsilat (iyzico, Lidio) → Ticari alacaklar.
     - Tahmini vergi (USD) → Ödenecek vergi, SGK ve maaş.
     - Önceki haftanın elle girilen satırları kopyalanır; otomatik gelen bir
       satırla aynı bölüm + etiketi taşıyan kopyalanmaz.
@@ -270,6 +274,10 @@ def build_week_lines(
             push("current_liabilities", ADVANCES_RECEIVED if seller else TRADE_PAYABLE, label, wallet.balance, wallet.currency, "wallet")
         else:
             push("current_assets", OTHER_RECEIVABLE if seller else ADVANCES_GIVEN, label, -wallet.balance, wallet.currency, "wallet")
+
+    for r in receivables:
+        if r.company_id == company_id and r.amount != 0:
+            push("current_assets", TRADE_RECEIVABLE, f"{RECEIVABLE_LABEL[r.source]} · tahsilatı bekleyen", r.amount, r.currency, "receivable")
 
     for label, usd in tax_due:
         if usd > 0:

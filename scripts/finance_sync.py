@@ -3,6 +3,7 @@
 Kullanım:
     python scripts/finance_sync.py
     python scripts/finance_sync.py --account 3 --days 30
+    python scripts/finance_sync.py --provider rexven   # NetBird'e bağlı bilgisayarda
 
 Sağlayıcı anahtarları ortam değişkeninden okunur (finance-sync.yml tek tek
 verir). İsteğe bağlı FIN_SECRETS_JSON (JSON nesnesi) verilirse yalnız
@@ -29,6 +30,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Finans senkronu.")
     parser.add_argument("--account", type=int, default=None, help="Yalnız bu hesap (fin_accounts.id)")
     parser.add_argument("--days", type=int, default=None, help="Geriye bakış (gün); boşsa son senkrondan")
+    parser.add_argument("--provider", default=None, help="Yalnız bu sağlayıcı (ör. rexven)")
     parser.add_argument("--budget", type=float, default=240.0, help="Hesap başlatma süresi (sn)")
     args = parser.parse_args()
 
@@ -39,7 +41,7 @@ def main() -> int:
     if loaded:
         print(f"saglayici anahtarlari: {', '.join(loaded)}")
 
-    report = run_finance_sync(account_id=args.account, days=args.days, budget_sec=args.budget)
+    report = run_finance_sync(account_id=args.account, days=args.days, budget_sec=args.budget, provider=args.provider)
     print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     if "skipped" in report:
         return 0
@@ -48,6 +50,8 @@ def main() -> int:
         failed.append("kurlar")
     if report.get("wallets", {}).get("ok") is False:
         failed.append("cuzdanlar")
+    if report.get("receivables", {}).get("ok") is False:
+        failed.append("tahsilatlar")
     if failed:
         print(f"hata: basarisiz: {', '.join(failed)}")
         return 1

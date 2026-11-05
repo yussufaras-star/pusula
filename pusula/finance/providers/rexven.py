@@ -20,7 +20,7 @@ import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -207,3 +207,119 @@ def wallet_totals(client: httpx.Client) -> tuple[list[WalletTotal], int]:
         raise ProviderError(f"{PROVIDER}: cüzdan sayfası sınırı aşıldı")
     totals = [WalletTotal(c, k, cur, bal, n) for (c, k, cur), (bal, n) in sums.items()]
     return totals, skipped
+
+
+# --- ödeme kuruluşlarında bekleyen tahsilat ----------------------------------------
+
+LIDIO_LOOKBACK_DAYS = 45  # Lidio satıştan en geç ~19 gün sonra öder
+
+
+def _dotted_day(value: str) -> date:
+    """Lidio ödeme planı tarihi: '16.11.2026' ya da '29.10.2026 12:59:18'."""
+    return datetime.strptime(str(value)[:10], "%d.%m.%Y").date()
+
+
+def lidio_pending_on(transactions: list[dict[str, Any]], day: date) -> Decimal:
+    """'day' gün sonunda Lidio'da bekleyen net tutar.
+
+    Her başarılı satışın ödeme planı (paybackTransactionList) bankaya hangi
+    gün ne kadar (komisyon düşülmüş) yatacağını verir; iade satırı eksidir.
+    İşlem günü ≤ day < ödeme günü olan satırlar toplanır.
+    """
+    total = Decimal("0")
+    for tx in transactions:
+        for row in (tx.get("paymentInfo") or {}).get("paybackTransactionList") or []:
+            if _dotted_day(row["transDate"]) <= day < _dotted_day(row["paybackDate"]):
+                total += num(row.get("paybackAmount"))
+    return total
+
+
+def lidio_transactions(client: httpx.Client, start: date, end: date) -> list[dict[str, Any]]:
+    """[start, end] Lidio işlemleri (en fazla 30 günlük parçalar, sayfalı); kayıt no'suna göre tekil."""
+    rows: dict[Any, dict[str, Any]] = {}
+    for begin, last in windows(start, end):
+        for page in range(1, MAX_PAGES + 1):
+            data = _get(client, "/lidio/transactions", startDate=begin.isoformat(), endDate=last.isoformat(), page=page)
+            if not isinstance(data, dict) or data.get("result") != "Success":
+                raise ProviderError(f"{PROVIDER}: Lidio işlemleri okunamadı")
+            for tx in data.get("transactionList") or []:
+                rows[(tx.get("paymentInfo") or {}).get("recordId")] = tx
+            if page >= int(data.get("pageCount") or 1):
+                break
+    return list(rows.values())
+
+
+def lidio_pending(client: httpx.Client, today: date) -> Decimal:
+    return lidio_pending_on(lidio_transactions(client, today - timedelta(days=LIDIO_LOOKBACK_DAYS), today), today)
+
+
+IYZICO_LOOKBACK_DAYS = 40  # iyzico satıştan 3–9 gün sonra öder; iade sonraki ödemeden düşer
+
+IyzicoDay = tuple[list[dict[str, Any]], list[dict[str, Any]]]  # (işlemler, o gün yapılan ödemeler)
+
+
+def iyzico_pending_on(days: dict[date, IyzicoDay], day: date) -> Decimal:
+    """'day' gün sonunda iyzico'da bekleyen net tutar.
+
+    Satış (PAYMENT) bize yatacak net tutarıyla (merchantPayoutAmount) ödendiği
+    güne kadar bekler; ödeme kaydı (MERCHANT_PAYOUT) aynı işlem numarasını
+    taşır. İade (REFUND) sonraki bir ödemeden düşülene (MERCHANT_REFUND, asıl
+    satışın numarasıyla) kadar bekleyenden çıkar; düşülen tutar bilinmiyorsa
+    satışın net tutarı iade oranında küçültülür.
+    """
+    paid: dict[str, date] = {}
+    deducted: dict[str, list[tuple[date, Decimal]]] = {}
+    sales: dict[str, tuple[date, dict[str, Any]]] = {}
+    refunds: list[tuple[date, dict[str, Any]]] = []
+    for d in sorted(days):
+        txs, payouts = days[d]
+        for row in payouts:
+            key = str(row.get("paymentTransactionId"))
+            if row.get("payoutType") == "MERCHANT_PAYOUT":
+                paid.setdefault(key, d)
+            elif row.get("payoutType") == "MERCHANT_REFUND":
+                deducted.setdefault(key, []).append((d, -num(row.get("payoutAmount"))))
+        for tx in txs:
+            if tx.get("transactionType") == "PAYMENT":
+                sales[str(tx.get("transactionId"))] = (d, tx)
+            elif tx.get("transactionType") == "REFUND":
+                refunds.append((d, tx))
+    total = Decimal("0")
+    for key, (d, tx) in sales.items():
+        if d <= day and paid.get(key, date.max) > day:
+            total += num(tx.get("merchantPayoutAmount"))
+    for d, tx in refunds:
+        if d > day:
+            continue
+        key = str(tx.get("paymentTxId"))
+        queue = deducted.get(key) or []
+        settled = queue.pop(0) if queue else None
+        if settled is not None and settled[0] <= day:
+            continue
+        if settled is not None:
+            total -= settled[1]
+        elif key in sales and num(sales[key][1].get("price")):
+            sale = sales[key][1]
+            total -= num(sale.get("merchantPayoutAmount")) * num(tx.get("price")) / num(sale.get("price"))
+        else:
+            total -= num(tx.get("price"))
+    return total
+
+
+def iyzico_days(client: httpx.Client, start: date, end: date) -> dict[date, IyzicoDay]:
+    """iyzico uçları tek gün alır: [start, end] her gün için işlemler + ödemeler."""
+    out: dict[date, IyzicoDay] = {}
+    d = start
+    while d <= end:
+        txs = _get(client, "/iyzico/transactions", date=d.isoformat())
+        payouts = _get(client, "/iyzico/settlements", date=d.isoformat())
+        if not isinstance(txs, dict) or not isinstance(payouts, dict):
+            raise ProviderError(f"{PROVIDER}: iyzico yanıtı okunamadı")
+        out[d] = (txs.get("transactions") or [], payouts.get("payoutCompletedTransactions") or [])
+        d += timedelta(days=1)
+    return out
+
+
+def iyzico_pending(client: httpx.Client, today: date) -> Decimal:
+    return iyzico_pending_on(iyzico_days(client, today - timedelta(days=IYZICO_LOOKBACK_DAYS), today), today)
+

@@ -11,6 +11,7 @@ const ORIGIN: Record<SnapshotLine["origin"], string> = {
   planned: "planlı",
   intercompany: "şirketler arası",
   wallet: "cüzdan",
+  receivable: "tahsilatı bekleyen",
   tax: "tahmini vergi",
   manual: "elle",
 };

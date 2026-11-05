@@ -677,7 +677,7 @@ CREATE INDEX IF NOT EXISTS idx_fin_snapshot_lines_snapshot ON fin_snapshot_lines
 ALTER TABLE fin_snapshot_lines ADD COLUMN IF NOT EXISTS section text;
 ALTER TABLE fin_snapshot_lines DROP CONSTRAINT IF EXISTS fin_snapshot_lines_origin_check;
 ALTER TABLE fin_snapshot_lines ADD CONSTRAINT fin_snapshot_lines_origin_check
-    CHECK (origin IN ('account', 'planned', 'intercompany', 'wallet', 'tax', 'manual'));
+    CHECK (origin IN ('account', 'planned', 'intercompany', 'wallet', 'receivable', 'tax', 'manual'));
 ALTER TABLE fin_snapshot_lines DROP CONSTRAINT IF EXISTS fin_snapshot_lines_section_check;
 ALTER TABLE fin_snapshot_lines ADD CONSTRAINT fin_snapshot_lines_section_check
     CHECK (
@@ -934,6 +934,21 @@ CREATE TABLE IF NOT EXISTS fin_provider_tokens (
     updated_at     timestamptz NOT NULL DEFAULT now()
 );
 
+-- Ödeme kuruluşlarında tahsil edilmiş, henüz bankaya yatmamış net tutar
+-- (iyzico / Lidio, komisyon düşülmüş). Günde bir satır; bilanço o pazara
+-- kadarki son değeri alacak olarak yazar.
+CREATE TABLE IF NOT EXISTS fin_receivables (
+    id          bigserial PRIMARY KEY,
+    company_id  text NOT NULL REFERENCES fin_companies (id),
+    source      text NOT NULL CHECK (source IN ('iyzico', 'lidio')),
+    as_of       date NOT NULL,
+    amount      numeric(18, 2) NOT NULL,
+    currency    text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    notes       text NOT NULL DEFAULT '',
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (company_id, source, as_of)
+);
+
 -- Vergi ayarı (şirket başına). Kâr = bugünkü net varlık − yıl başı net
 -- varlık + kâr dağıtımı − konulan sermaye; senaryolar bu kârı ortaklık /
 -- C-Corp olarak vergiler. partners: [{"name": "...", "share": "0.06"}].
@@ -1004,7 +1019,8 @@ BEGIN
     FOREACH t IN ARRAY ARRAY[
         'fin_companies', 'fin_accounts', 'fin_categories', 'fin_transactions', 'fin_fx_rates',
         'fin_planned_items', 'fin_snapshots', 'fin_snapshot_lines', 'fin_decisions',
-        'fin_category_rules', 'fin_wallets', 'fin_tax_settings', 'fin_provider_tokens'
+        'fin_category_rules', 'fin_wallets', 'fin_tax_settings', 'fin_provider_tokens',
+        'fin_receivables'
     ]
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);

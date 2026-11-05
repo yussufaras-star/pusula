@@ -142,7 +142,7 @@ FlowDirection = Literal["in", "out"]
 Recurrence = Literal["none", "weekly", "monthly"]
 PlannedStatus = Literal["open", "done", "cancelled"]
 SnapshotSide = Literal["asset", "liability"]
-SnapshotOrigin = Literal["account", "planned", "intercompany", "wallet", "tax", "manual"]
+SnapshotOrigin = Literal["account", "planned", "intercompany", "wallet", "receivable", "tax", "manual"]
 SnapshotSection = Literal[
     "current_assets", "noncurrent_assets", "current_liabilities", "longterm_liabilities", "equity"
 ]
@@ -338,6 +338,20 @@ class FinCategoryRule(BaseModel):
 WalletKind = Literal["seller", "producer"]
 WalletSource = Literal["manual", "rexven"]
 Rate = Annotated[Decimal, Field(ge=0, le=1, max_digits=6, decimal_places=4)]
+
+
+ReceivableSource = Literal["iyzico", "lidio"]
+
+
+class FinReceivable(BaseModel):
+    """fin_receivables: ödeme kuruluşunda bekleyen net tahsilat (günlük)."""
+
+    company_id: CompanyId
+    source: ReceivableSource
+    as_of: date
+    amount: Money
+    currency: Currency = "TRY"
+    notes: str = ""
 
 
 class FinWallet(BaseModel):
