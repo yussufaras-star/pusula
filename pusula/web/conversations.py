@@ -14,6 +14,7 @@ from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 
 from pusula import conversations
+from pusula.scoreboard import load_scoreboard
 from pusula.block_share import post_cliq
 from pusula.db.identity import normalize_phone
 from pusula.metrics import TZ
@@ -99,6 +100,13 @@ def trend(rep: str | None = None, user: AuthUser = Depends(current_user)) -> Any
     """SONAR-41 gelişimi: haftalık seriler. Temsilci yalnız kendi serisini görür."""
     rep_id = selected_rep(user, rep)
     return cache.cached(("conv-trend", rep_id), TTL, lambda: jsonable_encoder(conversations.load_trend(rep_id)))
+
+
+@router.get("/scoreboard")
+def scoreboard(week: str | None = None, user: AuthUser = Depends(admin_user)) -> Any:
+    """Haftalık puan tablosu (K1-K5, gelişim ve puan sıralaması). Yalnız yönetici."""
+    start = _week(week)
+    return cache.cached(("conv-scoreboard", start.isoformat()), TTL, lambda: jsonable_encoder(load_scoreboard(start)))
 
 
 @router.get("/requests")
