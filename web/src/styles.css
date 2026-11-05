@@ -2397,6 +2397,71 @@ table.meet-list {
   font-weight: 600;
 }
 
+/* --- puan tablosu ----------------------------------------------------------- */
+
+.sb-highlights {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+@media (max-width: 1100px) {
+  .sb-highlights {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.sb-hero,
+.sb-dim {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+}
+
+.sb-hero {
+  background: var(--good-wash);
+}
+
+.sb-hero-label {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.sb-hero-name {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 4px 0;
+}
+
+.sb-dim-head {
+  margin-bottom: 6px;
+  color: var(--ink-2);
+}
+
+.sb-dim-head b {
+  color: var(--ink);
+}
+
+.sb-dim-row {
+  margin-top: 2px;
+}
+
+.sb-table td .sb-delta {
+  display: block;
+  font-size: 11px;
+}
+
+.sb-table tbody tr.muted td {
+  color: var(--muted);
+}
+
+.sb-focus {
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+
 /* --- finans -------------------------------------------------------------- */
 
 /* Şirket renkleri sabit (kategorik 1-3, iki temada doğrulandı). Giriş/çıkış

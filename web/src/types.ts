@@ -915,3 +915,47 @@ export interface LeadFlowPayload {
   dort_hafta?: LeadFlowFour | null;
   temsilciler?: LeadFlowRep[];
 }
+
+// pusula/scoreboard.py build çıktısı (yalnız yönetici).
+export type DimScores = Record<string, number | null>;
+
+export interface ScoreRow {
+  rep_id: string;
+  name: string;
+  n: number;
+  puanlar: DimScores;
+  ort: number | null;
+  onceki_n: number;
+  onceki_puanlar: DimScores;
+  onceki_ort: number | null;
+  gecen_hafta_ort: number | null;
+  gelisim: DimScores;
+  gelisim_ort: number | null;
+  yeterli: boolean;
+  kiyas_var: boolean;
+  en_iyi_gelisim: string | null;
+  odak: string | null;
+  sira_gelisim: number | null;
+  sira_puan: number | null;
+}
+
+export interface Scoreboard {
+  week_start: string;
+  week_end: string;
+  kiyas_bas: string;
+  min_gorusme: number;
+  kiyas_hafta: number;
+  score_labels: Record<string, string>;
+  temsilciler: ScoreRow[];
+  en_cok_gelisen: string[];
+  liderler: Record<string, { puan: string[]; gelisim: string[] }>;
+  ekip: {
+    n: number;
+    puanlar: DimScores;
+    ort: number | null;
+    onceki_puanlar: DimScores;
+    onceki_ort: number | null;
+    gelisim: DimScores;
+    gelisim_ort: number | null;
+  };
+}
