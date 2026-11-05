@@ -63,3 +63,21 @@ def reach_bucket_sql(status_expr: str = "l.status") -> str:
 def is_dokunulmamis_sql(status_expr: str = "l.status") -> str:
     dokun = ", ".join(_sql_str(s) for s in _DOKUNULMAMIS_EXACT)
     return f"{status_expr} IN ({dokun})"
+
+
+# Pazarlama kalite kovaları (lead akışı kanal kırılımı). Ulaşıldı sayılan ama
+# müşteriye gerçekte ulaşılmayan hatalı/yabancı numaralar ayrı tutulur.
+QUALITY_STATUSES: dict[str, tuple[str, ...]] = {
+    "randevu": ("Randevu", "Satış Fırsatı"),
+    "nitelikli_degil": ("Nitelikli Değil-İlgisiz", "Aranmamalı"),
+    "hatali": ("İletişim Kurulamadı/Numara Hatalı",),
+    "yabanci": ("Yabancı No Mesaj/Mail İletildi", "Yabancı No/Mesaj-Mail Atıldı"),
+}
+
+
+def quality_bucket(status: str | None) -> str | None:
+    text = (status or "").strip()
+    for bucket, values in QUALITY_STATUSES.items():
+        if text in values:
+            return bucket
+    return None

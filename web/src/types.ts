@@ -959,3 +959,42 @@ export interface Scoreboard {
     gelisim_ort: number | null;
   };
 }
+
+// pusula/lead_channels.py build çıktısı.
+export type LeadChannelDim = "kanal" | "kampanya" | "form";
+
+export interface LeadChannelQuality {
+  lead: number;
+  ulasildi: number | null;
+  randevu: number | null;
+  nitelikli_degil: number | null;
+  hatali: number | null;
+  satis: number;
+  satis_orani: number | null;
+}
+
+export interface LeadChannelRow {
+  ad: string;
+  seri: number[];
+  son: number;
+  onceki: number;
+  degisim: number | null;
+  ort4: number;
+  onceki_ort4: number;
+  degisim_ort4: number | null;
+  toplam: number;
+  pay: number | null;
+  kalite: LeadChannelQuality;
+}
+
+export interface LeadChannelsPayload {
+  available: boolean;
+  dim: LeadChannelDim;
+  haftalar?: { bas: string; bit: string; suruyor: boolean }[];
+  son_hafta?: string | null;
+  kalite_bas?: string;
+  kalite_bit?: string;
+  satirlar?: LeadChannelRow[];
+  toplam?: LeadChannelRow;
+  utm_payi?: number | null;
+}
