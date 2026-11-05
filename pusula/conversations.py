@@ -612,6 +612,12 @@ def transcribe_pending(
                     rec = {"downloadUrl": meta.get("download_url")}
                     path = recordings.download_meeting(rec, Path(tmp) / "kayit.mp4")
                     result = transcribe.transcribe_file(path, video=True)
+        except recordings.RecordingGone as exc:
+            # Kayıt sağlayıcıda yok: yeniden denenmez, atlandı sayılır.
+            conn.execute("UPDATE conv_items SET status = 'atlandi', error = %s WHERE id = %s", (str(exc)[:500], item["id"]))
+            conn.commit()
+            report["atlandi"] += 1
+            continue
         except (recordings.RecordingError, transcribe.TranscribeError, OSError) as exc:
             logger.warning("Kayıt %s yazıya dökülemedi: %s", item["id"], exc)
             _fail(conn, item["id"], str(exc))

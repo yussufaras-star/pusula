@@ -36,6 +36,10 @@ class RecordingError(RuntimeError):
     pass
 
 
+class RecordingGone(RecordingError):
+    """Kayıt sağlayıcıda yok (Verimor kayıtları ~3 ay saklar); yeniden denemek boşuna."""
+
+
 def call_uuid(voice_recording_url: str | None) -> str | None:
     """CRM ses kaydı adresinden Verimor call_uuid'si."""
     if not voice_recording_url:
@@ -80,6 +84,8 @@ def download_call(uuid: str, dest: Path) -> Path:
         if resp.status_code == 429:
             time.sleep(60)
             continue
+        if "cannot find recording" in resp.text:
+            raise RecordingGone(f"kayıt silinmiş (Verimor ~3 ay saklar): {resp.text[:120]}")
         if resp.status_code != 200 or not resp.text.strip().startswith("http"):
             raise RecordingError(f"Verimor kayıt adresi alınamadı (HTTP {resp.status_code}): {resp.text[:200]}")
         return _stream_to(resp.text.strip(), dest)
