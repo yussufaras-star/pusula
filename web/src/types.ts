@@ -114,6 +114,8 @@ export interface Me {
   full_name: string | null;
   // Finans operasyonu bölümünü görebilir mi (sunucu karar verir).
   finance?: boolean;
+  // Yöneticinin verdiği ilk şifreyle girdi; kendi şifresini belirlemeli.
+  must_change?: boolean;
 }
 
 // pusula/compare.py build_side çıktısı.

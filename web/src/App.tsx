@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api } from "./api";
 import { Logo } from "./components/Logo";
+import { PasswordModal } from "./components/PasswordModal";
 import { FinancePage, type FinanceTab } from "./finance/FinancePage";
 import { CeoSummaryPage } from "./pages/CeoSummary";
 import { BoardPage } from "./pages/Board";
@@ -10,13 +11,14 @@ import { ConversationsPage } from "./pages/Conversations";
 import { LivePage } from "./pages/Live";
 import { LoginPage } from "./pages/Login";
 import { ReportsPage } from "./pages/Reports";
+import { UsersPage } from "./pages/Users";
 import type { Me } from "./types";
 
 // Pusula iki bölümdür: satış operasyonu ve finans operasyonu.
 // Finans yalnız me.finance true olan yöneticide görünür; sunucu da ayrıca korur.
 type Area = "satis" | "finans";
 
-type SalesRoute = "canli" | "karsilastir" | "pano" | "raporlar" | "gorusmeler" | "ceo";
+type SalesRoute = "canli" | "karsilastir" | "pano" | "raporlar" | "gorusmeler" | "ceo" | "kullanicilar";
 type FinanceRoute =
   | "finans/genel"
   | "finans/akis"
@@ -45,6 +47,7 @@ const NAV: Record<Area, NavItem[]> = {
     { route: "raporlar", label: "Raporlar" },
     { route: "gorusmeler", label: "Görüşme Analizleri" },
     { route: "ceo", label: "Yönetici özeti", admin: true },
+    { route: "kullanicilar", label: "Kullanıcılar", admin: true },
   ],
   finans: [
     { route: "finans/genel", label: "Genel" },
@@ -79,6 +82,7 @@ function readRoute(): Route {
 export function App() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [hashRoute, setRoute] = useState<Route>(readRoute);
+  const [pwOpen, setPwOpen] = useState(false);
 
   const loadMe = useCallback(() => {
     api<Me>("/api/me")
@@ -87,6 +91,10 @@ export function App() {
   }, []);
 
   useEffect(loadMe, [loadMe]);
+  // Yöneticinin verdiği ilk şifreyle giren temsilciden kendi şifresini belirlemesi istenir.
+  useEffect(() => {
+    if (me?.must_change) setPwOpen(true);
+  }, [me?.must_change]);
   useEffect(() => {
     const onHash = () => setRoute(readRoute());
     window.addEventListener("hashchange", onHash);
@@ -137,6 +145,11 @@ export function App() {
         <div className="spacer" />
         <div className="user">
           <span>{me.full_name ?? me.email}</span>
+          {me.role === "rep" ? (
+            <button className="btn" onClick={() => setPwOpen(true)}>
+              Şifremi değiştir
+            </button>
+          ) : null}
           <button className="btn" onClick={logout}>
             Çıkış
           </button>
@@ -155,6 +168,8 @@ export function App() {
           <BoardPage me={me} />
         ) : route === "ceo" ? (
           <CeoSummaryPage />
+        ) : route === "kullanicilar" ? (
+          me.role === "admin" ? <UsersPage /> : <LivePage me={me} />
         ) : route === "finans/ozet" ? (
           <CeoSummaryPage
             endpoint="/api/finance-summary"
@@ -166,6 +181,7 @@ export function App() {
           <FinancePage tab={route.slice("finans/".length) as FinanceTab} />
         )}
       </main>
+      {pwOpen ? <PasswordModal first={me.must_change === true} onClose={() => setPwOpen(false)} onDone={loadMe} /> : null}
     </div>
   );
 }

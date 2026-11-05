@@ -4148,3 +4148,43 @@ textarea.f-input {
 .cv-detail-tag {
   margin-bottom: 6px;
 }
+
+.pw-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: min(360px, 100%);
+}
+
+.pw-form p {
+  margin: 0;
+}
+
+.pw-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.pw-form input,
+.pw-form textarea {
+  border: 1px solid var(--border);
+  background: var(--page);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 9px 10px;
+  font: inherit;
+}
+
+.pw-form .error {
+  color: var(--critical-ink);
+  font-size: 13px;
+}
+
+.pw-issued {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 18px;
+  letter-spacing: 1px;
+}
