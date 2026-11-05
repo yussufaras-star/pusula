@@ -2397,6 +2397,30 @@ table.meet-list {
   font-weight: 600;
 }
 
+.lf-section {
+  margin: 22px 0 6px;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.lf-note {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+}
+
+.lf-channels th.lf-group {
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+}
+
+.lf-channels tfoot td {
+  font-weight: 600;
+}
+
+.lf-channels .lf-q {
+  border-left: 1px solid var(--border);
+}
+
 /* --- puan tablosu ----------------------------------------------------------- */
 
 .sb-highlights {

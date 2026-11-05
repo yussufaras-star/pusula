@@ -36,6 +36,7 @@ from pusula.paket import load_paket
 from pusula.reco import load_reco
 from pusula.hourly_nudges import run_hourly_nudges
 from pusula.lead_ciro import GRANS, load_lead_ciro
+from pusula.lead_channels import DIMS as CHANNEL_DIMS, load_lead_channels
 from pusula.lead_flow import WEEK_CHOICES, load_lead_flow
 from pusula.leaves import add_excused, delete_excused, set_leave
 from pusula.live import data_as_of, history_by_rep_hour, load_live
@@ -542,6 +543,20 @@ def lead_flow(weeks: int = 12, user: AuthUser = Depends(current_user)) -> Any:
         return payload
     # Temsilci ekip serisini ve yalnız kendi satırını görür.
     return {**payload, "temsilciler": [r for r in payload["temsilciler"] if r["rep_id"] == user.rep_id]}
+
+
+@app.get("/api/lead-channels")
+def lead_channels(dim: str = "kanal", weeks: int = 12, user: AuthUser = Depends(current_user)) -> Any:
+    """Gelen lead'in kanal / kampanya / form kırılımı: haftalık adet, % değişim, kalite (pazarlama)."""
+    if dim not in CHANNEL_DIMS or weeks not in WEEK_CHOICES:
+        raise HTTPException(status_code=400, detail="dim kanal, kampanya veya form; weeks 8, 12 veya 26 olmalı")
+    require_database()
+    today = _now().date()
+    return cache.cached(
+        ("lead-channels", dim, weeks, today.isoformat(), data_as_of()),
+        REPORT_TTL,
+        lambda: jsonable_encoder(load_lead_channels(dim, weeks, today)),
+    )
 
 
 def commission_asof(day: str | None, today: date) -> date | None:

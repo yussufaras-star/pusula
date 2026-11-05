@@ -3,6 +3,7 @@ import { useState } from "react";
 import { usePolling } from "../api";
 import { int, num } from "../format";
 import { Change } from "./CiroTrend";
+import { LeadChannels } from "./LeadChannels";
 import { StatTile } from "./StatTile";
 import type { LeadFlowPayload, LeadFlowWeek } from "../types";
 
@@ -240,6 +241,9 @@ export function LeadFlow({ ranked }: { ranked: boolean }) {
         </div>
       </div>
 
+      <LeadChannels weeks={weeks} />
+
+      {reps.length ? <div className="lf-chart-title lf-section">Temsilci başı günlük lead</div> : null}
       {reps.length ? (
         <div className="table-wrap">
           <table className="board lf-reps">
