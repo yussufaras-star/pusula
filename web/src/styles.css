@@ -2365,6 +2365,38 @@ table.meet-list {
   font-weight: 600;
 }
 
+/* --- lead akışı ------------------------------------------------------------ */
+
+.lf-summary {
+  margin: 4px 0 12px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.lf-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px;
+  margin: 12px 0;
+}
+
+@media (max-width: 900px) {
+  .lf-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.lf-chart-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  margin-bottom: 4px;
+}
+
+.lf-reps tfoot td {
+  font-weight: 600;
+}
+
 /* --- finans -------------------------------------------------------------- */
 
 /* Şirket renkleri sabit (kategorik 1-3, iki temada doğrulandı). Giriş/çıkış

@@ -853,3 +853,65 @@ export interface ConvItemDetail
   ai_model: string | null;
   lead_id: string | null;
 }
+
+// pusula/lead_flow.py build çıktısı.
+export interface LeadFlowWeek {
+  bas: string;
+  bit: string;
+  gelen: number;
+  /** Tam haftada gelen / 7; süren haftada null. */
+  gunluk_gelen: number | null;
+  atanan: number;
+  temsilci: number;
+  /** Temsilci başına günlük atanan lead (süren haftada düne kadar). */
+  kisi_gunluk: number | null;
+  suruyor: boolean;
+  degisim_gelen: number | null;
+  degisim_kisi_gunluk: number | null;
+}
+
+export interface LeadFlowToDate {
+  gun: number;
+  bit: string;
+  onceki_bas: string;
+  onceki_bit: string;
+  gelen: number;
+  onceki_gelen: number;
+  degisim_gelen: number | null;
+  kisi_gunluk: number | null;
+  onceki_kisi_gunluk: number | null;
+  degisim_kisi_gunluk: number | null;
+}
+
+export interface LeadFlowFour {
+  bas: string;
+  onceki_bas: string;
+  gelen: number | null;
+  onceki_gelen: number | null;
+  degisim_gelen: number | null;
+  kisi_gunluk: number | null;
+  onceki_kisi_gunluk: number | null;
+  degisim_kisi_gunluk: number | null;
+}
+
+export interface LeadFlowRep {
+  rep_id: string;
+  name: string;
+  /** Hafta başına günlük ortalama; lead almadığı hafta null. */
+  seri: (number | null)[];
+  son: number | null;
+  onceki: number | null;
+  degisim: number | null;
+  ort4: number | null;
+  onceki_ort4: number | null;
+  degisim_ort4: number | null;
+}
+
+export interface LeadFlowPayload {
+  available: boolean;
+  haftalar?: LeadFlowWeek[];
+  son_hafta?: LeadFlowWeek | null;
+  ayni_gune?: LeadFlowToDate | null;
+  dort_hafta?: LeadFlowFour | null;
+  temsilciler?: LeadFlowRep[];
+}
