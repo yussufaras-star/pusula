@@ -116,6 +116,8 @@ export interface Me {
   finance?: boolean;
   // Yöneticinin verdiği ilk şifreyle girdi; kendi şifresini belirlemeli.
   must_change?: boolean;
+  // Şifresini panelden değiştirebilir (ana yönetici hariç herkes).
+  own_password?: boolean;
 }
 
 // pusula/compare.py build_side çıktısı.

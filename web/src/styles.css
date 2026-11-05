@@ -4188,3 +4188,23 @@ textarea.f-input {
   font-size: 18px;
   letter-spacing: 1px;
 }
+
+.pw-form select {
+  border: 1px solid var(--border);
+  background: var(--page);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 9px 10px;
+  font: inherit;
+}
+
+.user-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+tr.muted td {
+  color: var(--ink-3, var(--ink-2));
+}
