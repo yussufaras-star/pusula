@@ -178,6 +178,13 @@ ALTER TABLE conv_runs ENABLE ROW LEVEL SECURITY;
 """
 
 
+def weekly_only(alias: str = "c") -> str:
+    """Haftalık akışa ait kayıtlar: tutarlılık havuzu için sonradan eklenen görüşmeler
+    (meta havuz_disi) haftalık panoya, kotaya, puan tablosuna ve trende girmez."""
+    col = f"{alias}.meta" if alias else "meta"
+    return f"NOT coalesce(({col}->>'havuz_disi')::boolean, false)"
+
+
 def ensure_schema(conn: Any) -> None:
     conn.execute(SCHEMA_SQL)
     conn.commit()
@@ -508,9 +515,10 @@ def select_quota(conn: Any, week_start: date, today: date) -> dict[str, Any]:
     hafta kapanınca kota dışı olur. Talep edilen ve temsilcisiz kayıtlar kotaya girmez."""
     start, end = week_bounds(week_start)
     cur = conn.execute(
-        """
+        f"""
         SELECT c.id, c.rep_id, c.kind, c.occurred_at, c.duration_sec, c.status, c.source_ref,
-               c.meta->>'kota' AS kota, coalesce((c.meta->>'talep')::boolean, false) AS talep,
+               c.meta->>'kota' AS kota,
+               coalesce((c.meta->>'talep')::boolean, false) OR NOT {weekly_only()} AS talep,
                coalesce(c.meta->>'outcome_key', e.meta->>'outcome_key') AS outcome,
                coalesce(c.meta->>'call_status', e.meta->>'call_status') AS call_status
         FROM conv_items c LEFT JOIN events e ON e.id = c.event_id
@@ -556,10 +564,10 @@ def _pending(conn: Any, week_start: date, status: str, limit: int | None) -> lis
         LEFT JOIN reps r ON r.org_id = c.org_id AND r.rep_id = c.rep_id
         LEFT JOIN events e ON e.id = c.event_id
         WHERE c.org_id = %s
-          AND ((c.occurred_at >= %s AND c.occurred_at < %s) OR c.meta ? 'talep')
+          AND ((c.occurred_at >= %s AND c.occurred_at < %s) OR c.meta ? 'talep' OR NOT {weekly_only()})
           AND (c.status = %s OR (c.status = 'hata' AND c.attempts < %s
                AND (%s = 'bekliyor') = (c.transcript IS NULL)))
-        ORDER BY (c.meta ? 'talep') DESC, c.occurred_at
+        ORDER BY (c.meta ? 'talep') DESC, NOT {weekly_only()}, c.occurred_at
         {"LIMIT %s" if limit else ""}
         """,
         (get_org_id(), start, end, status, MAX_ATTEMPTS, status, *([limit] if limit else [])),
@@ -1364,11 +1372,11 @@ def _notes(items: list[dict[str, Any]], cap: int = 60) -> str:
 def _load_week_items(conn: Any, week_start: date) -> list[dict[str, Any]]:
     start, end = week_bounds(week_start)
     cur = conn.execute(
-        """
+        f"""
         SELECT c.id, c.kind, c.rep_id, r.full_name AS rep_name, c.duration_sec, c.analysis, c.status
         FROM conv_items c LEFT JOIN reps r ON r.org_id = c.org_id AND r.rep_id = c.rep_id
         WHERE c.org_id = %s AND c.occurred_at >= %s AND c.occurred_at < %s
-          AND c.status = 'analiz_edildi'
+          AND c.status = 'analiz_edildi' AND {weekly_only()}
         ORDER BY c.occurred_at
         """,
         (get_org_id(), start, end),
@@ -1596,10 +1604,10 @@ def load_weeks(limit: int = 12) -> list[dict[str, Any]]:
     with connect() as conn:
         _ready(conn)
         rows = conn.execute(
-            """
+            f"""
             SELECT (date_trunc('week', occurred_at AT TIME ZONE 'Europe/Istanbul'))::date AS w,
                    count(*), count(*) FILTER (WHERE status = 'analiz_edildi')
-            FROM conv_items WHERE org_id = %s
+            FROM conv_items WHERE org_id = %s AND {weekly_only("")}
             GROUP BY 1 ORDER BY 1 DESC LIMIT %s
             """,
             (get_org_id(), limit),
@@ -1678,7 +1686,7 @@ def load_trend(rep_id: str | None) -> dict[str, Any]:
             f"""
             SELECT occurred_at, analysis FROM conv_items
             WHERE org_id = %s AND status = 'analiz_edildi' {"AND rep_id = %s" if rep_id else ""}
-              AND NOT coalesce((meta->>'talep')::boolean, false)
+              AND NOT coalesce((meta->>'talep')::boolean, false) AND {weekly_only("")}
             ORDER BY occurred_at
             """,
             (get_org_id(), *([rep_id] if rep_id else [])),
@@ -1702,7 +1710,7 @@ def load_week(week_start: date, rep_id: str | None) -> dict[str, Any]:
             SELECT c.id, c.kind, c.rep_id, r.full_name AS rep_name, c.customer, c.occurred_at,
                    c.duration_sec, c.crm_outcome, c.status, c.error, c.analysis
             FROM conv_items c LEFT JOIN reps r ON r.org_id = c.org_id AND r.rep_id = c.rep_id
-            WHERE c.org_id = %s AND c.occurred_at >= %s AND c.occurred_at < %s
+            WHERE c.org_id = %s AND c.occurred_at >= %s AND c.occurred_at < %s AND {weekly_only()}
               {"AND c.rep_id = %s" if rep_id else ""}
             ORDER BY c.occurred_at DESC
             """,

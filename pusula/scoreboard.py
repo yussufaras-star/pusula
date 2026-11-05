@@ -21,7 +21,9 @@ from typing import Any
 
 from pusula import sonar41
 from pusula.config import get_org_id
-from pusula.conversations import COACHING_START, SCORE_LABELS, _ready, dim_scores, week_bounds, week_start_of
+from pusula.conversations import (
+    COACHING_START, SCORE_LABELS, _ready, dim_scores, week_bounds, week_start_of, weekly_only,
+)
 from pusula.panel_data import connect
 
 DIMS = sonar41.DIM_KEYS
@@ -151,11 +153,11 @@ def load_scoreboard(week: date) -> dict[str, Any]:
     with connect() as conn:
         _ready(conn)
         rows = conn.execute(
-            """
+            f"""
             SELECT c.rep_id, c.occurred_at, c.analysis FROM conv_items c
             JOIN reps r ON r.org_id = c.org_id AND r.rep_id = c.rep_id
             WHERE c.org_id = %s AND c.status = 'analiz_edildi' AND r.category = 'sales'
-              AND NOT coalesce((c.meta->>'talep')::boolean, false)
+              AND NOT coalesce((c.meta->>'talep')::boolean, false) AND {weekly_only()}
               AND c.occurred_at >= %s AND c.occurred_at < %s
             """,
             (get_org_id(), start, end),
