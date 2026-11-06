@@ -264,7 +264,13 @@ def logout(response: Response) -> dict[str, str]:
 
 
 @app.get("/api/me")
-def me(user: AuthUser = Depends(current_user)) -> dict[str, Any]:
+def me(request: Request, user: AuthUser = Depends(current_user)) -> dict[str, Any]:
+    # Panel açılışı: çerezle (şifresiz) açılan oturum da giriş sayılır.
+    if not user.viewer and _db_configured():
+        try:
+            panel_usage.record_visit(user.email, request.headers.get("user-agent"))
+        except Exception:  # noqa: BLE001 — kayıt yüzünden panel açılışı düşmesin
+            logger.exception("açılış kaydı yazılamadı")
     return {
         "email": user.email,
         "role": user.role,

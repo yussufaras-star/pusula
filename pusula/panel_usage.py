@@ -1,6 +1,8 @@
 """Panel kullanımı: kim ne zaman girdi, panelde ne kadar aktif zaman geçirdi.
 
-Giriş: başarılı her girişte panel_logins'e satır. Süre: açık ve kullanılan
+Giriş: başarılı her şifreli girişte ve panel çerezle açıldığında (son
+VISIT_GAP içinde kaydı yoksa) panel_logins'e satır; çerez 12 saat geçerli
+olduğundan çoğu açılış şifresizdir. Süre: açık ve kullanılan
 sekme dakikada bir sinyal gönderir (panel_sessions). Sekme arkadaysa ya da kişi
 5 dk'dır fareye / klavyeye dokunmadıysa sinyal gitmez; açık unutulan sekme süre
 yazmaz. Sinyaller arası 5 dk'dan uzun boşluk yeni oturum başlatır. Yöneticinin
@@ -20,6 +22,9 @@ from pusula.panel_data import connect
 # Sinyal aralığı 60 sn; gecikmeli sinyal bundan fazla süre yazmaz.
 MAX_STEP_SEC = 90
 SESSION_GAP = timedelta(minutes=5)
+VISIT_GAP = timedelta(minutes=30)
+# Yeni oturumun ilk sinyali: sekme son dakikada açık ve kullanılıyordu.
+FIRST_STEP_SEC = 60
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS panel_logins (
@@ -63,6 +68,23 @@ def record_login(email: str, agent: str | None) -> None:
         conn.commit()
 
 
+def record_visit(email: str, agent: str | None) -> None:
+    """Panel çerezle açıldı: son VISIT_GAP içinde giriş kaydı yoksa giriş sayılır."""
+    email = email.strip().lower()
+    with connect() as conn:
+        _ensure(conn)
+        conn.execute(
+            """
+            INSERT INTO panel_logins (org_id, email, agent)
+            SELECT %s, %s, %s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM panel_logins WHERE org_id = %s AND email = %s AND at > now() - %s)
+            """,
+            (get_org_id(), email, ("oturum: " + (agent or ""))[:300], get_org_id(), email, VISIT_GAP),
+        )
+        conn.commit()
+
+
 def heartbeat(email: str, page: str) -> None:
     """Açık oturumu uzatır (aktif süre + sayfa sayacı) ya da yenisini açar."""
     page = (page or "diger")[:40]
@@ -84,8 +106,8 @@ def heartbeat(email: str, page: str) -> None:
         ).fetchone()
         if row is None:
             conn.execute(
-                "INSERT INTO panel_sessions (org_id, email, pages) VALUES (%s, %s, %s::jsonb)",
-                (get_org_id(), email, json.dumps({page: 1})),
+                "INSERT INTO panel_sessions (org_id, email, active_sec, pages) VALUES (%s, %s, %s, %s::jsonb)",
+                (get_org_id(), email, FIRST_STEP_SEC, json.dumps({page: 1})),
             )
         conn.commit()
 

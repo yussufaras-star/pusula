@@ -53,3 +53,4 @@ def _no_usage_writes(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(panel_usage, "record_login", lambda *a, **k: None)
     monkeypatch.setattr(panel_usage, "heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(panel_usage, "record_visit", lambda *a, **k: None)
