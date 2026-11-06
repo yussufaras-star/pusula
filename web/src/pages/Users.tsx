@@ -353,6 +353,10 @@ interface UsagePerson {
   email: string;
   giris: number;
   son_giris: string | null;
+  // Kendi şifresini değiştirdiği an (girdiğinin kanıtı; ölçüm öncesi de olabilir).
+  sifre_degisti: string | null;
+  // Bu kişinin ölçüm başlangıcı: kendi şifresini belirlediği an (daha erkense) ya da genel başlangıç.
+  olcum_basi: string;
   son_gorulme: string | null;
   aktif_dk: number;
   aktif_gun: number;
@@ -394,7 +398,7 @@ const when = (iso: string | null) =>
 function UsageCard({ names }: { names: Map<string, string> }) {
   const [days, setDays] = useState(7);
   const [open, setOpen] = useState<string | null>(null);
-  const { data, error } = usePolling<Usage>(
+  const { data, error, refresh, loading } = usePolling<Usage>(
     `/api/usage?days=${days}`,
     5 * 60_000,
   );
@@ -409,6 +413,7 @@ function UsageCard({ names }: { names: Map<string, string> }) {
     <div className="card" style={{ marginTop: 16 }}>
       <div className="card-head">
         <h2>Panel kullanımı</h2>
+        <div className="controls">
         <select
           value={days}
           onChange={(e) => setDays(Number(e.target.value))}
@@ -419,13 +424,17 @@ function UsageCard({ names }: { names: Map<string, string> }) {
           <option value={30}>Son 30 gün</option>
           <option value={90}>Son 90 gün</option>
         </select>
+        <button className="btn" onClick={refresh} disabled={loading}>
+          {loading ? "Yenileniyor…" : "Yenile"}
+        </button>
+        </div>
       </div>
       <div className="sub" style={{ marginBottom: 8 }}>
         Aktif süre: sekme önde ve kişi son 5 dk içinde fare / klavye kullandıysa
         sayılır; açık unutulan sekme sayılmaz.
         {data?.olcum_basi
-          ? ` Ölçüm ${dayFmt.format(new Date(data.olcum_basi))} tarihinde başladı.`
-          : " Ölçüm bu sürümle başladı; önceki giriş bilgisi yok."}{" "}
+          ? ` Ölçüm ${when(data.olcum_basi)}'da başladı; öncesindeki girişler yalnız şifre değişikliğinden görünür. Sabahtan açık kalan sekmeler sayfa yenilenene kadar süre göndermez.`
+          : ""}{" "}
         Sizin "Ekranını gör" görünümünüz sayılmaz.
       </div>
       {error ? (
@@ -455,7 +464,10 @@ function UsageCard({ names }: { names: Map<string, string> }) {
                   {open === r.email ? "▾ " : "▸ "}
                   {names.get(r.email) ?? r.email}
                 </td>
-                <td className="muted">{when(r.son_giris)}</td>
+                <td className="muted">
+                  {when(r.son_giris)}
+                  {r.sifre_degisti && r.son_giris === r.sifre_degisti ? " · şifresini belirledi" : ""}
+                </td>
                 <td className="muted">{when(r.son_gorulme)}</td>
                 <td className="num">{r.giris}</td>
                 <td className="num">{r.aktif_gun}</td>
@@ -473,6 +485,10 @@ function UsageCard({ names }: { names: Map<string, string> }) {
               {open === r.email ? (
                 <tr>
                   <td colSpan={8}>
+                    <div className="muted">
+                      Ölçüm {when(r.olcum_basi)}'dan beri
+                      {r.sifre_degisti && r.olcum_basi === r.sifre_degisti ? " (şifresini belirlediği an)" : ""}
+                    </div>
                     {r.oturumlar.length ? (
                       <ul className="usage-sessions">
                         {r.oturumlar.map((o) => (
@@ -502,7 +518,11 @@ function UsageCard({ names }: { names: Map<string, string> }) {
           {silent.map((e) => (
             <tr key={e} className="muted">
               <td>{names.get(e)}</td>
-              <td colSpan={7}>Bu dönemde giriş yok</td>
+              <td colSpan={7}>
+                {data?.olcum_basi && new Date(data.olcum_basi).getTime() > Date.now() - days * 86_400_000
+                  ? `Ölçüm başladığından (${when(data.olcum_basi)}) beri kayıt yok`
+                  : "Bu dönemde giriş yok"}
+              </td>
             </tr>
           ))}
         </tbody>
