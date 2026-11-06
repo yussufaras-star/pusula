@@ -4208,3 +4208,23 @@ textarea.f-input {
 tr.muted td {
   color: var(--ink-3, var(--ink-2));
 }
+
+.view-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 24px;
+  background: var(--warning-wash);
+  color: var(--ink);
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.usage-sessions {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--ink-2);
+}

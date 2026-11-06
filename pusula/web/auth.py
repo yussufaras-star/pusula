@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 COOKIE_NAME = "pusula_session"
 SESSION_SECONDS = 12 * 60 * 60
+# "Temsilci gibi gör" oturumu kısa tutulur.
+VIEW_SECONDS = 2 * 60 * 60
+# Görüntüleme sırasında yalnız bu değişiklik uçları açık (çıkış, geri dönüş, sinyal yok sayılır).
+VIEW_WRITE_OK = ("/api/logout", "/api/view-as/stop", "/api/activity")
 
 
 def _session_secret() -> bytes:
@@ -51,7 +55,8 @@ def encode_session(user: AuthUser) -> str:
         "role": user.role,
         "rep_id": user.rep_id,
         "name": user.full_name,
-        "exp": int(time.time()) + SESSION_SECONDS,
+        "viewer": user.viewer,
+        "exp": int(time.time()) + (VIEW_SECONDS if user.viewer else SESSION_SECONDS),
     }
     data = _b64(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     signature = hmac.new(_session_secret(), data.encode("ascii"), hashlib.sha256)
@@ -84,11 +89,13 @@ def decode_session(token: str | None) -> AuthUser | None:
     if role == "rep" and not isinstance(rep_id, str):
         return None
     name = payload.get("name")
+    viewer = payload.get("viewer")
     return AuthUser(
         email=email,
         role=role,
         rep_id=rep_id if isinstance(rep_id, str) else None,
         full_name=name if isinstance(name, str) else None,
+        viewer=viewer if isinstance(viewer, str) and role == "rep" else None,
     )
 
 
@@ -127,7 +134,20 @@ def current_user(request: Request) -> AuthUser:
         state = _access_state(user.email)
         if state is not None and (not state.active or state.role != user.role):
             raise HTTPException(status_code=401, detail="Oturum gerekli")
+    if user.viewer is not None:
+        if not viewer_is_admin(user.viewer):
+            raise HTTPException(status_code=401, detail="Oturum gerekli")
+        if request.method not in ("GET", "HEAD") and request.url.path not in VIEW_WRITE_OK:
+            raise HTTPException(status_code=403, detail="Temsilci gibi görüntülerken değişiklik yapılamaz")
     return user
+
+
+def viewer_is_admin(email: str) -> bool:
+    """Görüntüleyen hâlâ yönetici mi (ana yönetici ya da panelde etkin yönetici)."""
+    if email == ADMIN_EMAIL:
+        return True
+    state = _access_state(email)
+    return state is not None and state.active and state.role == "admin"
 
 
 def admin_user(user: AuthUser = Depends(current_user)) -> AuthUser:

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -51,14 +51,16 @@ from pusula.panel_auth import (
     password_matches,
     resolve_user,
 )
-from pusula import panel_passwords
+from pusula import panel_passwords, panel_usage
 from pusula.panel_data import DateWindow, load_rep_by_email, load_reps
 from pusula.panel_profile import PROFILE_WARNING, performance_profiles
 from pusula.web import cache
 from pusula.web.auth import (
     forget_access,
+    viewer_is_admin,
     COOKIE_NAME,
     SESSION_SECONDS,
+    VIEW_SECONDS,
     admin_user,
     current_user,
     encode_session,
@@ -104,6 +106,10 @@ class PasswordBody(BaseModel):
 
 class UserBody(BaseModel):
     email: str
+
+
+class ActivityBody(BaseModel):
+    page: str
 
 
 class AddUserBody(BaseModel):
@@ -200,7 +206,7 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/api/login")
-def login(body: LoginBody, response: Response) -> dict[str, str]:
+def login(body: LoginBody, response: Response, request: Request) -> dict[str, str]:
     email = normalize_login_email(body.email)
     # Panelde kaydı olan kişi: kapatıldıysa giremez; şifresi varsa yalnız o geçer.
     stored = None
@@ -218,6 +224,11 @@ def login(body: LoginBody, response: Response) -> dict[str, str]:
     user = _login_user(email, stored)
     if user is None:
         raise HTTPException(status_code=401, detail="Kullanıcı adı veya şifre hatalı")
+    if _db_configured():
+        try:
+            panel_usage.record_login(email, request.headers.get("user-agent"))
+        except Exception:  # noqa: BLE001 — kayıt yüzünden giriş düşmesin
+            logger.exception("giriş kaydı yazılamadı")
     response.set_cookie(
         COOKIE_NAME,
         encode_session(user),
@@ -261,9 +272,10 @@ def me(user: AuthUser = Depends(current_user)) -> dict[str, Any]:
         "full_name": user.full_name,
         "org_id": get_org_id(),
         "finance": finance_allowed(user),
-        "must_change": _must_change(user),
+        "must_change": False if user.viewer else _must_change(user),
         # Ana yöneticinin şifresi Vercel'de; diğer herkes panelden değiştirir.
-        "own_password": user.email != ADMIN_EMAIL,
+        "own_password": user.email != ADMIN_EMAIL and not user.viewer,
+        "viewer": user.viewer,
     }
 
 
@@ -299,6 +311,60 @@ def change_password(body: PasswordBody, user: AuthUser = Depends(current_user)) 
         raise HTTPException(status_code=400, detail="Yeni şifre eskisiyle aynı olamaz")
     panel_passwords.set_password(user.email, body.new, must_change=False, by=user.email)
     return {"ok": "true"}
+
+
+def _set_session(response: Response, user: AuthUser) -> None:
+    response.set_cookie(
+        COOKIE_NAME,
+        encode_session(user),
+        max_age=VIEW_SECONDS if user.viewer else SESSION_SECONDS,
+        httponly=True,
+        secure=bool(os.environ.get("VERCEL")),
+        samesite="strict",
+        path="/",
+    )
+
+
+@app.post("/api/view-as")
+def view_as(body: UserBody, response: Response, user: AuthUser = Depends(admin_user)) -> dict[str, str]:
+    """Yönetici temsilcinin panelini onun gördüğü gibi açar (salt görüntüleme, 2 saat)."""
+    require_database()
+    rep = load_rep_by_email(normalize_login_email(body.email))
+    if rep is None:
+        raise HTTPException(status_code=404, detail="Aktif satış temsilcisi bulunamadı")
+    _set_session(response, AuthUser(normalize_login_email(body.email), "rep", rep.rep_id, rep.full_name, viewer=user.email))
+    return {"ok": "true"}
+
+
+@app.post("/api/view-as/stop")
+def view_as_stop(response: Response, user: AuthUser = Depends(current_user)) -> dict[str, str]:
+    """Yönetici ekranına döner."""
+    if not user.viewer or not viewer_is_admin(user.viewer):
+        raise HTTPException(status_code=400, detail="Temsilci gibi görüntüleme açık değil")
+    name = None if user.viewer == ADMIN_EMAIL else (panel_passwords.person(user.viewer) or {}).get("full_name")
+    _set_session(response, AuthUser(user.viewer, "admin", None, name))
+    return {"ok": "true"}
+
+
+@app.post("/api/activity")
+def activity(body: ActivityBody, user: AuthUser = Depends(current_user)) -> dict[str, str]:
+    """Açık ve kullanılan sekmeden dakikada bir sinyal: panelde geçen aktif süre."""
+    if user.viewer or not _db_configured():
+        return {"ok": "skip"}
+    try:
+        panel_usage.heartbeat(user.email, body.page)
+    except Exception:  # noqa: BLE001 — sinyal yazılamazsa panel etkilenmesin
+        logger.exception("kullanım sinyali yazılamadı")
+    return {"ok": "true"}
+
+
+@app.get("/api/usage")
+def usage(days: int = 7, user: AuthUser = Depends(admin_user)) -> Any:
+    """Kim ne zaman girdi, panelde ne kadar aktif zaman geçirdi."""
+    require_database()
+    if days not in (1, 7, 30, 90):
+        raise HTTPException(status_code=400, detail="days 1, 7, 30 ya da 90 olmalı")
+    return jsonable_encoder(panel_usage.summary(days, datetime.now(TZ)))
 
 
 @app.get("/api/users")

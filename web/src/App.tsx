@@ -91,6 +91,26 @@ export function App() {
   }, []);
 
   useEffect(loadMe, [loadMe]);
+  // Kullanım ölçümü: sekme önde ve kişi son 5 dk içinde fare / klavye kullandıysa dakikada bir sinyal.
+  const signedIn = me ? me.email : null;
+  const viewing = Boolean(me?.viewer);
+  useEffect(() => {
+    if (!signedIn || viewing) return;
+    let last = Date.now();
+    const mark = () => {
+      last = Date.now();
+    };
+    const events = ["mousemove", "keydown", "scroll", "click", "touchstart"] as const;
+    events.forEach((e) => window.addEventListener(e, mark, { passive: true }));
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== "visible" || Date.now() - last > 5 * 60_000) return;
+      api("/api/activity", { method: "POST", body: JSON.stringify({ page: readRoute() }) }).catch(() => undefined);
+    }, 60_000);
+    return () => {
+      window.clearInterval(id);
+      events.forEach((e) => window.removeEventListener(e, mark));
+    };
+  }, [signedIn, viewing]);
   // Yöneticinin verdiği ilk şifreyle giren temsilciden kendi şifresini belirlemesi istenir.
   useEffect(() => {
     if (me?.must_change) setPwOpen(true);
@@ -116,6 +136,26 @@ export function App() {
 
   return (
     <div className="shell">
+      {me.viewer ? (
+        <div className="view-banner" role="status">
+          <span>
+            <strong>{me.full_name ?? me.email}</strong> olarak görüntülüyorsunuz · temsilcinin gördüğü panel, değişiklik yapılamaz
+          </span>
+          <button
+            className="btn"
+            onClick={() =>
+              api("/api/view-as/stop", { method: "POST" })
+                .then(() => {
+                  window.location.hash = "#/kullanicilar";
+                  window.location.reload();
+                })
+                .catch(() => undefined)
+            }
+          >
+            Yönetici ekranına dön
+          </button>
+        </div>
+      ) : null}
       <header className="topbar">
         <div className="brand">
           <Logo /> Pusula
