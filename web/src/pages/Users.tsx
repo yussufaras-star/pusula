@@ -353,6 +353,8 @@ interface UsagePerson {
   email: string;
   giris: number;
   son_giris: string | null;
+  // Kendi şifresini değiştirdiği an (girdiğinin kanıtı; ölçüm öncesi de olabilir).
+  sifre_degisti: string | null;
   son_gorulme: string | null;
   aktif_dk: number;
   aktif_gun: number;
@@ -424,8 +426,8 @@ function UsageCard({ names }: { names: Map<string, string> }) {
         Aktif süre: sekme önde ve kişi son 5 dk içinde fare / klavye kullandıysa
         sayılır; açık unutulan sekme sayılmaz.
         {data?.olcum_basi
-          ? ` Ölçüm ${dayFmt.format(new Date(data.olcum_basi))} tarihinde başladı.`
-          : " Ölçüm bu sürümle başladı; önceki giriş bilgisi yok."}{" "}
+          ? ` Ölçüm ${when(data.olcum_basi)}'da başladı; öncesindeki girişler yalnız şifre değişikliğinden görünür. Sabahtan açık kalan sekmeler sayfa yenilenene kadar süre göndermez.`
+          : ""}{" "}
         Sizin "Ekranını gör" görünümünüz sayılmaz.
       </div>
       {error ? (
@@ -455,7 +457,10 @@ function UsageCard({ names }: { names: Map<string, string> }) {
                   {open === r.email ? "▾ " : "▸ "}
                   {names.get(r.email) ?? r.email}
                 </td>
-                <td className="muted">{when(r.son_giris)}</td>
+                <td className="muted">
+                  {when(r.son_giris)}
+                  {r.sifre_degisti && r.son_giris === r.sifre_degisti ? " · şifresini belirledi" : ""}
+                </td>
                 <td className="muted">{when(r.son_gorulme)}</td>
                 <td className="num">{r.giris}</td>
                 <td className="num">{r.aktif_gun}</td>
@@ -502,7 +507,11 @@ function UsageCard({ names }: { names: Map<string, string> }) {
           {silent.map((e) => (
             <tr key={e} className="muted">
               <td>{names.get(e)}</td>
-              <td colSpan={7}>Bu dönemde giriş yok</td>
+              <td colSpan={7}>
+                {data?.olcum_basi && new Date(data.olcum_basi).getTime() > Date.now() - days * 86_400_000
+                  ? `Ölçüm başladığından (${when(data.olcum_basi)}) beri kayıt yok`
+                  : "Bu dönemde giriş yok"}
+              </td>
             </tr>
           ))}
         </tbody>

@@ -7,13 +7,16 @@ sekme dakikada bir sinyal gönderir (panel_sessions). Sekme arkadaysa ya da kiş
 5 dk'dır fareye / klavyeye dokunmadıysa sinyal gitmez; açık unutulan sekme süre
 yazmaz. Sinyaller arası 5 dk'dan uzun boşluk yeni oturum başlatır. Yöneticinin
 "temsilci gibi gör" görünümü kaydedilmez.
+
+Ölçüm 6 Kasım 2026 ~12:10'da (#186 yayını) başladı; öncesi yok. Kişinin kendi
+şifresini değiştirmesi de girdiğinin kanıtıdır (ölçüm öncesi dahil), son girişe sayılır.
 """
 
 from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from pusula.config import get_org_id
@@ -25,6 +28,8 @@ SESSION_GAP = timedelta(minutes=5)
 VISIT_GAP = timedelta(minutes=30)
 # Yeni oturumun ilk sinyali: sekme son dakikada açık ve kullanılıyordu.
 FIRST_STEP_SEC = 60
+# Giriş ve süre kaydı bu andan itibaren var (#186 yayını).
+MEASURE_START = datetime(2026, 11, 6, 9, 10, tzinfo=timezone.utc)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS panel_logins (
@@ -132,9 +137,15 @@ def summary(days: int, now: datetime) -> dict[str, Any]:
             """,
             (get_org_id(), since),
         ).fetchall()
-        first = conn.execute(
-            "SELECT least((SELECT min(at) FROM panel_logins), (SELECT min(started_at) FROM panel_sessions))"
-        ).fetchone()[0]
+        # Kendi şifresini değiştirmek = panele girmiş (tablo yoksa boş).
+        has_pw = conn.execute("SELECT to_regclass('panel_passwords')").fetchone()[0] is not None
+        self_changes = conn.execute(
+            """
+            SELECT email, max(updated_at) FROM panel_passwords
+            WHERE org_id = %s AND updated_by = email AND updated_at >= %s GROUP BY email
+            """,
+            (get_org_id(), since),
+        ).fetchall() if has_pw else []
     out: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"giris": 0, "son_giris": None, "son_gorulme": None, "aktif_sn": 0.0,
                  "gunler": set(), "sayfalar": defaultdict(int), "oturumlar": []}
@@ -142,6 +153,11 @@ def summary(days: int, now: datetime) -> dict[str, Any]:
     for email, count, last in logins:
         out[email]["giris"] = int(count or 0)
         out[email]["son_giris"] = last
+    for email, changed in self_changes:
+        u = out[email]
+        u["sifre_degisti"] = changed
+        if u["son_giris"] is None or changed > u["son_giris"]:
+            u["son_giris"] = changed
     for email, started, seen, active, pages in sessions:
         u = out[email]
         u["aktif_sn"] += float(active or 0)
@@ -157,7 +173,8 @@ def summary(days: int, now: datetime) -> dict[str, Any]:
         top = sorted(u["sayfalar"].items(), key=lambda kv: -kv[1])
         rows.append({
             "email": email, "giris": u["giris"], "son_giris": u["son_giris"], "son_gorulme": u["son_gorulme"],
+            "sifre_degisti": u.get("sifre_degisti"),
             "aktif_dk": round(u["aktif_sn"] / 60), "aktif_gun": len(u["gunler"]),
             "sayfalar": [{"sayfa": p, "dk": n} for p, n in top], "oturumlar": u["oturumlar"],
         })
-    return {"gun": days, "olcum_basi": first, "kisiler": rows}
+    return {"gun": days, "olcum_basi": MEASURE_START, "kisiler": rows}
