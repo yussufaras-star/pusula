@@ -154,8 +154,10 @@ def summary(days: int, now: datetime) -> dict[str, Any]:
         out[email]["giris"] = int(count or 0)
         out[email]["son_giris"] = last
     for email, changed in self_changes:
+        # Şifre belirleme bir giriştir ve kişinin ölçümü o andan başlar (yönetici kararı, 6 Kas).
         u = out[email]
         u["sifre_degisti"] = changed
+        u["giris"] += 1
         if u["son_giris"] is None or changed > u["son_giris"]:
             u["son_giris"] = changed
     for email, started, seen, active, pages in sessions:
@@ -174,6 +176,7 @@ def summary(days: int, now: datetime) -> dict[str, Any]:
         rows.append({
             "email": email, "giris": u["giris"], "son_giris": u["son_giris"], "son_gorulme": u["son_gorulme"],
             "sifre_degisti": u.get("sifre_degisti"),
+            "olcum_basi": min(filter(None, [u.get("sifre_degisti"), MEASURE_START])),
             "aktif_dk": round(u["aktif_sn"] / 60), "aktif_gun": len(u["gunler"]),
             "sayfalar": [{"sayfa": p, "dk": n} for p, n in top], "oturumlar": u["oturumlar"],
         })
