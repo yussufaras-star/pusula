@@ -44,3 +44,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
         if "db" in item.keywords or "db" in getattr(item, "fixturenames", ()):
             item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def _no_usage_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Testler gerçek veritabanına giriş / kullanım kaydı yazmasın (.env bağlantısı yüklü olabilir)."""
+    from pusula import panel_usage
+
+    monkeypatch.setattr(panel_usage, "record_login", lambda *a, **k: None)
+    monkeypatch.setattr(panel_usage, "heartbeat", lambda *a, **k: None)

@@ -118,6 +118,8 @@ export interface Me {
   must_change?: boolean;
   // Şifresini panelden değiştirebilir (ana yönetici hariç herkes).
   own_password?: boolean;
+  // Yönetici "Ekranını gör" ile bakıyorsa yöneticinin e-postası (salt görüntüleme).
+  viewer?: string | null;
 }
 
 // pusula/compare.py build_side çıktısı.

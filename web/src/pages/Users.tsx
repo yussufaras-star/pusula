@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 
 import { api, ApiError, usePolling } from "../api";
 import { Modal } from "../finance/ui";
+import { minutes } from "../format";
 
 type Role = "rep" | "admin";
 
@@ -169,6 +170,32 @@ export function UsersPage() {
                   <div className="user-actions">
                     {r.ana ? null : r.active ? (
                       <>
+                        {r.role === "rep" ? (
+                          <button
+                            className="btn"
+                            disabled={busy !== null}
+                            title="Temsilcinin panelini onun gördüğü gibi açar (salt görüntüleme, 2 saat)"
+                            onClick={() =>
+                              api("/api/view-as", {
+                                method: "POST",
+                                body: JSON.stringify({ email: r.email }),
+                              })
+                                .then(() => {
+                                  window.location.hash = "#/canli";
+                                  window.location.reload();
+                                })
+                                .catch((err) =>
+                                  setFailure(
+                                    err instanceof ApiError
+                                      ? err.message
+                                      : "Bağlantı hatası",
+                                  ),
+                                )
+                            }
+                          >
+                            Ekranını gör
+                          </button>
+                        ) : null}
                         <button
                           className="btn"
                           disabled={busy !== null}
@@ -225,6 +252,10 @@ export function UsersPage() {
           </tbody>
         </table>
       </div>
+
+      <UsageCard
+        names={new Map((data?.users ?? []).map((u) => [u.email, u.full_name]))}
+      />
 
       {adding ? (
         <Modal title="Kullanıcı ekle" onClose={() => setAdding(false)}>
@@ -307,6 +338,175 @@ export function UsersPage() {
           </div>
         </Modal>
       ) : null}
+    </div>
+  );
+}
+
+interface UsageSession {
+  basladi: string;
+  bitti: string;
+  aktif_sn: number;
+  sayfalar: Record<string, number>;
+}
+
+interface UsagePerson {
+  email: string;
+  giris: number;
+  son_giris: string | null;
+  son_gorulme: string | null;
+  aktif_dk: number;
+  aktif_gun: number;
+  sayfalar: { sayfa: string; dk: number }[];
+  oturumlar: UsageSession[];
+}
+
+interface Usage {
+  gun: number;
+  olcum_basi: string | null;
+  kisiler: UsagePerson[];
+}
+
+const PAGE_LABEL: Record<string, string> = {
+  canli: "Canlı",
+  karsilastir: "Karşılaştır",
+  pano: "OKRs",
+  raporlar: "Raporlar",
+  gorusmeler: "Görüşme Analizleri",
+  ceo: "Yönetici özeti",
+  kullanicilar: "Kullanıcılar",
+};
+const pageLabel = (p: string) =>
+  PAGE_LABEL[p] ?? (p.startsWith("finans") ? "Finans" : p);
+const dayFmt = new Intl.DateTimeFormat("tr-TR", {
+  day: "numeric",
+  month: "short",
+  timeZone: "Europe/Istanbul",
+});
+const timeFmt = new Intl.DateTimeFormat("tr-TR", {
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: "Europe/Istanbul",
+});
+const when = (iso: string | null) =>
+  iso ? dateFmt.format(new Date(iso)) : "—";
+
+/** Kim ne zaman girdi, panelde ne kadar aktif zaman geçirdi (sekme önde ve kullanılıyorken). */
+function UsageCard({ names }: { names: Map<string, string> }) {
+  const [days, setDays] = useState(7);
+  const [open, setOpen] = useState<string | null>(null);
+  const { data, error } = usePolling<Usage>(
+    `/api/usage?days=${days}`,
+    5 * 60_000,
+  );
+  const rows = [...(data?.kisiler ?? [])].sort(
+    (a, b) => b.aktif_dk - a.aktif_dk || b.giris - a.giris,
+  );
+  const silent = [...names.keys()].filter(
+    (e) => !rows.some((r) => r.email === e),
+  );
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div className="card-head">
+        <h2>Panel kullanımı</h2>
+        <select
+          value={days}
+          onChange={(e) => setDays(Number(e.target.value))}
+          aria-label="Dönem"
+        >
+          <option value={1}>Son 24 saat</option>
+          <option value={7}>Son 7 gün</option>
+          <option value={30}>Son 30 gün</option>
+          <option value={90}>Son 90 gün</option>
+        </select>
+      </div>
+      <div className="sub" style={{ marginBottom: 8 }}>
+        Aktif süre: sekme önde ve kişi son 5 dk içinde fare / klavye kullandıysa
+        sayılır; açık unutulan sekme sayılmaz.
+        {data?.olcum_basi
+          ? ` Ölçüm ${dayFmt.format(new Date(data.olcum_basi))} tarihinde başladı.`
+          : " Ölçüm bu sürümle başladı; önceki giriş bilgisi yok."}{" "}
+        Sizin "Ekranını gör" görünümünüz sayılmaz.
+      </div>
+      {error ? (
+        <div className="banner error">Kullanım alınamadı: {error.message}</div>
+      ) : null}
+      <table className="board">
+        <thead>
+          <tr>
+            <th>Ad</th>
+            <th>Son giriş</th>
+            <th>Son görülme</th>
+            <th className="num">Giriş</th>
+            <th className="num">Aktif gün</th>
+            <th className="num">Aktif süre</th>
+            <th className="num">Günlük ort.</th>
+            <th>En çok baktığı</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <Fragment key={r.email}>
+              <tr
+                onClick={() => setOpen(open === r.email ? null : r.email)}
+                style={{ cursor: "pointer" }}
+              >
+                <td>
+                  {open === r.email ? "▾ " : "▸ "}
+                  {names.get(r.email) ?? r.email}
+                </td>
+                <td className="muted">{when(r.son_giris)}</td>
+                <td className="muted">{when(r.son_gorulme)}</td>
+                <td className="num">{r.giris}</td>
+                <td className="num">{r.aktif_gun}</td>
+                <td className="num">{minutes(r.aktif_dk)}</td>
+                <td className="num">
+                  {r.aktif_gun ? minutes(r.aktif_dk / r.aktif_gun) : "—"}
+                </td>
+                <td className="muted">
+                  {r.sayfalar
+                    .slice(0, 3)
+                    .map((p) => `${pageLabel(p.sayfa)} ${minutes(p.dk)}`)
+                    .join(" · ") || "—"}
+                </td>
+              </tr>
+              {open === r.email ? (
+                <tr>
+                  <td colSpan={8}>
+                    {r.oturumlar.length ? (
+                      <ul className="usage-sessions">
+                        {r.oturumlar.map((o) => (
+                          <li key={o.basladi}>
+                            {dayFmt.format(new Date(o.basladi))}{" "}
+                            {timeFmt.format(new Date(o.basladi))}–
+                            {timeFmt.format(new Date(o.bitti))} · aktif{" "}
+                            {minutes(o.aktif_sn / 60)} ·{" "}
+                            {Object.entries(o.sayfalar)
+                              .sort((a, b) => b[1] - a[1])
+                              .map(([p, n]) => `${pageLabel(p)} ${n} dk`)
+                              .join(", ")}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="muted">
+                        Bu dönemde aktif oturum yok (girmiş ama panelde vakit
+                        geçirmemiş).
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ) : null}
+            </Fragment>
+          ))}
+          {silent.map((e) => (
+            <tr key={e} className="muted">
+              <td>{names.get(e)}</td>
+              <td colSpan={7}>Bu dönemde giriş yok</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -26,6 +26,8 @@ class AuthUser:
     role: AuthRole
     rep_id: str | None
     full_name: str | None
+    # Yönetici "temsilci gibi gör" ile bakıyorsa yöneticinin e-postası (salt görüntüleme).
+    viewer: str | None = None
 
 
 def normalize_login_email(raw: str) -> str:

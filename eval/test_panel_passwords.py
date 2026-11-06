@@ -120,3 +120,38 @@ def test_satis_disina_temsilci_rolu_verilmez_ana_yonetici_degismez(monkeypatch):
     assert client.post("/api/users/remove", json={"email": "yusuf.aras@rexven.com"}).status_code == 400
     ok = client.post("/api/users", json={"email": "mentor@rexven.com", "role": "admin"})
     assert ok.status_code == 200 and len(ok.json()["password"]) == 12
+
+
+def test_yonetici_temsilci_gibi_gorur_degisiklik_yapamaz_geri_doner(monkeypatch):
+    _setup(monkeypatch, None)
+    client = TestClient(web_app.app)
+    client.cookies.set("pusula_session", encode_session(AuthUser("yusuf.aras@rexven.com", "admin", None, None)))
+    r = client.post("/api/view-as", json={"email": EMAIL})
+    assert r.status_code == 200
+    me = client.get("/api/me").json()
+    assert me["role"] == "rep" and me["viewer"] == "yusuf.aras@rexven.com"
+    assert me["own_password"] is False and me["must_change"] is False
+    assert client.post("/api/me/password", json={"current": "a", "new": "bbbbbbbbbb"}).status_code == 403
+    assert client.post("/api/activity", json={"page": "canli"}).json()["ok"] == "skip"
+    assert client.post("/api/view-as/stop").status_code == 200
+    me = client.get("/api/me").json()
+    assert me["role"] == "admin" and me["viewer"] is None
+
+
+def test_temsilci_baskasi_gibi_goremez(monkeypatch):
+    _setup(monkeypatch, None)
+    client = TestClient(web_app.app)
+    client.cookies.set("pusula_session", encode_session(AuthUser(EMAIL, "rep", "r1", "Ayşe Kar")))
+    assert client.post("/api/view-as", json={"email": "serkan.sahin@rexven.com"}).status_code == 403
+    assert client.post("/api/view-as/stop").status_code == 400
+
+
+def test_kullanim_sinyali_yazilir(monkeypatch):
+    _setup(monkeypatch, None)
+    beats = []
+    monkeypatch.setattr(web_app.panel_usage, "heartbeat", lambda email, page: beats.append((email, page)))
+    client = TestClient(web_app.app)
+    client.cookies.set("pusula_session", encode_session(AuthUser(EMAIL, "rep", "r1", "Ayşe Kar")))
+    assert client.post("/api/activity", json={"page": "gorusmeler"}).status_code == 200
+    assert beats == [(EMAIL, "gorusmeler")]
+    assert client.get("/api/usage").status_code == 403
