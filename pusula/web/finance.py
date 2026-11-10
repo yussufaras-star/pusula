@@ -429,6 +429,43 @@ def snapshots(company: str = views.ALL, week: str | None = None) -> Any:
     return jsonable_encoder(views.snapshots_view(snaps, lines, _scope(company, companies), chosen))
 
 
+# Bu kadar saattir senkronlanmamış API hesabı anlık bilançoda uyarı olur
+LIVE_STALE_HOURS = 12
+
+
+@router.get("/snapshots/live")
+def snapshot_live(company: str = views.ALL) -> Any:
+    """Anlık bilanço: bu haftanın bilançosu güncel bakiyelerle kurulur, okunur ve
+    işlem geri alınır (hiçbir şey kaydedilmez). Toplamlar, kurlar ve önceki
+    hafta kıyası kayıtlı bilançoyla aynı yoldan hesaplanır."""
+    now = _now()
+    today = now.date()
+    week = today - timedelta(days=today.weekday())
+    with connect() as conn:
+        companies = store.load_companies(conn)
+        scope = _scope(company, companies)
+        active = set(weekly.auto_companies(conn))
+        try:
+            # Bu hafta elle açılmışsa yerine anlık olanı kur (geri alınır)
+            conn.execute("DELETE FROM fin_snapshots WHERE week_date = %s", (week,))
+            weekly.create_week(conn, week, today, [c for c in scope if c in active])
+            _, snaps, lines = _snapshot_data(conn)
+            accounts = store.load_accounts(conn)
+        finally:
+            conn.rollback()
+    limit = now - timedelta(hours=LIVE_STALE_HOURS)
+    stale = [
+        {"name": a.name, "balance_at": a.balance_at}
+        for a in accounts
+        if a.active
+        and a.company_id in scope
+        and a.provider not in ("manual", "csv")
+        and (a.balance_at is None or a.balance_at < limit)
+    ]
+    view = views.snapshots_view(snaps, lines, scope, week)
+    return jsonable_encoder({**view, "live": True, "as_of": now, "stale_accounts": stale})
+
+
 @router.get("/snapshots/summary")
 def snapshot_summary(week: str, company: str = views.ALL) -> Any:
     chosen = _day(week, "Hafta")
