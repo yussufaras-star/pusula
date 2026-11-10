@@ -217,3 +217,50 @@ def test_rule_endpoints_validate(env) -> None:
     assert client.post("/api/finance/rules", json={"pattern": "abc", "category_id": "yok"}).status_code == 400
     assert client.delete("/api/finance/rules/77").json() == {"id": 77, "reverted": 3, "reapplied": 5}
     assert client.delete("/api/finance/rules/9").status_code == 404
+
+
+class RecordingConn:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def execute(self, query, params=None):
+        self.calls.append(query.split()[0])
+
+    def rollback(self) -> None:
+        self.calls.append("ROLLBACK")
+
+
+def test_live_snapshot_is_built_then_rolled_back(env, monkeypatch) -> None:
+    """Anlık bilanço bu haftayı kurar, okur ve geri alır; senkronu eski API hesabı uyarı olur."""
+    from datetime import datetime, timedelta
+
+    from pusula.db.models import FinCompany
+    from pusula.metrics import TZ
+
+    client, _ = env
+    conn = RecordingConn()
+    now = datetime(2026, 11, 11, 9, 0, tzinfo=TZ)  # çarşamba
+    created = []
+    monkeypatch.setattr(web_finance, "connect", lambda: nullcontext(conn))
+    monkeypatch.setattr(web_finance, "_now", lambda: now)
+    monkeypatch.setattr(
+        web_finance.store, "load_companies",
+        lambda c: [FinCompany(id=i, name=i, country="TR", base_currency="TRY") for i in ("llc", "gmbh", "tr")],
+    )
+    monkeypatch.setattr(web_finance.weekly, "auto_companies", lambda c: ["llc", "tr"])
+    monkeypatch.setattr(web_finance.weekly, "create_week", lambda c, week, today, ids: created.append((week, ids)) or [1])
+    monkeypatch.setattr(web_finance, "_snapshot_data", lambda c: ([], [], []))
+    accounts = [
+        FinAccount(id=1, company_id="tr", name="Eski", institution="K", currency="TRY", provider="rexven",
+                   credential_key="TR", balance_at=now - timedelta(days=5)),
+        FinAccount(id=2, company_id="tr", name="Taze", institution="K", currency="TRY", provider="rexven",
+                   credential_key="TR", balance_at=now - timedelta(hours=1)),
+        FinAccount(id=3, company_id="tr", name="Elle", institution="G", currency="TRY", provider="manual",
+                   balance_at=now - timedelta(days=30)),
+    ]
+    monkeypatch.setattr(web_finance.store, "load_accounts", lambda c: accounts)
+    body = client.get("/api/finance/snapshots/live?company=all").json()
+    assert created == [(date(2026, 11, 9), ["llc", "tr"])]  # hesapsız GmbH'ye bilanço açılmaz
+    assert conn.calls == ["DELETE", "ROLLBACK"]
+    assert body["live"] is True
+    assert [a["name"] for a in body["stale_accounts"]] == ["Eski"]

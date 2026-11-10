@@ -228,6 +228,10 @@ export interface Snapshots {
   totals: { assets_usd: number; debts_usd: number; equity_usd: number };
   missing_fx: string[];
   catalog: { key: SectionKey; title: string; side: "asset" | "liability"; groups: string[] }[];
+  // Yalnız anlık bilançoda (kaydedilmez)
+  live?: boolean;
+  as_of?: string;
+  stale_accounts?: { name: string; balance_at: string | null }[];
 }
 
 export type DecisionStatus = "acik" | "aksiyon" | "devam" | "tamam" | "iptal";

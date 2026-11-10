@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { api, ApiError } from "../api";
 import { StatTile } from "../components/StatTile";
-import { day, istanbulToday, money, monday, short, signed, usd } from "./format";
+import { day, istanbulToday, money, monday, short, signed, usd, when } from "./format";
 import type { CompanyId, Meta, SectionKey, Sheet, SheetBrief, SnapshotCard, SnapshotLine, Snapshots } from "./types";
 import { CompanyTag, Field, Loading, Modal, scopeIds, useFin, type TabProps } from "./ui";
 
@@ -15,6 +15,8 @@ const ORIGIN: Record<SnapshotLine["origin"], string> = {
   tax: "tahmini vergi",
   manual: "elle",
 };
+// Hafta seçicide anlık bilanço (kaydedilmez, o anki bakiyeler)
+const LIVE = "anlik";
 const ASSET_SECTIONS: SectionKey[] = ["current_assets", "noncurrent_assets"];
 const PASSIVE_SECTIONS: SectionKey[] = ["current_liabilities", "longterm_liabilities", "equity"];
 type Catalog = Snapshots["catalog"];
@@ -34,7 +36,8 @@ export function BalanceTab({ scope, meta, tick }: TabProps) {
   const [local, setLocal] = useState(0);
   const [copied, setCopied] = useState<string | null>(null);
   const refresh = () => setLocal((n) => n + 1);
-  const path = `/api/finance/snapshots?company=${scope}${week ? `&week=${week}` : ""}`;
+  const live = week === LIVE;
+  const path = live ? `/api/finance/snapshots/live?company=${scope}` : `/api/finance/snapshots?company=${scope}${week ? `&week=${week}` : ""}`;
   const { data, error } = useFin<Snapshots>(path, tick + local);
   useEffect(() => setWeek(null), [scope]);
 
@@ -61,9 +64,10 @@ export function BalanceTab({ scope, meta, tick }: TabProps) {
       <div className="controls">
         <label className="field">
           Hafta
-          <select className="f-input" value={data.week ?? ""} onChange={(e) => setWeek(e.target.value || null)} disabled={!data.weeks.length}>
-            {data.weeks.length ? null : <option value="">Henüz hafta yok</option>}
-            {data.weeks.map((w) => (
+          <select className="f-input" value={live ? LIVE : (data.week ?? "")} onChange={(e) => setWeek(e.target.value || null)}>
+            {data.weeks.length || live ? null : <option value="">Henüz hafta yok</option>}
+            <option value={LIVE}>Anlık (şu an)</option>
+            {data.weeks.filter((w) => !live || w !== data.week).map((w) => (
               <option key={w} value={w}>
                 {day(w)} – {day(addDays6(w))}
               </option>
@@ -71,7 +75,7 @@ export function BalanceTab({ scope, meta, tick }: TabProps) {
           </select>
         </label>
         <div className="spacer" />
-        {data.snapshots.length ? (
+        {data.snapshots.length && !live ? (
           <button className="btn" onClick={copySummary}>
             {copied ?? "Mail özetini kopyala"}
           </button>
@@ -91,6 +95,15 @@ export function BalanceTab({ scope, meta, tick }: TabProps) {
         </section>
       ) : (
         <>
+          {live ? (
+            <div className="banner fin-info">
+              Anlık bilanço · {when(data.as_of)} itibarıyla hesap bakiyeleri, cüzdanlar ve bekleyen tahsilatlarla kuruldu; kaydedilmez.
+              {prev ? ` Kıyas: ${day(prev.week)} haftasının kapanışı.` : ""}
+            </div>
+          ) : null}
+          {data.stale_accounts?.length ? (
+            <div className="banner">Güncel olmayan hesap: {data.stale_accounts.map((a) => `${a.name} (son senkron ${when(a.balance_at)})`).join(", ")}.</div>
+          ) : null}
           {data.missing_fx.length ? <div className="banner">Kur kilitlenmemiş: {data.missing_fx.join(", ")}. Bu satırlar toplama girmedi.</div> : null}
           <div className="tiles fin-tiles">
             <StatTile label="Aktif toplamı" value={short(data.totals.assets_usd)} expected={delta(data.totals.assets_usd, prev, "assets_usd") ?? usd(data.totals.assets_usd)} />
@@ -128,7 +141,7 @@ export function BalanceTab({ scope, meta, tick }: TabProps) {
           ) : null}
 
           {data.snapshots.map((s) => (
-            <SnapshotView key={s.id} snap={s} meta={meta} catalog={data.catalog} onChanged={refresh} />
+            <SnapshotView key={`${s.company_id}-${s.id}`} snap={s} meta={meta} catalog={data.catalog} onChanged={refresh} readOnly={live} />
           ))}
         </>
       )}
@@ -253,7 +266,21 @@ function RatioStrip({ sheet }: { sheet: Sheet }) {
   );
 }
 
-function SnapshotView({ snap, meta, catalog, onChanged }: { snap: SnapshotCard; meta: Meta; catalog: Catalog; onChanged: () => void }) {
+function SnapshotView({
+  snap,
+  meta,
+  catalog,
+  onChanged,
+  readOnly = false,
+}: {
+  snap: SnapshotCard;
+  meta: Meta;
+  catalog: Catalog;
+  onChanged: () => void;
+  readOnly?: boolean;
+}) {
+  // Kesinleşmiş ya da anlık (kaydedilmeyen) bilanço değiştirilemez
+  const frozen = snap.locked || readOnly;
   const [notes, setNotes] = useState(snap.notes);
   const [adding, setAdding] = useState<SectionKey | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -300,7 +327,7 @@ function SnapshotView({ snap, meta, catalog, onChanged }: { snap: SnapshotCard; 
                     <LineRow
                       key={l.id}
                       line={l}
-                      locked={snap.locked}
+                      locked={frozen}
                       onSave={(amount) => call(`/api/finance/snapshot-lines/${l.id}`, "PATCH", { amount })}
                       onDelete={() => call(`/api/finance/snapshot-lines/${l.id}`, "DELETE")}
                     />
@@ -308,7 +335,7 @@ function SnapshotView({ snap, meta, catalog, onChanged }: { snap: SnapshotCard; 
               </div>
             ))}
             {k === "equity" ? <EquityRows sheet={sheet} /> : null}
-            {snap.locked ? null : (
+            {frozen ? null : (
               <button className="btn sm link-add" onClick={() => setAdding(k)}>
                 + {sec.title.toLocaleLowerCase("tr")} kalemi
               </button>
@@ -330,7 +357,7 @@ function SnapshotView({ snap, meta, catalog, onChanged }: { snap: SnapshotCard; 
           <CompanyTag id={snap.company_id} /> {company?.name}
         </h2>
         <span className="hint">
-          {snap.locked ? `kesinleşti · ${day(snap.locked_at)}` : "taslak"} · {fxText || "kur yok"}
+          {readOnly ? "anlık · kaydedilmez" : snap.locked ? `kesinleşti · ${day(snap.locked_at)}` : "taslak"} · {fxText || "kur yok"}
           {snap.previous ? ` · önceki hafta özkaynak ${usd(snap.previous.equity_usd)} (${signed(sheet.equity_usd - snap.previous.equity_usd)})` : ""}
         </span>
       </div>
@@ -342,17 +369,19 @@ function SnapshotView({ snap, meta, catalog, onChanged }: { snap: SnapshotCard; 
           {column(PASSIVE_SECTIONS, "Pasif", sheet.liabilities_and_equity_usd)}
         </div>
         <RatioStrip sheet={sheet} />
-        <Field label="Not">
-          <textarea
-            className="f-input"
-            rows={2}
-            value={notes}
-            disabled={snap.locked}
-            onChange={(e) => setNotes(e.target.value)}
-            onBlur={() => notes !== snap.notes && call(`/api/finance/snapshots/${snap.id}`, "PATCH", { notes })}
-          />
-        </Field>
-        {snap.locked ? null : (
+        {readOnly ? null : (
+          <Field label="Not">
+            <textarea
+              className="f-input"
+              rows={2}
+              value={notes}
+              disabled={snap.locked}
+              onChange={(e) => setNotes(e.target.value)}
+              onBlur={() => notes !== snap.notes && call(`/api/finance/snapshots/${snap.id}`, "PATCH", { notes })}
+            />
+          </Field>
+        )}
+        {frozen ? null : (
           <div className="f-actions">
             <button
               className="btn danger"
