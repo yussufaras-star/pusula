@@ -1,0 +1,33 @@
+# Beytullah Aras'ı reps tablosuna satışçı olarak yazar.
+# Yalnız bu script değişince veya elle tetiklenince çalışır.
+name: beytullah-rep
+
+on:
+  pull_request:
+    paths:
+      - scripts/add_beytullah_rep.py
+      - .github/workflows/beytullah-rep.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUNBUFFERED: "1"
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  DATABASE_URL_POOLED: ${{ secrets.DATABASE_URL_POOLED }}
+
+jobs:
+  add:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Bağımlılıkları kur
+        run: python -m pip install -r requirements.txt
+      - name: Beytullah reps yaz
+        run: python scripts/add_beytullah_rep.py
