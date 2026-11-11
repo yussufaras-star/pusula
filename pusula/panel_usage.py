@@ -123,11 +123,8 @@ def summary(days: int, now: datetime) -> dict[str, Any]:
     with connect() as conn:
         _ensure(conn)
         logins = conn.execute(
-            """
-            SELECT email, count(*) FILTER (WHERE at >= %s), max(at)
-            FROM panel_logins WHERE org_id = %s GROUP BY email
-            """,
-            (since, get_org_id()),
+            "SELECT email, at FROM panel_logins WHERE org_id = %s AND at >= %s ORDER BY at",
+            (get_org_id(), since - VISIT_GAP),
         ).fetchall()
         sessions = conn.execute(
             """
@@ -150,9 +147,20 @@ def summary(days: int, now: datetime) -> dict[str, Any]:
         lambda: {"giris": 0, "son_giris": None, "son_gorulme": None, "aktif_sn": 0.0,
                  "gunler": set(), "sayfalar": defaultdict(int), "oturumlar": []}
     )
-    for email, count, last in logins:
-        out[email]["giris"] = int(count or 0)
-        out[email]["son_giris"] = last
+    # Giriş: şifreli giriş, çerezle açılış ve VISIT_GAP'ten uzun aradan sonra açık sekmeye dönüş
+    # (girişi yazılmamış oturum başlangıcı). Açık kalan sekmeye ertesi gün dönen de girmiş sayılır.
+    login_at: dict[str, list[datetime]] = defaultdict(list)
+    for email, at in logins:
+        login_at[email].append(at)
+    entries: dict[str, list[datetime]] = {e: list(v) for e, v in login_at.items()}
+    for email, started, _seen, _active, _pages in sessions:
+        if not any(started - VISIT_GAP <= at <= started + timedelta(minutes=1) for at in login_at.get(email, [])):
+            entries.setdefault(email, []).append(started)
+    for email, times in entries.items():
+        counted = [t for t in times if t >= since]
+        if counted:
+            out[email]["giris"] = len(counted)
+            out[email]["son_giris"] = max(counted)
     for email, changed in self_changes:
         # Şifre belirleme bir giriştir ve kişinin ölçümü o andan başlar (yönetici kararı, 6 Kas).
         u = out[email]
