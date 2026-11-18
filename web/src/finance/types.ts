@@ -232,6 +232,8 @@ export interface Snapshots {
   live?: boolean;
   as_of?: string;
   stale_accounts?: { name: string; balance_at: string | null }[];
+  // Otomatik çekilemeyen kalemler haftalık bilanço tablosundan
+  sheet?: { rows: number; error: string | null };
 }
 
 export type DecisionStatus = "acik" | "aksiyon" | "devam" | "tamam" | "iptal";
