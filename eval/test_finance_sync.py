@@ -150,3 +150,21 @@ def test_cron_sync_requires_secret(monkeypatch) -> None:
     assert client.get("/api/cron/finance-sync", headers={"Authorization": "Bearer nope"}).status_code == 401
     ok = client.get("/api/cron/finance-sync", headers={"Authorization": "Bearer cron-test"})
     assert ok.status_code == 200 and calls == [{}]
+
+
+def test_rapordaki_tutarlar_github_kaydinda_gizlenir() -> None:
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location("finance_sync_script", Path(__file__).resolve().parent.parent / "scripts" / "finance_sync.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    report = {
+        "accounts": [{"name": "Mercury ••1234", "ok": True, "inserted": 3, "balance": "198117.52"}],
+        "receivables": {"ok": False, "lidio": "216149.97", "iyzico": "Rexven: refresh token reddedildi"},
+        "wallets": {"ok": True, "rows": 4},
+    }
+    out = mod.redact(report)
+    assert out["accounts"][0] == {"name": "Mercury ••1234", "ok": True, "inserted": 3, "balance": "***"}
+    assert out["receivables"] == {"ok": False, "lidio": "***", "iyzico": "Rexven: refresh token reddedildi"}
+    assert out["wallets"] == {"ok": True, "rows": 4}
