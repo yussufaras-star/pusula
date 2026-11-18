@@ -38,7 +38,7 @@ from pusula.db.models import (
     Money,
     SnapshotSection,
 )
-from pusula.finance import analytics, store, views, weekly
+from pusula.finance import analytics, sheet, store, views, weekly
 from pusula.finance.fx import load_fx
 from pusula.finance.snapshot import (
     SECTION_BY_KEY,
@@ -437,20 +437,28 @@ LIVE_STALE_HOURS = 12
 def snapshot_live(company: str = views.ALL) -> Any:
     """Anlık bilanço: bu haftanın bilançosu güncel bakiyelerle kurulur, okunur ve
     işlem geri alınır (hiçbir şey kaydedilmez). Toplamlar, kurlar ve önceki
-    hafta kıyası kayıtlı bilançoyla aynı yoldan hesaplanır."""
+    hafta kıyası kayıtlı bilançoyla aynı yoldan hesaplanır.
+
+    Otomatik çekilemeyen kalemler haftalık bilanço tablosundan gelir (sheet.py);
+    tablo okunursa önceki haftadan kopyalanan elle satırların ve elle bakiyeli
+    hesapların yerini alır."""
     now = _now()
     today = now.date()
     week = today - timedelta(days=today.weekday())
+    rows, sheet_error = sheet.load()
     with connect() as conn:
         companies = store.load_companies(conn)
         scope = _scope(company, companies)
-        active = set(weekly.auto_companies(conn))
+        accounts = store.load_accounts(conn)
+        # Hesabı olmayan şirket (GmbH) tabloda kalemi varsa bilançoya girer
+        wanted = set(weekly.auto_companies(conn)) | {r.company_id for r in rows}
         try:
             # Bu hafta elle açılmışsa yerine anlık olanı kur (geri alınır)
             conn.execute("DELETE FROM fin_snapshots WHERE week_date = %s", (week,))
-            weekly.create_week(conn, week, today, [c for c in scope if c in active])
+            created = weekly.create_week(conn, week, today, [c for c in scope if c in wanted])
+            if rows:
+                _apply_sheet(conn, created, rows, accounts)
             _, snaps, lines = _snapshot_data(conn)
-            accounts = store.load_accounts(conn)
         finally:
             conn.rollback()
     limit = now - timedelta(hours=LIVE_STALE_HOURS)
@@ -463,7 +471,38 @@ def snapshot_live(company: str = views.ALL) -> Any:
         and (a.balance_at is None or a.balance_at < limit)
     ]
     view = views.snapshots_view(snaps, lines, scope, week)
-    return jsonable_encoder({**view, "live": True, "as_of": now, "stale_accounts": stale})
+    sheet_info = {"rows": sum(r.company_id in scope for r in rows), "error": sheet_error}
+    return jsonable_encoder({**view, "live": True, "as_of": now, "stale_accounts": stale, "sheet": sheet_info})
+
+
+def _apply_sheet(conn: Any, snapshot_ids: list[int], rows: list[sheet.SheetLine], accounts: list[FinAccount]) -> None:
+    """Tablo satırlarını anlık bilançoya yazar; kopyalanan elle satırlar ve elle
+    bakiyeli hesap satırları (ör. Garanti ana hesap) çıkarılır, tablo onların yerini alır."""
+    for snapshot_id in snapshot_ids:
+        snap = store.load_snapshot(conn, snapshot_id)
+        if snap is None:
+            continue
+        manual = [a.name for a in accounts if a.company_id == snap.company_id and a.provider == "manual"]
+        conn.execute(
+            "DELETE FROM fin_snapshot_lines WHERE snapshot_id = %s"
+            " AND (origin = 'manual' OR (origin = 'account' AND label = ANY(%s)))",
+            (snapshot_id, manual),
+        )
+        for i, r in enumerate(x for x in rows if x.company_id == snap.company_id):
+            store.insert_line(
+                conn,
+                snapshot_id,
+                {
+                    "side": sheet.side_of(r.section),
+                    "section": r.section,
+                    "group_name": r.group_name,
+                    "label": r.label,
+                    "amount": r.amount,
+                    "currency": r.currency,
+                    "origin": "manual",
+                    "sort": 1000 + i,
+                },
+            )
 
 
 @router.get("/snapshots/summary")

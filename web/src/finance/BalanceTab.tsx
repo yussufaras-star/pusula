@@ -101,6 +101,8 @@ export function BalanceTab({ scope, meta, tick }: TabProps) {
               {prev ? ` Kıyas: ${day(prev.week)} haftasının kapanışı.` : ""}
             </div>
           ) : null}
+          {data.sheet?.error ? <div className="banner">{data.sheet.error}; elle girilen kalemler önceki haftanın satırlarından.</div> : null}
+          {live && data.sheet?.rows ? <div className="banner fin-info">Otomatik çekilemeyen {data.sheet.rows} kalem haftalık bilanço tablosundan geldi ("tablo").</div> : null}
           {data.stale_accounts?.length ? (
             <div className="banner">Güncel olmayan hesap: {data.stale_accounts.map((a) => `${a.name} (son senkron ${when(a.balance_at)})`).join(", ")}.</div>
           ) : null}
@@ -328,6 +330,7 @@ function SnapshotView({
                       key={l.id}
                       line={l}
                       locked={frozen}
+                      fromSheet={readOnly && l.origin === "manual"}
                       onSave={(amount) => call(`/api/finance/snapshot-lines/${l.id}`, "PATCH", { amount })}
                       onDelete={() => call(`/api/finance/snapshot-lines/${l.id}`, "DELETE")}
                     />
@@ -418,13 +421,25 @@ function SnapshotView({
   );
 }
 
-function LineRow({ line, locked, onSave, onDelete }: { line: SnapshotLine; locked: boolean; onSave: (amount: string) => void; onDelete: () => void }) {
+function LineRow({
+  line,
+  locked,
+  fromSheet = false,
+  onSave,
+  onDelete,
+}: {
+  line: SnapshotLine;
+  locked: boolean;
+  fromSheet?: boolean;
+  onSave: (amount: string) => void;
+  onDelete: () => void;
+}) {
   const [value, setValue] = useState(String(line.amount));
   useEffect(() => setValue(String(line.amount)), [line.amount]);
   return (
     <div className="fin-bs-line">
       <span className="fin-desc">
-        {line.label} <span className="muted">· {ORIGIN[line.origin]}</span>
+        {line.label} <span className="muted">· {fromSheet ? "tablo" : ORIGIN[line.origin]}</span>
       </span>
       {locked ? (
         <span className="num">{money(line.amount, line.currency, 2)}</span>
