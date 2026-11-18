@@ -14,7 +14,7 @@ from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 
 from pusula import conversations
-from pusula.scoreboard import load_scoreboard
+from pusula.scoreboard import PERIODS, load_scoreboard
 from pusula.sonar_validity import load_validity
 from pusula.block_share import post_cliq
 from pusula.db.identity import normalize_phone
@@ -104,10 +104,15 @@ def trend(rep: str | None = None, user: AuthUser = Depends(current_user)) -> Any
 
 
 @router.get("/scoreboard")
-def scoreboard(week: str | None = None, user: AuthUser = Depends(admin_user)) -> Any:
-    """Haftalık puan tablosu (K1-K5, gelişim ve puan sıralaması). Yalnız yönetici."""
+def scoreboard(week: str | None = None, donem: str = "hafta", user: AuthUser = Depends(admin_user)) -> Any:
+    """Puan tablosu (K1-K5, gelişim ve puan sıralaması): seçilen haftayı içeren hafta, ay ya da
+    çeyrek. Yalnız yönetici."""
+    if donem not in PERIODS:
+        raise HTTPException(status_code=400, detail="Dönem hafta, ay ya da ceyrek olmalı")
     start = _week(week)
-    return cache.cached(("conv-scoreboard", start.isoformat()), TTL, lambda: jsonable_encoder(load_scoreboard(start)))
+    return cache.cached(
+        ("conv-scoreboard", start.isoformat(), donem), TTL, lambda: jsonable_encoder(load_scoreboard(start, donem))
+    )
 
 
 @router.get("/validity")

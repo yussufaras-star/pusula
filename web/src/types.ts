@@ -934,7 +934,7 @@ export interface ScoreRow {
   onceki_n: number;
   onceki_puanlar: DimScores;
   onceki_ort: number | null;
-  gecen_hafta_ort: number | null;
+  gecen_donem_ort: number | null;
   gelisim: DimScores;
   gelisim_ort: number | null;
   yeterli: boolean;
@@ -945,12 +945,16 @@ export interface ScoreRow {
   sira_puan: number | null;
 }
 
+export type ScorePeriod = "hafta" | "ay" | "ceyrek";
+
 export interface Scoreboard {
-  week_start: string;
-  week_end: string;
+  donem: ScorePeriod;
+  bas: string;
+  son: string;
+  etiket: string;
   kiyas_bas: string;
+  kiyas_etiket: string;
   min_gorusme: number;
-  kiyas_hafta: number;
   score_labels: Record<string, string>;
   temsilciler: ScoreRow[];
   en_cok_gelisen: string[];

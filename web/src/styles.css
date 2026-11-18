@@ -2468,8 +2468,23 @@ table.meet-list {
   color: var(--ink);
 }
 
-.sb-dim-row {
-  margin-top: 2px;
+.sb-dim-label {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.sb-dim-name {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+.sb-dim-name .sb-delta,
+.sb-dim-name .muted {
+  font-weight: 500;
+  font-size: 12px;
 }
 
 .sb-table td .sb-delta {
