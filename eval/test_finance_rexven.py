@@ -214,3 +214,22 @@ def test_iyzico_bekleyen_odeme_ve_iade():
     # düşülme kaydı yoksa satışın net tutarı iade oranında
     del days[date(2026, 11, 8)]
     assert on(8) == D("0")
+
+
+def test_token_yedek_dosyasi_veritabani_kopsa_da_zinciri_tutar(tmp_path, monkeypatch):
+    """Yeni token önce dosyaya yazılır; kayıtlı token reddedilince dosyadaki denenir."""
+    path = tmp_path / "rexven_token.txt"
+    monkeypatch.setenv("REXVEN_TOKEN_FILE", str(path))
+    monkeypatch.setenv("REXVEN_API_REFRESH_TOKEN", "rxir_env")
+    assert rexven.token_candidates("rxir_db") == ["rxir_db", "rxir_env"]  # dosya henüz yok
+    rexven.backup_token("rxir_yeni")
+    assert path.read_text(encoding="utf-8") == "rxir_yeni"
+    assert rexven.token_candidates("rxir_db") == ["rxir_db", "rxir_yeni", "rxir_env"]
+    assert rexven.token_candidates("rxir_yeni") == ["rxir_yeni", "rxir_env"]  # tekrarsız
+
+
+def test_token_yedek_dosyasi_tanimsizsa_yazilmaz(monkeypatch):
+    monkeypatch.delenv("REXVEN_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("REXVEN_API_REFRESH_TOKEN", raising=False)
+    rexven.backup_token("rxir_x")  # hata vermez, bir şey yazmaz
+    assert rexven.token_candidates(None) == []
