@@ -10,6 +10,10 @@ bu yüzden tek kopya fin_provider_tokens'tadır. Kayıtlı token reddedilirse
 REXVEN_API_REFRESH_TOKEN denenir: rexadmin → Finans → API Erişimi'nden yeni
 token üretilip bu değişkene yazılınca zincir yeniden başlar.
 
+Yeni token gelip veritabanına yazılamadan bağlantı koparsa zincir kırılırdı:
+REXVEN_TOKEN_FILE verilmişse yeni token önce bu dosyaya yazılır ve sonraki
+çalışma kayıtlı token reddedilince dosyadakini dener.
+
 provider_account_id = Kuveyt Türk hesap ek numarası (ana 1, cüzdan 2, döviz 101).
 Sınır dakikada 60 istek: istekler arasında en az MIN_GAP saniye beklenir.
 """
@@ -80,18 +84,42 @@ def _request(client: httpx.Client, method: str, path: str, **kwargs: Any) -> Any
     raise ProviderError(f"{PROVIDER}: istek sınırı")
 
 
+def _token_file() -> str:
+    return os.environ.get("REXVEN_TOKEN_FILE", "").strip()
+
+
+def token_candidates(stored: str | None) -> list[str]:
+    """Denenecek refresh token'lar: kayıtlı, yedek dosya, ortam değişkeni (tekrarsız)."""
+    path = _token_file()
+    backup = ""
+    if path and os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            backup = f.read().strip()
+    return [t for t in dict.fromkeys((stored, backup, os.environ.get("REXVEN_API_REFRESH_TOKEN", "").strip())) if t]
+
+
+def backup_token(token: str) -> None:
+    """Yeni refresh token'ı veritabanından önce yedek dosyaya yazar (yarım kalmaz: geçici dosya + değiştir)."""
+    path = _token_file()
+    if not path:
+        return
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(token)
+    os.replace(tmp, path)
+
+
 def rotate_refresh_token(exchange: Callable[[str], dict[str, Any]]) -> dict[str, Any]:
     """Kayıtlı refresh token'ı satır kilidiyle okur, exchange ile yeniler ve
-    dönen yeni token'ı aynı işlemde yazar. Kayıtlı token reddedilirse ortam
-    değişkenindeki denenir."""
+    dönen yeni token'ı aynı işlemde yazar. Kayıtlı token reddedilirse yedek
+    dosyadaki, sonra ortam değişkenindeki denenir."""
     from pusula.panel_data import connect
 
     with connect() as conn:
         row = conn.execute(
             "SELECT refresh_token FROM fin_provider_tokens WHERE provider = 'rexven' FOR UPDATE"
         ).fetchone()
-        stored = row[0] if row else None
-        candidates = [t for t in dict.fromkeys((stored, os.environ.get("REXVEN_API_REFRESH_TOKEN", "").strip())) if t]
+        candidates = token_candidates(row[0] if row else None)
         if not candidates:
             raise ProviderError("Eksik ortam değişkeni: REXVEN_API_REFRESH_TOKEN")
         data: dict[str, Any] | None = None
@@ -108,6 +136,7 @@ def rotate_refresh_token(exchange: Callable[[str], dict[str, Any]]) -> dict[str,
                         " üretip REXVEN_API_REFRESH_TOKEN'a yazın"
                     ) from exc
         assert data is not None
+        backup_token(data["refreshToken"])
         conn.execute(
             "INSERT INTO fin_provider_tokens (provider, refresh_token, expires_at) VALUES ('rexven', %s, %s)"
             " ON CONFLICT (provider) DO UPDATE SET refresh_token = EXCLUDED.refresh_token,"
