@@ -8,6 +8,8 @@ Kullanım:
 Sağlayıcı anahtarları ortam değişkeninden okunur (finance-sync.yml tek tek
 verir). İsteğe bağlı FIN_SECRETS_JSON (JSON nesnesi) verilirse yalnız
 MERCURY_TOKEN_*, WISE_TOKEN_*, STRIPE_KEY_*, REVOLUT_*_* adları ortama alınır.
+
+GitHub Actions'ta (depo herkese açık, kayıtlar da) rapordaki tutarlar gizlenir.
 """
 
 from __future__ import annotations
@@ -26,6 +28,27 @@ from dotenv import load_dotenv
 from pusula.finance.sync import load_provider_secrets, run_finance_sync
 
 
+# Raporda tutar taşıyan alanlar (hesap bakiyesi, bekleyen tahsilat)
+MONEY_KEYS = frozenset({"balance", "lidio", "iyzico"})
+
+
+def redact(value: object) -> object:
+    """Tutarları '***' yapar; durum, sayı ve hata metinleri kalır."""
+    if isinstance(value, dict):
+        return {k: "***" if k in MONEY_KEYS and _is_number(v) else redact(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact(v) for v in value]
+    return value
+
+
+def _is_number(value: object) -> bool:
+    try:
+        float(str(value))
+    except ValueError:
+        return False
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Finans senkronu.")
     parser.add_argument("--account", type=int, default=None, help="Yalnız bu hesap (fin_accounts.id)")
@@ -42,7 +65,8 @@ def main() -> int:
         print(f"saglayici anahtarlari: {', '.join(loaded)}")
 
     report = run_finance_sync(account_id=args.account, days=args.days, budget_sec=args.budget, provider=args.provider)
-    print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+    shown = redact(report) if os.environ.get("GITHUB_ACTIONS") == "true" else report
+    print(json.dumps(shown, ensure_ascii=False, indent=2, default=str))
     if "skipped" in report:
         return 0
     failed = [str(r.get("name")) for r in report.get("accounts", []) if r.get("error")]

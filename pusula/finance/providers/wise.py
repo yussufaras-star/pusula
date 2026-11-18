@@ -50,7 +50,7 @@ def fetch(account: FinAccount, since: datetime, client: httpx.Client) -> Adapter
         "GET",
         f"{BASE}/v4/profiles/{profile_id}/balances",
         headers=headers,
-        params={"types": "STANDARD"},
+        params={"types": "STANDARD,SAVINGS"},  # kumbaralar da (keşif ekler)
     )
     found = next((b for b in balances or [] if str(b.get("id")) == balance_id), None)
     if found is None:

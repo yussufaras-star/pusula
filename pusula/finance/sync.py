@@ -27,7 +27,7 @@ from typing import Any
 import httpx
 
 from pusula.db.models import FinAccount, FinCompany, FinReceivable
-from pusula.finance import fx, store
+from pusula.finance import discover, fx, store
 from pusula.finance.providers import ADAPTERS, rexven
 from pusula.finance.providers.base import HTTP_TIMEOUT, AdapterResult, ProviderError
 from pusula.metrics import TZ
@@ -266,6 +266,16 @@ def run_finance_sync(
             logger.warning("kur senkronu basarisiz (%s)", type(exc).__name__)
             fx_report = {"ok": False, "error": short_error(exc)}
 
+        discovered = None
+        if account_id is None and provider is None:
+            # Wise'ta açılan yeni bakiye / kumbara, Mercury'de yeni hesap
+            try:
+                with connect() as conn, httpx.Client(timeout=HTTP_TIMEOUT) as http:
+                    discovered = discover.discover_accounts(conn, http)
+            except Exception as exc:
+                logger.warning("hesap kesfi basarisiz (%s)", type(exc).__name__)
+                discovered = {"added": [], "errors": {"kesif": short_error(exc)}}
+
         with connect() as conn:
             accounts = store.load_sync_accounts(conn, account_id)
             companies = store.load_companies(conn)
@@ -308,4 +318,5 @@ def run_finance_sync(
         "categorized": categorized,
         **({"wallets": wallets_report} if wallets_report is not None else {}),
         **({"receivables": receivables_report} if receivables_report is not None else {}),
+        **({"discovered": discovered} if discovered else {}),
     }
