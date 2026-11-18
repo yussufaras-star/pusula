@@ -58,3 +58,26 @@ def test_baseline_uses_only_previous_four_weeks() -> None:
     a = out["temsilciler"][0]
     assert a["onceki_ort"] == 2.0 and a["gelisim_ort"] == 1.0
     assert out["ekip"]["gelisim_ort"] == 1.0
+
+
+def test_month_period_compares_with_previous_month() -> None:
+    from pusula.scoreboard import PERIOD_MIN
+
+    n = PERIOD_MIN["ay"]
+    data = calls("a", date(2026, 9, 30), 5.0, n=n)  # iki ay önce: kıyasa girmez
+    data += calls("a", date(2026, 10, 3), 2.0, n=n) + calls("a", date(2026, 11, 20), 3.0, n=n)
+    data += calls("b", date(2026, 11, 2), 4.0, n=n - 1)  # ayda yetersiz
+    out = build(data, {"a": "Ada", "b": "Bora"}, date(2026, 11, 16), "ay")
+    rows = {r["rep_id"]: r for r in out["temsilciler"]}
+    assert (out["bas"], out["son"], out["etiket"]) == (date(2026, 11, 1), date(2026, 11, 30), "Kasım 2026")
+    assert rows["a"]["onceki_ort"] == 2.0 and rows["a"]["gelisim_ort"] == 1.0
+    assert not rows["b"]["yeterli"] and out["liderler"]["K1"]["puan"] == ["Ada"]
+
+
+def test_quarter_bounds_and_labels() -> None:
+    from pusula.scoreboard import period_bounds
+
+    b = period_bounds("ceyrek", date(2026, 1, 12))
+    assert (b["bas"], b["bit"], b["kiyas_bas"]) == (date(2026, 1, 1), date(2026, 4, 1), date(2025, 10, 1))
+    assert (b["etiket"], b["kiyas_etiket"]) == ("Q1 2026", "önceki çeyrek (Q4 2025)")
+    assert period_bounds("hafta", date(2026, 11, 18))["etiket"] == "16 Kasım – 22 Kasım"
