@@ -35,6 +35,16 @@ FACTORS: tuple[tuple[str, str, str], ...] = (
 )
 MOVERS = 4
 
+# Görüşme kalitesi: ciro kimliğinde yok, yanında okunur. Doluluk bilerek yok
+# (Kasım'da tanım/veri kayması şüphesi).
+QUALITY: tuple[tuple[str, str, str], ...] = (
+    ("sure_ort", "Ort. görüşme süresi", "sure"),
+    ("call_sec", "Toplam konuşma", "sure_toplam"),
+    ("giden_temas", "Ulaşılan görüşme", "adet"),
+    ("randevu", "Toplantı", "adet"),
+    ("katilim_orani", "Toplantıya katılım", "yuzde"),
+)
+
 
 def _completed(first: date, last: date, today: date) -> Range:
     """Bugüne uzanan dönem dünde biter; yalnız bugünse bugün kalır."""
@@ -107,6 +117,8 @@ def movers(a_reps: Sequence[dict[str, Any]], b_reps: Sequence[dict[str, Any]]) -
                 "satis_b": int(rb.get("satis") or 0),
                 "donusum_a": _div(ra.get("satis"), ra.get("lead_pay")),
                 "donusum_b": _div(rb.get("satis"), rb.get("lead_pay")),
+                "sure_a": ra.get("sure_ort"),
+                "sure_b": rb.get("sure_ort"),
             }
         )
     out.sort(key=lambda r: abs(r["fark"]), reverse=True)
@@ -181,6 +193,23 @@ def _mix_note(mix: Sequence[dict[str, Any]]) -> str:
     return f" Paketlerde en büyük kayma {top['paket']}: {top['adet_b']} → {top['adet_a']} adet."
 
 
+def quality_rows(a_row: dict[str, Any], b_row: dict[str, Any]) -> list[dict[str, Any]]:
+    """Kalite ölçüleri yan yana; yüzde ölçüde değişim puan, diğerlerinde oran."""
+    out = []
+    for key, label, kind in QUALITY:
+        va, vb = a_row.get(key), b_row.get(key)
+        va = float(va) if va is not None else None
+        vb = float(vb) if vb is not None else None
+        if va is None or vb is None:
+            change = None
+        elif kind == "yuzde":
+            change = va - vb
+        else:
+            change = (va - vb) / vb if vb else None
+        out.append({"key": key, "label": label, "kind": kind, "a": va, "b": vb, "degisim": change})
+    return out
+
+
 def side_payload(first: date, last: date, row: dict[str, Any]) -> dict[str, Any]:
     return {
         "first": first,
@@ -232,5 +261,6 @@ def build_bridge(
         "factors": rows,
         "movers": movers(a_reps, b_reps),
         "paketler": list(mix),
+        "kalite": quality_rows(a_row, b_row),
         "headline": headline(delta, sb["ciro"], effects) + _mix_note(mix),
     }
