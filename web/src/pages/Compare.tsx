@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { api, usePolling } from "../api";
 import { CompareChart } from "../components/CompareChart";
+import { SalesBridge } from "../components/SalesBridge";
 import { duration, int, minutes, num, pct } from "../format";
 import type { ComparePayload, CompareSide, Kpis, Me, RepRef } from "../types";
 
@@ -11,7 +12,9 @@ type Range = [string, string];
 // --- tarih yardımcıları (Istanbul günü, ISO "YYYY-AA-GG") ---------------------
 
 function istanbulToday(): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Istanbul" }).format(new Date());
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Istanbul",
+  }).format(new Date());
 }
 
 function shift(iso: string, days: number): string {
@@ -27,8 +30,15 @@ function monday(iso: string): string {
 
 const monthStart = (iso: string) => `${iso.slice(0, 7)}-01`;
 
-const shortDay = new Intl.DateTimeFormat("tr-TR", { day: "numeric", month: "short", timeZone: "UTC" });
-const weekday = new Intl.DateTimeFormat("tr-TR", { weekday: "long", timeZone: "UTC" });
+const shortDay = new Intl.DateTimeFormat("tr-TR", {
+  day: "numeric",
+  month: "short",
+  timeZone: "UTC",
+});
+const weekday = new Intl.DateTimeFormat("tr-TR", {
+  weekday: "long",
+  timeZone: "UTC",
+});
 
 function rangeLabel([first, last]: Range): string {
   const f = new Date(`${first}T12:00:00Z`);
@@ -45,25 +55,48 @@ interface PeriodPair {
 }
 
 const PERIOD_PAIRS: PeriodPair[] = [
-  { key: "gun", label: "Bugün ↔ geçen hafta aynı gün", make: (t) => [[t, t], [shift(t, -7), shift(t, -7)]] },
-  { key: "dun", label: "Dün ↔ önceki gün", make: (t) => [[shift(t, -1), shift(t, -1)], [shift(t, -2), shift(t, -2)]] },
+  {
+    key: "gun",
+    label: "Bugün ↔ geçen hafta aynı gün",
+    make: (t) => [
+      [t, t],
+      [shift(t, -7), shift(t, -7)],
+    ],
+  },
+  {
+    key: "dun",
+    label: "Dün ↔ önceki gün",
+    make: (t) => [
+      [shift(t, -1), shift(t, -1)],
+      [shift(t, -2), shift(t, -2)],
+    ],
+  },
   {
     key: "hafta",
     label: "Bu hafta ↔ geçen hafta",
-    make: (t) => [[monday(t), t], [shift(monday(t), -7), shift(monday(t), -1)]],
+    make: (t) => [
+      [monday(t), t],
+      [shift(monday(t), -7), shift(monday(t), -1)],
+    ],
   },
   {
     key: "ay",
     label: "Bu ay ↔ geçen ay",
     make: (t) => {
       const prevLast = shift(monthStart(t), -1);
-      return [[monthStart(t), t], [monthStart(prevLast), prevLast]];
+      return [
+        [monthStart(t), t],
+        [monthStart(prevLast), prevLast],
+      ];
     },
   },
   {
     key: "30",
     label: "Son 30 gün ↔ önceki 30 gün",
-    make: (t) => [[shift(t, -29), t], [shift(t, -59), shift(t, -30)]],
+    make: (t) => [
+      [shift(t, -29), t],
+      [shift(t, -59), shift(t, -30)],
+    ],
   },
 ];
 
@@ -77,7 +110,11 @@ const PERIODS: Period[] = [
   { key: "bugun", label: "Bugün", make: (t) => [t, t] },
   { key: "dun", label: "Dün", make: (t) => [shift(t, -1), shift(t, -1)] },
   { key: "hafta", label: "Bu hafta", make: (t) => [monday(t), t] },
-  { key: "gecen", label: "Geçen hafta", make: (t) => [shift(monday(t), -7), shift(monday(t), -1)] },
+  {
+    key: "gecen",
+    label: "Geçen hafta",
+    make: (t) => [shift(monday(t), -7), shift(monday(t), -1)],
+  },
   { key: "ay", label: "Bu ay", make: (t) => [monthStart(t), t] },
   { key: "30", label: "Son 30 gün", make: (t) => [shift(t, -29), t] },
 ];
@@ -100,7 +137,12 @@ const SECTIONS: { title: string; metrics: Metric[] }[] = [
     title: "Hacim",
     metrics: [
       { key: "arama", label: "Arama", kind: "count", hint: "Giden çevirme" },
-      { key: "ulasilan", label: "Ulaşılan", kind: "count", hint: "Giden temas + dönüş" },
+      {
+        key: "ulasilan",
+        label: "Ulaşılan",
+        kind: "count",
+        hint: "Giden temas + dönüş",
+      },
       { key: "donus", label: "Dönüş", kind: "count" },
       { key: "whatsapp", label: "WhatsApp mesajı", kind: "count" },
     ],
@@ -108,19 +150,47 @@ const SECTIONS: { title: string; metrics: Metric[] }[] = [
   {
     title: "Verim",
     metrics: [
-      { key: "ulasma_orani", label: "Ulaşma oranı", kind: "rate", sample: "lead_payda", hint: "Benzersiz lead üzerinden" },
+      {
+        key: "ulasma_orani",
+        label: "Ulaşma oranı",
+        kind: "rate",
+        sample: "lead_payda",
+        hint: "Benzersiz lead üzerinden",
+      },
       { key: "sure_ort", label: "Ort. görüşme süresi", kind: "duration" },
       { key: "call_sec", label: "Toplam konuşma", kind: "minutes" },
-      { key: "doluluk", label: "Doluluk", kind: "rate", sample: "mesai_dk", hint: "Dolu / (dolu + kayıp); mola hariç" },
-      { key: "kayip_dk", label: "Kayıp zaman", kind: "minutes", lowerBetter: true, hint: "Mola dışı boşluk; az olan önde" },
+      {
+        key: "doluluk",
+        label: "Doluluk",
+        kind: "rate",
+        sample: "mesai_dk",
+        hint: "Dolu / (dolu + kayıp); mola hariç",
+      },
+      {
+        key: "kayip_dk",
+        label: "Kayıp zaman",
+        kind: "minutes",
+        lowerBetter: true,
+        hint: "Mola dışı boşluk; az olan önde",
+      },
     ],
   },
   {
     title: "Sonuç",
     metrics: [
-      { key: "randevu", label: "Toplantı", kind: "count", hint: "Saati gelen, iptal hariç" },
+      {
+        key: "randevu",
+        label: "Toplantı",
+        kind: "count",
+        hint: "Saati gelen, iptal hariç",
+      },
       { key: "katildi", label: "Katıldı (CRM sonucu)", kind: "count" },
-      { key: "katilim_orani", label: "Katılım oranı", kind: "rate", sample: "katilim_payda" },
+      {
+        key: "katilim_orani",
+        label: "Katılım oranı",
+        kind: "rate",
+        sample: "katilim_payda",
+      },
       {
         key: "sonuc_girilmedi",
         label: "Sonucu girilmemiş",
@@ -159,10 +229,16 @@ function thin(side: CompareSide, m: Metric): boolean {
 
 type Winner = "a" | "b" | "tie" | null;
 
-function winner(a: number | null, b: number | null, m: Metric, skip: boolean, perDay: boolean): Winner {
+function winner(
+  a: number | null,
+  b: number | null,
+  m: Metric,
+  skip: boolean,
+  perDay: boolean,
+): Winner {
   if (skip || a === null || b === null) return null;
   if (show(a, m, perDay) === show(b, m, perDay)) return "tie";
-  return (a > b) !== Boolean(m.lowerBetter) ? "a" : "b";
+  return a > b !== Boolean(m.lowerBetter) ? "a" : "b";
 }
 
 // --- sayfa ---------------------------------------------------------------------
@@ -179,11 +255,16 @@ export function ComparePage({ me }: { me: Me }) {
   const [mode, setMode] = useState<Mode>(isAdmin ? "donem" : "kisi");
   const [pairKey, setPairKey] = useState("hafta");
   const [periodKey, setPeriodKey] = useState("hafta");
-  const [subject, setSubject] = useState(isAdmin ? "team" : (me.rep_id ?? "avg"));
+  const [subject, setSubject] = useState(
+    isAdmin ? "team" : (me.rep_id ?? "avg"),
+  );
   const [subjectA, setSubjectA] = useState(isAdmin ? "" : (me.rep_id ?? "avg"));
   const [subjectB, setSubjectB] = useState("avg");
   const [customA, setCustomA] = useState<Range>([monday(today), today]);
-  const [customB, setCustomB] = useState<Range>([shift(monday(today), -7), shift(monday(today), -1)]);
+  const [customB, setCustomB] = useState<Range>([
+    shift(monday(today), -7),
+    shift(monday(today), -1),
+  ]);
   const [align, setAlign] = useState(true);
   const [perDay, setPerDay] = useState<boolean | null>(null);
 
@@ -203,8 +284,12 @@ export function ComparePage({ me }: { me: Me }) {
       { id: "team", label: "Ekip toplamı" },
       { id: "avg", label: "Temsilci ortalaması" },
     ];
-    if (!isAdmin) return me.rep_id ? [{ id: me.rep_id, label: "Ben" }, ...base] : base;
-    return [...base, ...reps.map((r) => ({ id: r.rep_id, label: r.full_name }))];
+    if (!isAdmin)
+      return me.rep_id ? [{ id: me.rep_id, label: "Ben" }, ...base] : base;
+    return [
+      ...base,
+      ...reps.map((r) => ({ id: r.rep_id, label: r.full_name })),
+    ];
   }, [isAdmin, me.rep_id, reps]);
 
   let rangeA: Range;
@@ -233,12 +318,23 @@ export function ComparePage({ me }: { me: Me }) {
     b_subject: subB,
     align: String(mode === "kisi" || align),
   });
+  // Ciro köprüsü: dönem modunda aynı iki aralık, tek özne.
+  const bridgeQuery = new URLSearchParams({
+    a_from: rangeA[0],
+    a_to: rangeA[1],
+    b_from: rangeB[0],
+    b_to: rangeB[1],
+    subject: subA,
+    align: String(align),
+  }).toString();
   const { data, error, loading, refresh } = usePolling<ComparePayload>(
     ready ? `/api/compare?${query}` : null,
     touchesToday ? 60_000 : 0,
   );
 
-  const autoPerDay = data ? Math.abs(data.a.work_days - data.b.work_days) > 0.05 : false;
+  const autoPerDay = data
+    ? Math.abs(data.a.work_days - data.b.work_days) > 0.05
+    : false;
   const daily = perDay ?? autoPerDay;
 
   return (
@@ -246,7 +342,10 @@ export function ComparePage({ me }: { me: Me }) {
       <div className="page-head">
         <div>
           <h1>Karşılaştır</h1>
-          <div className="sub">İki dönemi ya da iki kişiyi yan yana koy, hangi kriterde kim önde gör.</div>
+          <div className="sub">
+            İki dönemi ya da iki kişiyi yan yana koy, hangi kriterde kim önde
+            gör.
+          </div>
         </div>
         <div className="controls">
           {loading ? <span className="freshness">yükleniyor…</span> : null}
@@ -258,10 +357,18 @@ export function ComparePage({ me }: { me: Me }) {
 
       <section className="card card-body cmp-setup">
         <div className="seg" role="tablist" aria-label="Karşılaştırma türü">
-          <button role="tab" aria-selected={mode === "donem"} onClick={() => setMode("donem")}>
+          <button
+            role="tab"
+            aria-selected={mode === "donem"}
+            onClick={() => setMode("donem")}
+          >
             İki dönem
           </button>
-          <button role="tab" aria-selected={mode === "kisi"} onClick={() => setMode("kisi")}>
+          <button
+            role="tab"
+            aria-selected={mode === "kisi"}
+            onClick={() => setMode("kisi")}
+          >
             İki kişi
           </button>
         </div>
@@ -270,11 +377,19 @@ export function ComparePage({ me }: { me: Me }) {
           <>
             <label className="field">
               <span>Kim</span>
-              <SubjectSelect value={subject} options={subjects} onChange={setSubject} />
+              <SubjectSelect
+                value={subject}
+                options={subjects}
+                onChange={setSubject}
+              />
             </label>
             <div className="chips" role="radiogroup" aria-label="Dönemler">
               {PERIOD_PAIRS.map((p) => (
-                <Chip key={p.key} on={pairKey === p.key} onClick={() => setPairKey(p.key)}>
+                <Chip
+                  key={p.key}
+                  on={pairKey === p.key}
+                  onClick={() => setPairKey(p.key)}
+                >
                   {p.label}
                 </Chip>
               ))}
@@ -284,12 +399,29 @@ export function ComparePage({ me }: { me: Me }) {
             </div>
             {pairKey === "ozel" ? (
               <div className="cmp-custom">
-                <RangeInput label="A dönemi" value={customA} max={today} onChange={setCustomA} />
-                <RangeInput label="B dönemi" value={customB} max={today} onChange={setCustomB} />
+                <RangeInput
+                  label="A dönemi"
+                  value={customA}
+                  max={today}
+                  onChange={setCustomA}
+                />
+                <RangeInput
+                  label="B dönemi"
+                  value={customB}
+                  max={today}
+                  onChange={setCustomB}
+                />
               </div>
             ) : null}
-            <label className="check" title="Süren dönem, geçmiş dönemin aynı anına kadar olan kısmıyla kıyaslanır">
-              <input type="checkbox" checked={align} onChange={(e) => setAlign(e.target.checked)} />
+            <label
+              className="check"
+              title="Süren dönem, geçmiş dönemin aynı anına kadar olan kısmıyla kıyaslanır"
+            >
+              <input
+                type="checkbox"
+                checked={align}
+                onChange={(e) => setAlign(e.target.checked)}
+              />
               Aynı ana kadar kıyasla
             </label>
           </>
@@ -300,40 +432,72 @@ export function ComparePage({ me }: { me: Me }) {
                 <span>
                   <i className="swatch a" /> A
                 </span>
-                <SubjectSelect value={subjectA} options={subjects} onChange={setSubjectA} />
+                <SubjectSelect
+                  value={subjectA}
+                  options={subjects}
+                  onChange={setSubjectA}
+                />
               </label>
               <label className="field">
                 <span>
                   <i className="swatch b" /> B
                 </span>
-                <SubjectSelect value={subjectB} options={subjects} onChange={setSubjectB} />
+                <SubjectSelect
+                  value={subjectB}
+                  options={subjects}
+                  onChange={setSubjectB}
+                />
               </label>
             </div>
             <div className="chips" role="radiogroup" aria-label="Dönem">
               {PERIODS.map((p) => (
-                <Chip key={p.key} on={periodKey === p.key} onClick={() => setPeriodKey(p.key)}>
+                <Chip
+                  key={p.key}
+                  on={periodKey === p.key}
+                  onClick={() => setPeriodKey(p.key)}
+                >
                   {p.label}
                 </Chip>
               ))}
-              <Chip on={periodKey === "ozel"} onClick={() => setPeriodKey("ozel")}>
+              <Chip
+                on={periodKey === "ozel"}
+                onClick={() => setPeriodKey("ozel")}
+              >
                 Özel tarih
               </Chip>
             </div>
             {periodKey === "ozel" ? (
               <div className="cmp-custom">
-                <RangeInput label="Dönem" value={customA} max={today} onChange={setCustomA} />
+                <RangeInput
+                  label="Dönem"
+                  value={customA}
+                  max={today}
+                  onChange={setCustomA}
+                />
               </div>
             ) : null}
           </>
         )}
       </section>
 
-      {error ? <div className="banner error">Veri alınamadı: {error.message}</div> : null}
+      {error ? (
+        <div className="banner error">Veri alınamadı: {error.message}</div>
+      ) : null}
 
       {!data ? (
         <div className="skeleton" style={{ height: 320 }} />
       ) : (
-        <CompareBody data={data} rangeA={rangeA} rangeB={rangeB} daily={daily} setDaily={setPerDay} mode={mode} />
+        <>
+          {mode === "donem" ? <SalesBridge query={bridgeQuery} /> : null}
+          <CompareBody
+            data={data}
+            rangeA={rangeA}
+            rangeB={rangeB}
+            daily={daily}
+            setDaily={setPerDay}
+            mode={mode}
+          />
+        </>
       )}
     </>
   );
@@ -373,21 +537,45 @@ function CompareBody({
   return (
     <>
       <div className="vs">
-        <Contender side={a} tag="a" title={titleA} sub={mode === "donem" ? a.label : rangeLabel(rangeA)} wins={winsA} total={all.length} lead={winsA > winsB} />
+        <Contender
+          side={a}
+          tag="a"
+          title={titleA}
+          sub={mode === "donem" ? a.label : rangeLabel(rangeA)}
+          wins={winsA}
+          total={all.length}
+          lead={winsA > winsB}
+        />
         <div className="vs-mid" aria-hidden>
           VS
         </div>
-        <Contender side={b} tag="b" title={titleB} sub={mode === "donem" ? b.label : rangeLabel(rangeB)} wins={winsB} total={all.length} lead={winsB > winsA} />
+        <Contender
+          side={b}
+          tag="b"
+          title={titleB}
+          sub={mode === "donem" ? b.label : rangeLabel(rangeB)}
+          wins={winsB}
+          total={all.length}
+          lead={winsB > winsA}
+        />
       </div>
 
       <section className="card">
         <div className="card-head">
           <h2>Kriter kriter</h2>
           <div className="seg small" role="tablist" aria-label="Gösterim">
-            <button role="tab" aria-selected={!daily} onClick={() => setDaily(false)}>
+            <button
+              role="tab"
+              aria-selected={!daily}
+              onClick={() => setDaily(false)}
+            >
               Toplam
             </button>
-            <button role="tab" aria-selected={daily} onClick={() => setDaily(true)}>
+            <button
+              role="tab"
+              aria-selected={daily}
+              onClick={() => setDaily(true)}
+            >
               Günlük ortalama
             </button>
           </div>
@@ -395,13 +583,13 @@ function CompareBody({
         <div className="card-body">
           {daily ? (
             <p className="muted cmp-note">
-              Sayılar mesai gününe bölündü (A {num(a.work_days)} gün, B {num(b.work_days)} gün). Oranlar ve süre
-              ortalamaları aynen kalır.
+              Sayılar mesai gününe bölündü (A {num(a.work_days)} gün, B{" "}
+              {num(b.work_days)} gün). Oranlar ve süre ortalamaları aynen kalır.
             </p>
           ) : a.work_days !== b.work_days ? (
             <p className="muted cmp-note">
-              Dönemlerin mesai günü farklı (A {num(a.work_days)}, B {num(b.work_days)}); adil kıyas için “Günlük
-              ortalama”ya geçin.
+              Dönemlerin mesai günü farklı (A {num(a.work_days)}, B{" "}
+              {num(b.work_days)}); adil kıyas için “Günlük ortalama”ya geçin.
             </p>
           ) : null}
           <table className="spec">
@@ -422,7 +610,15 @@ function CompareBody({
                   <th colSpan={3}>{s.title}</th>
                 </tr>
                 {s.rows.map(({ m, va, vb, skip, win }) => (
-                  <SpecRow key={m.key} m={m} va={va} vb={vb} skip={skip} win={win} daily={daily} />
+                  <SpecRow
+                    key={m.key}
+                    m={m}
+                    va={va}
+                    vb={vb}
+                    skip={skip}
+                    win={win}
+                    daily={daily}
+                  />
                 ))}
               </tbody>
             ))}
@@ -432,8 +628,14 @@ function CompareBody({
 
       <section className="card">
         <div className="card-head">
-          <h2>{a.series_group === "hour" && b.series_group === "hour" ? "Saat saat" : "Gün gün"}</h2>
-          <span className="hint">A ve B aynı eksende · içi boş nokta süren dilim</span>
+          <h2>
+            {a.series_group === "hour" && b.series_group === "hour"
+              ? "Saat saat"
+              : "Gün gün"}
+          </h2>
+          <span className="hint">
+            A ve B aynı eksende · içi boş nokta süren dilim
+          </span>
         </div>
         <div className="card-body">
           <CompareChart a={a} b={b} titleA={titleA} titleB={titleB} />
@@ -507,7 +709,10 @@ function SpecRow({
   const max = Math.max(va ?? 0, vb ?? 0) || 1;
   const wa = ((va ?? 0) / max) * 100;
   const wb = ((vb ?? 0) / max) * 100;
-  const diff = va !== null && vb !== null && vb !== 0 && m.kind !== "rate" ? ((va - vb) / Math.abs(vb)) * 100 : null;
+  const diff =
+    va !== null && vb !== null && vb !== 0 && m.kind !== "rate"
+      ? ((va - vb) / Math.abs(vb)) * 100
+      : null;
   const pts = va !== null && vb !== null && m.kind === "rate" ? va - vb : null;
   const delta =
     pts !== null
@@ -519,7 +724,11 @@ function SpecRow({
     <tr className={win ? `win-${win}` : undefined}>
       <td className="sa">
         <div className="v">
-          {win === "a" ? <span className="crown" aria-label="önde">◆</span> : null}
+          {win === "a" ? (
+            <span className="crown" aria-label="önde">
+              ◆
+            </span>
+          ) : null}
           {show(va, m, daily)}
         </div>
         <div className="bar-track a">
@@ -529,13 +738,23 @@ function SpecRow({
       <td className="mid" title={m.hint}>
         <div className="k">{m.label}</div>
         <div className="d">
-          {skip ? "örneklem az" : win === "tie" ? "başa baş" : delta ? `A, B'ye göre ${delta}` : ""}
+          {skip
+            ? "örneklem az"
+            : win === "tie"
+              ? "başa baş"
+              : delta
+                ? `A, B'ye göre ${delta}`
+                : ""}
         </div>
       </td>
       <td className="sb">
         <div className="v">
           {show(vb, m, daily)}
-          {win === "b" ? <span className="crown" aria-label="önde">◆</span> : null}
+          {win === "b" ? (
+            <span className="crown" aria-label="önde">
+              ◆
+            </span>
+          ) : null}
         </div>
         <div className="bar-track b">
           <span style={{ width: `${wb}%` }} />
@@ -545,7 +764,15 @@ function SpecRow({
   );
 }
 
-function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
+function Chip({
+  on,
+  onClick,
+  children,
+}: {
+  on: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <button className="chip" role="radio" aria-checked={on} onClick={onClick}>
       {children}
@@ -592,7 +819,13 @@ function RangeInput({
         value={first}
         max={max}
         aria-label={`${label} başlangıç`}
-        onChange={(e) => e.target.value && onChange([e.target.value, e.target.value > last ? e.target.value : last])}
+        onChange={(e) =>
+          e.target.value &&
+          onChange([
+            e.target.value,
+            e.target.value > last ? e.target.value : last,
+          ])
+        }
       />
       <span className="muted">–</span>
       <input

@@ -4243,3 +4243,107 @@ tr.muted td {
   font-size: 13px;
   color: var(--ink-2);
 }
+
+/* --- ciro köprüsü (Karşılaştır › iki dönem) --- */
+
+.bridge-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.bridge-k {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.bridge-v {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.bridge-delta {
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.bridge-delta span {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.bridge .pos {
+  color: var(--good-ink);
+}
+
+.bridge .neg {
+  color: var(--critical-ink);
+}
+
+.bridge-headline {
+  margin: 12px 0 16px;
+  font-size: 15px;
+}
+
+.bridge-table th.effect,
+.bridge-table td.effect {
+  width: 36%;
+  min-width: 160px;
+}
+
+.bridge-bar {
+  position: relative;
+  height: 22px;
+  background: linear-gradient(var(--grid), var(--grid)) center / 1px 100% no-repeat;
+}
+
+.bridge-bar span {
+  position: absolute;
+  top: 5px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.bridge-bar span.pos {
+  background: var(--good);
+}
+
+.bridge-bar span.neg {
+  background: var(--critical);
+}
+
+.bridge-bar b {
+  position: absolute;
+  top: 2px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bridge-bar b.neg {
+  left: calc(50% + 6px);
+}
+
+.bridge-bar b.pos {
+  right: calc(50% + 6px);
+}
+
+.bridge-sub {
+  font-size: 13px;
+  margin: 16px 0 8px;
+  color: var(--ink-2);
+}
+
+.bridge .board {
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  .bridge-table th.effect,
+  .bridge-table td.effect {
+    min-width: 120px;
+  }
+}
