@@ -38,7 +38,7 @@ from pusula.db.models import (
     Money,
     SnapshotSection,
 )
-from pusula.finance import analytics, sheet, store, views, weekly
+from pusula.finance import analytics, payroll, sheet, store, views, weekly
 from pusula.finance.fx import load_fx
 from pusula.finance.snapshot import (
     SECTION_BY_KEY,
@@ -791,6 +791,51 @@ def patch_decision(decision_id: int, payload: dict[str, Any] = Body(...)) -> Any
 @router.delete("/decisions/{decision_id}")
 def delete_decision(decision_id: int) -> Any:
     return _delete("fin_decisions", decision_id)
+
+
+# --- personel maliyeti -----------------------------------------------------------------
+
+
+@router.get("/payroll")
+def payroll_screen(company: str = views.ALL) -> Any:
+    with connect() as conn:
+        payroll.ensure_schema(conn)
+        companies = store.load_companies(conn)
+        lines = payroll.load_payroll(conn)
+        fx = load_fx(conn, _now().date())
+    view = payroll.payroll_view(lines, fx, _scope(company, companies))
+    latest = fx.latest_date()
+    return jsonable_encoder(
+        {
+            **view,
+            "fx_date": latest,
+            "fx": {k: float(v) for k, v in fx.latest_rates().items()},
+            "missing_fx": sorted(fx.missing),
+        }
+    )
+
+
+def _payroll_ready() -> None:
+    with connect() as conn:
+        payroll.ensure_schema(conn)
+
+
+@router.post("/payroll")
+def create_payroll(payload: dict[str, Any] = Body(...)) -> Any:
+    _payroll_ready()
+    return _create("fin_payroll", payroll.FinPayroll, payload)
+
+
+@router.patch("/payroll/{line_id}")
+def patch_payroll(line_id: int, payload: dict[str, Any] = Body(...)) -> Any:
+    _payroll_ready()
+    return _patch("fin_payroll", payroll.FinPayroll, line_id, payload)
+
+
+@router.delete("/payroll/{line_id}")
+def delete_payroll(line_id: int) -> Any:
+    _payroll_ready()
+    return _delete("fin_payroll", line_id)
 
 
 # --- yazma: cüzdan ve vergi senaryosu -------------------------------------------------

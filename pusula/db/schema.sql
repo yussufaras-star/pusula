@@ -968,6 +968,28 @@ CREATE TABLE IF NOT EXISTS fin_tax_settings (
 -- Geçiş: ilk sürümün oran senaryoları (varlık üzerinden) kaldırıldı.
 DROP TABLE IF EXISTS fin_tax_scenarios;
 
+-- Personel maliyeti: kişi başına ödeme kanalı (aylık). Hesap pusula/finance/payroll.py.
+-- bordro yalnız tr (AŞ) / gmbh; LLC, freelancer ve Bağ-Kur gibi kalemler sozlesme.
+CREATE TABLE IF NOT EXISTS fin_payroll (
+    id          bigserial PRIMARY KEY,
+    person      text NOT NULL CHECK (length(person) BETWEEN 1 AND 120),
+    unit        text NOT NULL DEFAULT '',
+    c_level     boolean NOT NULL DEFAULT false,
+    start_date  date,
+    company_id  text NOT NULL REFERENCES fin_companies (id),
+    kind        text NOT NULL CHECK (kind IN ('bordro', 'sozlesme')),
+    currency    text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    amount      numeric(18, 2) NOT NULL CHECK (amount >= 0),
+    basis       text NOT NULL DEFAULT 'net' CHECK (basis IN ('net', 'brut')),
+    meal        numeric(18, 2) NOT NULL DEFAULT 0 CHECK (meal >= 0),
+    label       text,
+    active      boolean NOT NULL DEFAULT true,
+    notes       text,
+    sort        integer NOT NULL DEFAULT 0,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    CHECK (kind = 'sozlesme' OR company_id IN ('tr', 'gmbh'))
+);
+
 -- Geçiş: Wise'ta iptal edilen giden transferin iade bacağı ayrı kimlik alır
 -- (referans + ':iade'); eskiden çıkış bacağı aynı referansa takılıp kayboluyordu.
 -- Yeniden senkron eksik çıkış bacaklarını ekler.
@@ -1020,7 +1042,7 @@ BEGIN
         'fin_companies', 'fin_accounts', 'fin_categories', 'fin_transactions', 'fin_fx_rates',
         'fin_planned_items', 'fin_snapshots', 'fin_snapshot_lines', 'fin_decisions',
         'fin_category_rules', 'fin_wallets', 'fin_tax_settings', 'fin_provider_tokens',
-        'fin_receivables'
+        'fin_receivables', 'fin_payroll'
     ]
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);

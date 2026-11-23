@@ -4347,3 +4347,24 @@ tr.muted td {
     min-width: 120px;
   }
 }
+
+/* Personel maliyeti */
+.pay-name {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pay-name:hover b {
+  text-decoration: underline;
+}
+.fin-table tr.pay-total td {
+  border-top: 2px solid var(--border);
+}
+.fin-table tr.pay-sub td {
+  background: var(--surface-2);
+  font-size: 13px;
+}
