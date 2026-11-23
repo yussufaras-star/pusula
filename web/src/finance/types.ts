@@ -428,3 +428,64 @@ export interface RecurringPayload extends FxMeta {
   groups: { id: string; name: string; monthly_usd: number; count: number }[];
   items: RecurringItem[];
 }
+
+// --- personel maliyeti (/api/finance/payroll) ---
+
+export type PayKind = "bordro" | "sozlesme";
+export type PayBasis = "net" | "brut";
+
+export interface PayrollLine {
+  id: number;
+  person: string;
+  unit: string;
+  c_level: boolean;
+  start_date: string | null;
+  company_id: CompanyId;
+  kind: PayKind;
+  currency: string;
+  amount: number;
+  basis: PayBasis;
+  meal: number;
+  label: string | null;
+  active: boolean;
+  notes: string | null;
+  sort: number;
+  // aylık, satırın para biriminde
+  net: number;
+  brut: number;
+  employee: number;
+  employer: number;
+  benefits: number;
+  severance: number;
+  total: number;
+  total_usd: number;
+}
+
+interface PayrollParts {
+  net_usd: number;
+  employee_usd: number;
+  employer_usd: number;
+  benefits_usd: number;
+  severance_usd: number;
+  total_usd: number;
+}
+
+export interface PayrollPerson extends PayrollParts {
+  person: string;
+  unit: string;
+  c_level: boolean;
+  start_date: string | null;
+  lines: PayrollLine[];
+}
+
+export interface PayrollPayload extends FxMeta {
+  people: PayrollPerson[];
+  companies: (PayrollParts & { company_id: CompanyId; headcount: number })[];
+  totals: PayrollParts;
+  headcount: number;
+  staff_headcount: number;
+  per_head_monthly_usd: number | null;
+  burden_ratio: number | null;
+  inactive: Omit<PayrollLine, "net" | "brut" | "employee" | "employer" | "benefits" | "severance" | "total" | "total_usd">[];
+  params: { tr_sgk_isveren: number; tr_kidem_tavan: number; tr_asgari_brut: number; de_umlagen: number };
+}

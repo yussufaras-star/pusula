@@ -23,6 +23,7 @@ type FinanceRoute =
   | "finans/genel"
   | "finans/akis"
   | "finans/duzenli"
+  | "finans/personel"
   | "finans/projeksiyon"
   | "finans/sirketler-arasi"
   | "finans/bilanco"
@@ -54,6 +55,7 @@ const NAV: Record<Area, NavItem[]> = {
     { route: "finans/ozet", label: "Yönetici özeti" },
     { route: "finans/akis", label: "Nakit akışı" },
     { route: "finans/duzenli", label: "Düzenli" },
+    { route: "finans/personel", label: "Personel" },
     { route: "finans/projeksiyon", label: "Projeksiyon" },
     { route: "finans/sirketler-arasi", label: "Şirketler arası" },
     { route: "finans/bilanco", label: "Bilanço" },

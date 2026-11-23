@@ -32,6 +32,7 @@ from pusula.db.models import (
     FinTransaction,
     FinWallet,
 )
+from pusula.finance import payroll
 from pusula.finance.analytics import OWN_CATEGORY, OWN_MATCH_DAYS, auto_intercompany, categorize, own_transfers
 from pusula.finance.providers.rexven import WalletTotal
 from pusula.finance.statement import Parsed, bank_counterparty
@@ -442,12 +443,13 @@ def load_line(conn: psycopg.Connection, line_id: int) -> FinSnapshotLine | None:
 
 
 def load_row(conn: psycopg.Connection, table: str, row_id: int) -> dict | None:
-    """Planlı kalem / karar / hesap: tek satır (birleştirip doğrulamak için)."""
+    """Planlı kalem / karar / hesap / bordro satırı: tek satır (birleştirip doğrulamak için)."""
     columns = {
         "fin_planned_items": PLANNED_COLUMNS,
         "fin_decisions": DECISION_COLUMNS,
         "fin_accounts": ACCOUNT_COLUMNS,
         "fin_wallets": WALLET_COLUMNS,
+        "fin_payroll": payroll.COLUMNS,
     }[table]
     rows = _rows(conn, f"SELECT {columns} FROM {table} WHERE id = %s", (row_id,))
     return rows[0] if rows else None
@@ -560,9 +562,10 @@ WRITABLE: dict[str, frozenset[str]] = {
     "fin_wallets": frozenset(
         {"company_id", "kind", "name", "balance", "currency", "as_of", "notes", "active", "sort"}
     ),
+    "fin_payroll": payroll.WRITABLE,
 }
 DELETABLE = frozenset(
-    {"fin_planned_items", "fin_decisions", "fin_snapshots", "fin_snapshot_lines", "fin_wallets"}
+    {"fin_planned_items", "fin_decisions", "fin_snapshots", "fin_snapshot_lines", "fin_wallets", "fin_payroll"}
 )
 
 

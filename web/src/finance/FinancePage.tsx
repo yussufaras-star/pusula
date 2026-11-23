@@ -8,18 +8,20 @@ import { FlowsTab } from "./FlowsTab";
 import { addDays, day, istanbulToday, SCOPES } from "./format";
 import { IntercompanyTab } from "./IntercompanyTab";
 import { OverviewTab } from "./OverviewTab";
+import { PayrollTab } from "./PayrollTab";
 import { ProjectionTab } from "./ProjectionTab";
 import { RecurringTab } from "./RecurringTab";
 import { TaxTab } from "./TaxTab";
 import type { Meta, Scope, SyncReport } from "./types";
 import { Loading, type TabProps } from "./ui";
 
-export type FinanceTab = "genel" | "akis" | "projeksiyon" | "sirketler-arasi" | "duzenli" | "bilanco" | "vergi" | "kararlar" | "hesaplar";
+export type FinanceTab = "genel" | "akis" | "projeksiyon" | "sirketler-arasi" | "duzenli" | "personel" | "bilanco" | "vergi" | "kararlar" | "hesaplar";
 
 const TITLES: Record<FinanceTab, [string, string]> = {
   genel: ["Genel bakış", "Konsolide nakit, şirketler ve uyarılar"],
   akis: ["Nakit akışı", "Aylık giriş ve çıkış, kategoriler, hareketler"],
   duzenli: ["Düzenli ödemeler", "Abonelikler, üreticiler, ortak ve yüklenici ödemeleri; aylık ve yıllık maliyet"],
+  personel: ["Personel maliyeti", "Maaş yükü: net, vergi ve sigorta, işveren payı, yan hak; kişi başı maliyet"],
   projeksiyon: ["Projeksiyon", "Planlı alacak ve borçlarla kasa seyri"],
   "sirketler-arasi": ["Şirketler arası", "Transferler ve net pozisyon"],
   bilanco: ["Haftalık bilanço", "Şirket başına aktif ve pasif"],
@@ -144,6 +146,8 @@ export function FinancePage({ tab }: { tab: FinanceTab }) {
         <FlowsTab {...props} meta={meta.data} />
       ) : tab === "duzenli" ? (
         <RecurringTab {...props} meta={meta.data} />
+      ) : tab === "personel" ? (
+        <PayrollTab {...props} meta={meta.data} />
       ) : tab === "projeksiyon" ? (
         <ProjectionTab {...props} meta={meta.data} />
       ) : tab === "sirketler-arasi" ? (

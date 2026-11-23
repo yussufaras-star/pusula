@@ -699,6 +699,39 @@ export function mockFinance(method: string, url: string): unknown {
     };
   }
 
+  if (path === "/api/finance/payroll") {
+    // Örnek kişiler; gerçek maaş verisi yalnız veritabanında.
+    const line = (id: number, person: string, unit: string, company_id: "llc" | "gmbh" | "tr", kind: "bordro" | "sozlesme", currency: string, amount: number, net: number, brut: number, employer: number, benefits: number, severance: number, rate: number, extra: Partial<{ c_level: boolean; label: string; basis: "net" | "brut" }> = {}) => {
+      const total = brut + employer + benefits + severance;
+      return { id, person, unit, c_level: !!extra.c_level, start_date: "2024-05-13", company_id, kind, currency, amount, basis: extra.basis ?? "net", meal: benefits, label: extra.label ?? null, active: true, notes: null, sort: 0, net, brut, employee: r2(brut - net), employer, benefits, severance, total: r2(total), total_usd: r2(total * rate) };
+    };
+    const TRY = 0.02, EUR = 1.12;
+    const people = [
+      [line(1, "Örnek Kurucu", "C-Level", "tr", "bordro", "TRY", 28075.5, 28075.5, 33030, 7184, 7260, 2753, TRY, { c_level: true }), line(2, "Örnek Kurucu", "C-Level", "llc", "sozlesme", "USD", 4184, 4184, 4184, 0, 0, 0, 1, { c_level: true })],
+      [line(3, "Örnek Yazılımcı", "Yazılım", "tr", "bordro", "TRY", 102740, 102740, 153800, 33452, 7260, 6144, TRY)],
+      [line(4, "Örnek Mentor", "Mentor-B", "llc", "sozlesme", "TRY", 84000, 84000, 84000, 0, 0, 0, TRY)],
+      [line(5, "Örnek Destek", "Support", "gmbh", "bordro", "EUR", 4100, 2654, 4100, 867, 0, 0, EUR, { basis: "brut" })],
+    ].map((lines) => {
+      const sum = (k: "net" | "employee" | "employer" | "benefits" | "severance" | "total") => r2(lines.reduce((s, l) => s + l[k] * (l.total_usd / l.total), 0));
+      return { person: lines[0].person, unit: lines[0].unit, c_level: lines[0].c_level, start_date: lines[0].start_date, lines, net_usd: sum("net"), employee_usd: sum("employee"), employer_usd: sum("employer"), benefits_usd: sum("benefits"), severance_usd: sum("severance"), total_usd: sum("total") };
+    });
+    const keys = ["net_usd", "employee_usd", "employer_usd", "benefits_usd", "severance_usd", "total_usd"] as const;
+    const totalOf = (rows: typeof people) => Object.fromEntries(keys.map((k) => [k, r2(rows.reduce((s, p) => s + p[k], 0))])) as Record<(typeof keys)[number], number>;
+    const totals = totalOf(people);
+    const staff = people.filter((p) => !p.c_level);
+    const byCo = (["tr", "llc", "gmbh"] as const).map((company_id) => {
+      const lines = people.flatMap((p) => p.lines).filter((l) => l.company_id === company_id);
+      const part = (k: "net" | "employee" | "employer" | "benefits" | "severance" | "total") => r2(lines.reduce((s, l) => s + l[k] * (l.total_usd / l.total), 0));
+      return { company_id, headcount: new Set(lines.map((l) => l.person)).size, net_usd: part("net"), employee_usd: part("employee"), employer_usd: part("employer"), benefits_usd: part("benefits"), severance_usd: part("severance"), total_usd: part("total") };
+    });
+    return {
+      people, companies: byCo, totals, headcount: people.length, staff_headcount: staff.length,
+      per_head_monthly_usd: r2(staff.reduce((s, p) => s + p.total_usd, 0) / staff.length), burden_ratio: r2(totals.total_usd / totals.net_usd),
+      inactive: [], params: { tr_sgk_isveren: 0.2175, tr_kidem_tavan: 73729.87, tr_asgari_brut: 33030, de_umlagen: 0.02 },
+      fx_date: TODAY, fx: { TRY, EUR }, missing_fx: [],
+    };
+  }
+
   if (path === "/api/finance/decisions") {
     const visible = DECISIONS.filter((d) => !d.company_id || ids.includes(d.company_id)).map((d) => ({
       ...d,
