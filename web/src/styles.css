@@ -4323,6 +4323,19 @@ tr.muted td {
   color: var(--ink);
 }
 
+.bridge-group + .bridge-group {
+  margin-top: 14px;
+}
+
+.bridge-group h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 .bridge-findings {
   list-style: none;
   margin: 0;

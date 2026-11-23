@@ -59,12 +59,37 @@ interface Bridge {
   fark_orani: number | null;
   ayristi: boolean;
   ozet: string;
-  tespitler: { ton: "neg" | "pos"; metin: string }[];
+  tespitler: { grup: Group; ton: "neg" | "pos"; metin: string }[];
+  sonar: Sonar | null;
   oneriler: string[];
   factors: Factor[];
   movers: Mover[];
   paketler: Mix[];
   kalite: Quality[];
+}
+
+type Group = "ciro" | "lead" | "sonar" | "kisi";
+
+const GROUPS: [Group, string][] = [
+  ["ciro", "Ciro adımları"],
+  ["lead", "Lead ve görüşme"],
+  ["sonar", "SONAR-41"],
+  ["kisi", "Temsilciler"],
+];
+
+interface Sonar {
+  ort_a: number | null;
+  ort_b: number | null;
+  n_a: number;
+  n_b: number;
+  gerileyen: {
+    kod: string;
+    ad: string;
+    a: number;
+    b: number;
+    n_a: number;
+    n_b: number;
+  }[];
 }
 
 function showFactor(v: number | null, kind: Factor["kind"]): string {
@@ -88,6 +113,17 @@ const tone = (v: number | null) =>
   v === null || Math.abs(v) < 1e-9 ? "" : v < 0 ? "neg" : "pos";
 const arrow = (v: number | null) =>
   v === null || Math.abs(v) < 1e-9 ? "" : v < 0 ? "▼ " : "▲ ";
+
+const scoreDiff = (a: number | null, b: number | null) =>
+  a === null || b === null ? null : a - b;
+const score = (v: number | null) =>
+  v === null ? "—" : v.toFixed(2).replace(".", ",");
+
+/** SONAR puan farkı: ▼ −0,35 puan. */
+function points(v: number | null): string {
+  if (v === null) return "—";
+  return `${arrow(v)}${v < 0 ? "−" : "+"}${score(Math.abs(v))} puan`;
+}
 
 /** Oransal değişim (−%33) ya da yüzde ölçüde puan farkı (−12 puan). */
 function change(v: number | null, points = false): string {
@@ -162,20 +198,31 @@ export function SalesBridge({
         <div className="bridge-cols">
           <div>
             <h3 className="bridge-sub">Tespitler</h3>
-            <ul className="bridge-findings">
-              {data.tespitler.map((t, i) => (
-                <li key={i} className={t.ton}>
-                  <span className="bridge-mark" aria-hidden>
-                    {t.ton === "neg" ? "▼" : "▲"}
-                  </span>
-                  {t.metin}
-                </li>
-              ))}
-            </ul>
+            {GROUPS.map(([grup, title]) => {
+              const items = data.tespitler.filter((t) => t.grup === grup);
+              if (!items.length) return null;
+              return (
+                <div key={grup} className="bridge-group">
+                  <h4>{title}</h4>
+                  <ul className="bridge-findings">
+                    {items.map((t, i) => (
+                      <li key={i} className={t.ton}>
+                        <span className="bridge-mark" aria-hidden>
+                          {t.ton === "neg" ? "▼" : "▲"}
+                        </span>
+                        {t.metin}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
           </div>
           {data.oneriler.length ? (
             <div className="bridge-advice">
-              <h3 className="bridge-sub">Satışları artırmak için</h3>
+              <h3 className="bridge-sub">
+                Ekip için: satışları artırmak için ne yapmalı?
+              </h3>
               <ol>
                 {data.oneriler.map((o, i) => (
                   <li key={i}>{o}</li>
@@ -288,7 +335,7 @@ export function SalesBridge({
           </>
         ) : null}
 
-        <h3 className="bridge-sub">Görüşme kalitesi</h3>
+        <h3 className="bridge-sub">Lead ve görüşme</h3>
         <div className="table-wrap">
           <table className="board">
             <thead>
@@ -323,6 +370,65 @@ export function SalesBridge({
           Ciro formülünde yer almaz; adımların arkasındaki görüşme davranışını
           gösterir.
         </p>
+
+        {data.sonar ? (
+          <>
+            <h3 className="bridge-sub">SONAR-41</h3>
+            <div className="table-wrap">
+              <table className="board">
+                <thead>
+                  <tr>
+                    <th>Davranış</th>
+                    <th className="num">{b.label}</th>
+                    <th className="num">{a.label}</th>
+                    <th className="num">Değişim</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    className={
+                      tone(scoreDiff(data.sonar.ort_a, data.sonar.ort_b)) ===
+                      "neg"
+                        ? "row-neg"
+                        : undefined
+                    }
+                  >
+                    <td>
+                      <b>Genel ortalama</b>{" "}
+                      <span className="muted">
+                        ({int(data.sonar.n_b)} → {int(data.sonar.n_a)} görüşme)
+                      </span>
+                    </td>
+                    <td className="num">{score(data.sonar.ort_b)}</td>
+                    <td className="num">{score(data.sonar.ort_a)}</td>
+                    <td
+                      className={`num ${tone(scoreDiff(data.sonar.ort_a, data.sonar.ort_b))}`}
+                    >
+                      {points(scoreDiff(data.sonar.ort_a, data.sonar.ort_b))}
+                    </td>
+                  </tr>
+                  {data.sonar.gerileyen.map((g) => (
+                    <tr key={g.kod} className="row-neg">
+                      <td>
+                        {g.ad} <span className="muted">({g.kod})</span>
+                      </td>
+                      <td className="num">{score(g.b)}</td>
+                      <td className="num">{score(g.a)}</td>
+                      <td className="num neg">{points(g.a - g.b)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="muted cmp-note">
+              5 üzerinden. Gerileme: iki dönemde de en az 10 puanlanmış an ve en
+              az 0,3 puan düşüş.
+              {data.sonar.gerileyen.length
+                ? ""
+                : " Bu dönemde belirgin gerileyen davranış yok."}
+            </p>
+          </>
+        ) : null}
 
         {data.movers.length ? (
           <>
