@@ -326,7 +326,7 @@ export function SalesBridge({
 
         {data.movers.length ? (
           <>
-            <h3 className="bridge-sub">En çok değişen temsilciler</h3>
+            <h3 className="bridge-sub">Temsilci bazında</h3>
             <div className="table-wrap">
               <table className="board">
                 <thead>
