@@ -4246,36 +4246,6 @@ tr.muted td {
 
 /* --- ciro köprüsü (Karşılaştır › iki dönem) --- */
 
-.bridge-top {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.bridge-k {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.bridge-v {
-  font-size: 22px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.bridge-delta {
-  font-size: 26px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.bridge-delta span {
-  font-size: 15px;
-  font-weight: 500;
-}
-
 .bridge .pos {
   color: var(--good-ink);
 }
@@ -4284,14 +4254,159 @@ tr.muted td {
   color: var(--critical-ink);
 }
 
-.bridge-headline {
-  margin: 12px 0 16px;
+.bridge-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 16px 18px;
+  border-radius: var(--radius);
+  border-left: 6px solid var(--grid);
+  background: var(--surface-2, rgba(127, 127, 127, 0.06));
+}
+
+.bridge-hero.neg {
+  background: var(--critical-wash);
+  border-left-color: var(--critical);
+}
+
+.bridge-hero.pos {
+  background: var(--good-wash);
+  border-left-color: var(--good);
+}
+
+.bridge-ozet {
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.bridge-hero.neg .bridge-ozet,
+.bridge-hero.neg .bridge-delta {
+  color: var(--critical-ink);
+}
+
+.bridge-hero.pos .bridge-ozet,
+.bridge-hero.pos .bridge-delta {
+  color: var(--good-ink);
+}
+
+.bridge-ozet-sub {
+  margin-top: 4px;
   font-size: 15px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.bridge-hero-side {
+  text-align: right;
+}
+
+.bridge-delta {
+  font-size: 30px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.bridge-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin: 8px 0 4px;
+}
+
+.bridge-sub {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 20px 0 10px;
+  color: var(--ink);
+}
+
+.bridge-findings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.bridge-findings li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border-left: 4px solid var(--grid);
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.bridge-findings li.neg {
+  background: var(--critical-wash);
+  border-left-color: var(--critical);
+}
+
+.bridge-findings li.pos {
+  background: var(--good-wash);
+  border-left-color: var(--good);
+}
+
+.bridge-findings .bridge-mark {
+  font-size: 13px;
+  line-height: 1.7;
+  flex: none;
+}
+
+.bridge-findings li.neg .bridge-mark {
+  color: var(--critical);
+}
+
+.bridge-findings li.pos .bridge-mark {
+  color: var(--good);
+}
+
+.bridge-advice {
+  padding: 4px 16px 12px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  align-self: start;
+}
+
+.bridge-advice ol {
+  margin: 0;
+  padding-left: 22px;
+  display: grid;
+  gap: 8px;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.bridge-advice li::marker {
+  font-weight: 800;
+  color: var(--accent);
+}
+
+.bridge .board {
+  width: 100%;
+  font-size: 14px;
+}
+
+.bridge .board tr.row-neg td {
+  background: var(--critical-wash);
+}
+
+.bridge .board td.neg,
+.bridge .board td.pos {
+  font-weight: 700;
 }
 
 .bridge-table th.effect,
 .bridge-table td.effect {
-  width: 36%;
+  width: 34%;
   min-width: 160px;
 }
 
@@ -4331,40 +4446,21 @@ tr.muted td {
   right: calc(50% + 6px);
 }
 
-.bridge-sub {
-  font-size: 13px;
-  margin: 16px 0 8px;
-  color: var(--ink-2);
-}
+@media (max-width: 760px) {
+  .bridge-cols {
+    grid-template-columns: 1fr;
+  }
 
-.bridge .board {
-  width: 100%;
-}
+  .bridge-hero-side {
+    text-align: left;
+  }
 
-@media (max-width: 640px) {
+  .bridge-ozet {
+    font-size: 24px;
+  }
+
   .bridge-table th.effect,
   .bridge-table td.effect {
     min-width: 120px;
   }
-}
-
-/* Personel maliyeti */
-.pay-name {
-  border: 0;
-  background: none;
-  padding: 0;
-  color: var(--ink);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.pay-name:hover b {
-  text-decoration: underline;
-}
-.fin-table tr.pay-total td {
-  border-top: 2px solid var(--border);
-}
-.fin-table tr.pay-sub td {
-  background: var(--surface-2);
-  font-size: 13px;
 }

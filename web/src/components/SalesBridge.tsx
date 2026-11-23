@@ -1,5 +1,6 @@
 import { usePolling } from "../api";
 import { duration, int, minutes, num, pct, tl, tlShort } from "../format";
+import { ShareButton } from "./ShareButton";
 
 interface Factor {
   key: string;
@@ -25,26 +26,6 @@ interface Mover {
   sure_b: number | null;
 }
 
-interface BridgeSide {
-  first: string;
-  last: string;
-  ciro: number;
-  satis: number;
-}
-
-interface Bridge {
-  a: BridgeSide;
-  b: BridgeSide;
-  fark: number;
-  fark_orani: number | null;
-  ayristi: boolean;
-  factors: Factor[];
-  movers: Mover[];
-  paketler: Mix[];
-  kalite: Quality[];
-  headline: string;
-}
-
 interface Quality {
   key: string;
   label: string;
@@ -52,21 +33,6 @@ interface Quality {
   a: number | null;
   b: number | null;
   degisim: number | null;
-}
-
-function showQuality(v: number | null, kind: Quality["kind"]): string {
-  if (v === null) return "—";
-  if (kind === "sure") return duration(v);
-  if (kind === "sure_toplam") return minutes(v / 60);
-  if (kind === "yuzde") return pct(v);
-  return int(v);
-}
-
-function qualityChange(q: Quality): string {
-  if (q.degisim === null) return "—";
-  const sign = q.degisim < 0 ? "−" : "+";
-  if (q.kind === "yuzde") return `${sign}${num(Math.abs(q.degisim))} puan`;
-  return `${sign}%${num(Math.abs(q.degisim * 100))}`;
 }
 
 interface Mix {
@@ -80,17 +46,26 @@ interface Mix {
   fark: number;
 }
 
-const shortDay = new Intl.DateTimeFormat("tr-TR", {
-  day: "numeric",
-  month: "short",
-  timeZone: "UTC",
-});
-const span = (s: BridgeSide) => {
-  const f = shortDay.format(new Date(`${s.first}T12:00:00Z`));
-  return s.first === s.last
-    ? f
-    : `${f} – ${shortDay.format(new Date(`${s.last}T12:00:00Z`))}`;
-};
+interface BridgeSide {
+  label: string;
+  ciro: number;
+  satis: number;
+}
+
+interface Bridge {
+  a: BridgeSide;
+  b: BridgeSide;
+  fark: number;
+  fark_orani: number | null;
+  ayristi: boolean;
+  ozet: string;
+  tespitler: { ton: "neg" | "pos"; metin: string }[];
+  oneriler: string[];
+  factors: Factor[];
+  movers: Mover[];
+  paketler: Mix[];
+  kalite: Quality[];
+}
 
 function showFactor(v: number | null, kind: Factor["kind"]): string {
   if (v === null) return "—";
@@ -100,12 +75,38 @@ function showFactor(v: number | null, kind: Factor["kind"]): string {
   return num(v);
 }
 
+function showQuality(v: number | null, kind: Quality["kind"]): string {
+  if (v === null) return "—";
+  if (kind === "sure") return duration(v);
+  if (kind === "sure_toplam") return minutes(v / 60);
+  if (kind === "yuzde") return pct(v);
+  return int(v);
+}
+
 const signed = (v: number) => `${v < 0 ? "−" : "+"}${tlShort(Math.abs(v))}`;
 const tone = (v: number | null) =>
-  v === null || Math.abs(v) < 1 ? "" : v < 0 ? "neg" : "pos";
+  v === null || Math.abs(v) < 1e-9 ? "" : v < 0 ? "neg" : "pos";
+const arrow = (v: number | null) =>
+  v === null || Math.abs(v) < 1e-9 ? "" : v < 0 ? "▼ " : "▲ ";
 
-/** Dönem karşılaştırmasında ciro farkının huni adımlarına ayrıştırılması. */
-export function SalesBridge({ query }: { query: string }) {
+/** Oransal değişim (−%33) ya da yüzde ölçüde puan farkı (−12 puan). */
+function change(v: number | null, points = false): string {
+  if (v === null) return "—";
+  const sign = v < 0 ? "−" : "+";
+  return points
+    ? `${sign}${num(Math.abs(v))} puan`
+    : `${sign}%${num(Math.abs(v * 100))}`;
+}
+
+/** Dönem karşılaştırmasında ciro farkı: tespitler, öneriler ve huni ayrıştırması.
+ * Sütunlar eski → yeni (B → A) sırada, dönem adlarıyla. */
+export function SalesBridge({
+  query,
+  isAdmin,
+}: {
+  query: string;
+  isAdmin: boolean;
+}) {
   const { data, error } = usePolling<Bridge>(`/api/sales-bridge?${query}`, 0);
 
   if (error)
@@ -114,52 +115,84 @@ export function SalesBridge({ query }: { query: string }) {
         Ciro ayrıştırması alınamadı: {error.message}
       </div>
     );
-  if (!data) return <div className="skeleton" style={{ height: 220 }} />;
+  if (!data) return <div className="skeleton" style={{ height: 320 }} />;
 
+  const { a, b } = data;
   const maxEffect = Math.max(
     1,
     ...data.factors.map((f) => Math.abs(f.etki ?? 0)),
   );
+  const heroTone = tone(data.fark);
+
   return (
-    <section className="card bridge">
+    <section className="card bridge" data-share>
       <div className="card-head">
-        <h2>Ciro farkının kaynağı</h2>
-        <span className="hint">
-          A {span(data.a)} · B {span(data.b)} · tamamlanmış günler
-        </span>
+        <div>
+          <h2>Ciro farkının kaynağı</h2>
+          <span className="hint">
+            {b.label} → {a.label} · tamamlanmış günler
+          </span>
+        </div>
+        {isAdmin ? (
+          <ShareButton
+            kart="ciro-kopru"
+            baslik={`Ciro farkı · ${b.label} → ${a.label}`}
+          />
+        ) : null}
       </div>
       <div className="card-body">
-        <div className="bridge-top">
+        <div className={`bridge-hero ${heroTone}`}>
           <div>
-            <div className="bridge-k">Ciro</div>
-            <div className="bridge-v">
-              {tl(data.a.ciro)}{" "}
-              <span className="muted">↔ {tl(data.b.ciro)}</span>
+            <div className="bridge-ozet">
+              {arrow(data.fark)}
+              {data.ozet}
             </div>
-            <div className="muted">
-              {int(data.a.satis)} satış ↔ {int(data.b.satis)} satış
+            <div className="bridge-ozet-sub">
+              {b.label}: <b>{tl(b.ciro)}</b> → {a.label}: <b>{tl(a.ciro)}</b>
             </div>
           </div>
-          <div className={`bridge-delta ${tone(data.fark)}`}>
-            {signed(data.fark)}
-            {data.fark_orani !== null ? (
-              <span>
-                {" "}
-                ({data.fark_orani < 0 ? "−" : "+"}%
-                {int(Math.abs(data.fark_orani * 100))})
-              </span>
-            ) : null}
+          <div className="bridge-hero-side">
+            <div className="bridge-delta">{signed(data.fark)}</div>
+            <div className="bridge-ozet-sub">
+              {int(b.satis)} → {int(a.satis)} satış
+            </div>
           </div>
         </div>
-        <p className="bridge-headline">{data.headline}</p>
 
+        <div className="bridge-cols">
+          <div>
+            <h3 className="bridge-sub">Tespitler</h3>
+            <ul className="bridge-findings">
+              {data.tespitler.map((t, i) => (
+                <li key={i} className={t.ton}>
+                  <span className="bridge-mark" aria-hidden>
+                    {t.ton === "neg" ? "▼" : "▲"}
+                  </span>
+                  {t.metin}
+                </li>
+              ))}
+            </ul>
+          </div>
+          {data.oneriler.length ? (
+            <div className="bridge-advice">
+              <h3 className="bridge-sub">Satışları artırmak için</h3>
+              <ol>
+                {data.oneriler.map((o, i) => (
+                  <li key={i}>{o}</li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
+        </div>
+
+        <h3 className="bridge-sub">Ciroyu oluşturan adımlar</h3>
         <div className="table-wrap">
           <table className="board bridge-table">
             <thead>
               <tr>
                 <th>Adım</th>
-                <th className="num">A</th>
-                <th className="num">B</th>
+                <th className="num">{b.label}</th>
+                <th className="num">{a.label}</th>
                 <th className="num">Değişim</th>
                 <th className="effect">Ciroya etkisi</th>
               </tr>
@@ -169,14 +202,18 @@ export function SalesBridge({ query }: { query: string }) {
                 const w =
                   f.etki === null ? 0 : (Math.abs(f.etki) / maxEffect) * 50;
                 return (
-                  <tr key={f.key}>
+                  <tr
+                    key={f.key}
+                    className={
+                      f.etki !== null && f.etki < 0 ? "row-neg" : undefined
+                    }
+                  >
                     <td>{f.label}</td>
-                    <td className="num">{showFactor(f.a, f.kind)}</td>
                     <td className="num">{showFactor(f.b, f.kind)}</td>
+                    <td className="num">{showFactor(f.a, f.kind)}</td>
                     <td className={`num ${tone(f.degisim)}`}>
-                      {f.degisim === null
-                        ? "—"
-                        : `${f.degisim < 0 ? "−" : "+"}%${num(Math.abs(f.degisim * 100))}`}
+                      {arrow(f.degisim)}
+                      {change(f.degisim)}
                     </td>
                     <td className="effect">
                       {f.etki === null ? (
@@ -217,26 +254,30 @@ export function SalesBridge({ query }: { query: string }) {
                 <thead>
                   <tr>
                     <th>Paket</th>
-                    <th className="num">Adet A ↔ B</th>
-                    <th className="num">Ort. tutar A ↔ B</th>
-                    <th className="num">Ciro A</th>
-                    <th className="num">Ciro B</th>
+                    <th className="num">Adet</th>
+                    <th className="num">Ort. tutar</th>
+                    <th className="num">Ciro {b.label}</th>
+                    <th className="num">Ciro {a.label}</th>
                     <th className="num">Fark</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.paketler.map((p) => (
-                    <tr key={p.paket}>
+                    <tr
+                      key={p.paket}
+                      className={p.fark < 0 ? "row-neg" : undefined}
+                    >
                       <td>{p.paket}</td>
                       <td className="num">
-                        {int(p.adet_a)} ↔ {int(p.adet_b)}
+                        {int(p.adet_b)} → <b>{int(p.adet_a)}</b>
                       </td>
                       <td className="num">
-                        {tlShort(p.ort_a)} ↔ {tlShort(p.ort_b)}
+                        {tlShort(p.ort_b)} → {tlShort(p.ort_a)}
                       </td>
-                      <td className="num">{tl(p.ciro_a)}</td>
                       <td className="num">{tl(p.ciro_b)}</td>
+                      <td className="num">{tl(p.ciro_a)}</td>
                       <td className={`num ${tone(p.fark)}`}>
+                        {arrow(p.fark)}
                         {signed(p.fark)}
                       </td>
                     </tr>
@@ -253,19 +294,25 @@ export function SalesBridge({ query }: { query: string }) {
             <thead>
               <tr>
                 <th>Ölçü</th>
-                <th className="num">A</th>
-                <th className="num">B</th>
+                <th className="num">{b.label}</th>
+                <th className="num">{a.label}</th>
                 <th className="num">Değişim</th>
               </tr>
             </thead>
             <tbody>
               {data.kalite.map((q) => (
-                <tr key={q.key}>
+                <tr
+                  key={q.key}
+                  className={
+                    q.degisim !== null && q.degisim < 0 ? "row-neg" : undefined
+                  }
+                >
                   <td>{q.label}</td>
-                  <td className="num">{showQuality(q.a, q.kind)}</td>
                   <td className="num">{showQuality(q.b, q.kind)}</td>
+                  <td className="num">{showQuality(q.a, q.kind)}</td>
                   <td className={`num ${tone(q.degisim)}`}>
-                    {qualityChange(q)}
+                    {arrow(q.degisim)}
+                    {change(q.degisim, q.kind === "yuzde")}
                   </td>
                 </tr>
               ))}
@@ -273,7 +320,7 @@ export function SalesBridge({ query }: { query: string }) {
           </table>
         </div>
         <p className="muted cmp-note">
-          Ciro formülünde yer almaz; çarpanların arkasındaki görüşme davranışını
+          Ciro formülünde yer almaz; adımların arkasındaki görüşme davranışını
           gösterir.
         </p>
 
@@ -285,32 +332,36 @@ export function SalesBridge({ query }: { query: string }) {
                 <thead>
                   <tr>
                     <th>Temsilci</th>
-                    <th className="num">A ciro</th>
-                    <th className="num">B ciro</th>
+                    <th className="num">Ciro {b.label}</th>
+                    <th className="num">Ciro {a.label}</th>
                     <th className="num">Fark</th>
-                    <th className="num">Satış A ↔ B</th>
-                    <th className="num">Dönüş A ↔ B</th>
-                    <th className="num">Ort. süre A ↔ B</th>
+                    <th className="num">Satış</th>
+                    <th className="num">Satışa dönüş</th>
+                    <th className="num">Ort. süre</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.movers.map((m) => (
-                    <tr key={m.rep_id}>
+                    <tr
+                      key={m.rep_id}
+                      className={m.fark < 0 ? "row-neg" : undefined}
+                    >
                       <td>{m.name}</td>
-                      <td className="num">{tl(m.ciro_a)}</td>
                       <td className="num">{tl(m.ciro_b)}</td>
+                      <td className="num">{tl(m.ciro_a)}</td>
                       <td className={`num ${tone(m.fark)}`}>
+                        {arrow(m.fark)}
                         {signed(m.fark)}
                       </td>
                       <td className="num">
-                        {int(m.satis_a)} ↔ {int(m.satis_b)}
+                        {int(m.satis_b)} → <b>{int(m.satis_a)}</b>
                       </td>
                       <td className="num">
-                        {showFactor(m.donusum_a, "oran")} ↔{" "}
-                        {showFactor(m.donusum_b, "oran")}
+                        {showFactor(m.donusum_b, "oran")} →{" "}
+                        {showFactor(m.donusum_a, "oran")}
                       </td>
                       <td className="num">
-                        {duration(m.sure_a)} ↔ {duration(m.sure_b)}
+                        {duration(m.sure_b)} → {duration(m.sure_a)}
                       </td>
                     </tr>
                   ))}
