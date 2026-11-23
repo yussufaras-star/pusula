@@ -68,6 +68,7 @@ from pusula.web.auth import (
     passwords,
     require_cron,
 )
+from pusula.sales_bridge import aligned_ranges, build_bridge, mix_rows, won_by_package
 from pusula.sales_report import REPORT_START, SOURCE_DIMS, build_sales_report, source_yield
 from pusula.web.ceo import router as ceo_router
 from pusula.web.conversations import router as conversations_router
@@ -700,12 +701,73 @@ def sales_report(
     # Anahtar son senkrona bağlı: "Verileri güncelle" ya da saatlik çekimden sonra
     # her Vercel örneğinde rapor yeniden kurulur (cache.clear yalnız kendi örneğini siler).
     as_of = data_as_of()
-    payload = cache.cached(
+    payload = sales_payload(first, last, now, as_of)
+    return {**scope_report(payload, user), "data_as_of": as_of}
+
+
+def sales_payload(first: date, last: date, now: datetime, as_of: Any) -> Any:
+    """Raporlar yükü; Raporlar ve ciro köprüsü aynı önbelleği paylaşır."""
+    today = now.date()
+    return cache.cached(
         ("sales-report", first.isoformat(), last.isoformat(), today.isoformat(), as_of),
         REPORT_TTL if last >= today else HISTORY_TTL,
         lambda: jsonable_encoder(build_sales_report(first, last, now)),
     )
-    return {**scope_report(payload, user), "data_as_of": as_of}
+
+
+@app.get("/api/sales-bridge")
+def sales_bridge(
+    a_from: str,
+    a_to: str,
+    b_from: str,
+    b_to: str,
+    subject: str = TEAM,
+    align: bool = True,
+    user: AuthUser = Depends(current_user),
+) -> Any:
+    """Ciro farkının kaynağı: iki dönem huni çarpanlarına ayrıştırılır."""
+    require_database()
+    now = _now()
+    today = now.date()
+    names = {rep.rep_id: rep.full_name for rep in load_reps()}
+    subject = compare_subject(subject, user, names)
+    sides = [compare_side(f, t, subject, today) for f, t in ((a_from, a_to), (b_from, b_to))]
+    a, b = aligned_ranges(
+        (max(sides[0].first, REPORT_START), sides[0].last),
+        (max(sides[1].first, REPORT_START), sides[1].last),
+        today,
+        align=align,
+    )
+    if a[1] < a[0] or b[1] < b[0]:
+        raise HTTPException(status_code=400, detail="Dönemde tamamlanmış gün yok")
+    as_of = data_as_of()
+    pa, pb = (sales_payload(first, last, now, as_of) for first, last in (a, b))
+    if subject in (TEAM, AVG):
+        rows = (pa["team"], pb["team"])
+    else:
+        rows = tuple(
+            next((r for r in p["reps"] if r["rep_id"] == subject), {"work_days": p["work_days"]})
+            for p in (pa, pb)
+        )
+    show_reps = user.role == "admin" and subject in (TEAM, AVG)
+    owners = list(names) if subject in (TEAM, AVG) else [subject]
+
+    def build() -> Any:
+        mix = mix_rows(won_by_package(*a, owners), won_by_package(*b, owners))
+        return jsonable_encoder(
+            build_bridge(
+                a,
+                b,
+                *rows,
+                a_reps=pa["reps"] if show_reps else (),
+                b_reps=pb["reps"] if show_reps else (),
+                mix=mix,
+            )
+        )
+
+    key = ("sales-bridge", a, b, subject, show_reps, today.isoformat(), as_of)
+    payload = cache.cached(key, REPORT_TTL if a[1] >= today or b[1] >= today else HISTORY_TTL, build)
+    return {**payload, "data_as_of": as_of}
 
 
 @app.get("/api/source-yield")
