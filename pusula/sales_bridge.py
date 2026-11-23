@@ -14,7 +14,7 @@ dönem aynı gün sayısına kesilir (1-22 Kasım ↔ 1-22 Ekim).
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import date, timedelta
 from typing import Any
 
@@ -163,34 +163,147 @@ def won_by_package(first: date, last: date, rep_ids: Sequence[str]) -> dict[str,
     return {str(p): (int(n), float(c)) for p, n, c in rows}
 
 
-def headline(delta: float, ciro_b: float, effects: dict[str, float] | None) -> str:
-    """Tek cümle: fark ve en büyük etken. Saf."""
+MONTHS = ("Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos",
+          "Eylül", "Ekim", "Kasım", "Aralık")
+
+
+def period_label(first: date, last: date) -> str:
+    """1–22 Kasım · 23 Kasım · 27 Ekim – 2 Kasım."""
+    if first == last:
+        return f"{first.day} {MONTHS[first.month - 1]}"
+    if (first.year, first.month) == (last.year, last.month):
+        return f"{first.day}–{last.day} {MONTHS[last.month - 1]}"
+    return f"{first.day} {MONTHS[first.month - 1]} – {last.day} {MONTHS[last.month - 1]}"
+
+
+def tl_short(v: float) -> str:
+    """955 B TL · 1,51 Mn TL; işaretsiz."""
+    v = abs(v)
+    if v >= 1_000_000:
+        return f"{v / 1_000_000:.2f}".replace(".", ",") + " Mn TL"
+    if v >= 1_000:
+        return f"{round(v / 1000)} B TL"
+    return fmt_tl(v)
+
+
+def _signed(v: float) -> str:
+    return f"{'−' if v < 0 else '+'}{tl_short(v)}"
+
+
+def _mmss(sec: float) -> str:
+    s = round(sec)
+    return f"{s // 60} dk {s % 60:02d} sn"
+
+
+def _pct(v: float | None) -> str:
+    return "—" if v is None else f"%{v * 100:.1f}".replace(".", ",")
+
+
+FACTOR_TEXT: dict[str, Callable[[float, float], str]] = {
+    "is_gunu": lambda a, b: f"İş günü {round(b)} → {round(a)}",
+    "gunluk_lead": lambda a, b: f"Günde aranan lead {round(b)} → {round(a)}",
+    "ulasma": lambda a, b: f"Ulaşma oranı {_pct(b)} → {_pct(a)}",
+    "donusum": lambda a, b: f"Ulaşılan lead'den satışa dönüş {_pct(b)} → {_pct(a)}",
+    "ort_satis": lambda a, b: f"Satış başına ortalama tutar {tl_short(b)} → {tl_short(a)}",
+}
+
+MIN_SHARE = 0.05  # farkın (ya da B cirosunun çeyreğinin) %5'inden küçük etki tespit sayılmaz
+
+
+def _scale(bridge: dict[str, Any]) -> float:
+    return max(abs(bridge["fark"]), 0.25 * bridge["b"]["ciro"], 1)
+
+
+def _extremes(reps: Sequence[dict[str, Any]]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    down = min(reps, key=lambda m: m["fark"], default=None)
+    up = max(reps, key=lambda m: m["fark"], default=None)
+    return (down if down and down["fark"] < 0 else None), (up if up and up["fark"] > 0 else None)
+
+
+def findings(bridge: dict[str, Any]) -> list[dict[str, str]]:
+    """Okunur tespitler: önce aleyhe, sonra lehe etkenler; ton neg/pos. Saf."""
+    out: list[dict[str, str]] = []
+    scale = _scale(bridge)
+    shown = [f for f in bridge["factors"] if f["etki"] is not None and abs(f["etki"]) >= MIN_SHARE * scale]
+    for f in sorted(shown, key=lambda f: f["etki"]):
+        text = f"{FACTOR_TEXT[f['key']](f['a'], f['b'])}: ciroya etkisi {_signed(f['etki'])}."
+        if f["key"] == "ort_satis" and f["etki"] < 0:
+            top = next((m for m in bridge["paketler"] if m["fark"] < 0), None)
+            if top:
+                text += f" En çok düşen paket {top['paket']} ({top['adet_b']} → {top['adet_a']} adet)."
+        out.append({"ton": "neg" if f["etki"] < 0 else "pos", "metin": text})
+    q = {r["key"]: r for r in bridge["kalite"]}
+    sure = q.get("sure_ort")
+    if sure and sure["degisim"] is not None and abs(sure["degisim"]) >= 0.1:
+        way = "kısaldı" if sure["degisim"] < 0 else "uzadı"
+        out.append({
+            "ton": "neg" if sure["degisim"] < 0 else "pos",
+            "metin": f"Görüşmeler {way}: ortalama {_mmss(sure['b'])} → {_mmss(sure['a'])}.",
+        })
+    kat = q.get("katilim_orani")
+    if kat and kat["degisim"] is not None and abs(kat["degisim"]) >= 5:
+        way = "düştü" if kat["degisim"] < 0 else "arttı"
+        out.append({
+            "ton": "neg" if kat["degisim"] < 0 else "pos",
+            "metin": f"Toplantıya katılım {way}: %{kat['b']:.0f} → %{kat['a']:.0f}.",
+        })
+    down, up = _extremes(bridge["movers"])
+    if down:
+        out.append({"ton": "neg", "metin": f"En çok düşen temsilci {down['name']}: {_signed(down['fark'])} "
+                                           f"({down['satis_b']} → {down['satis_a']} satış)."})
+    if up:
+        out.append({"ton": "pos", "metin": f"En çok artan temsilci {up['name']}: {_signed(up['fark'])} "
+                                           f"({up['satis_b']} → {up['satis_a']} satış)."})
+    return out
+
+
+ADVICE: dict[str, str] = {
+    "ort_satis": "Premium sunumunu her nitelikli görüşmede sonuna kadar götürün: fiyatı temsilci kendisi "
+                 "söylesin, bütçe yetmezse Plus'tan Premium'a geçiş yolunu sunsun; indirimi ilk itirazda vermeyin.",
+    "donusum": "“Düşüneyim” anında neyin tartıldığını sorun (fiyat mı, zaman mı, eş mi?) ve her görüşmeyi "
+               "gün ve saati belli bir takiple bitirin; CRM'de tarihsiz takip bırakmayın.",
+    "ulasma": "Ulaşmayı artırın: yeni lead'i ilk 5 dakikada arayın, ulaşılamayana aynı gün WhatsApp ile "
+              "ikinci temas kurun, aramaları lead'in açtığı saatlere kaydırın.",
+    "gunluk_lead": "Arama hacmini geri getirin: temsilci başına günlük aranan lead hedefi koyun ve kayıp "
+                   "zamanı Canlı ekranından gün içinde takip edin.",
+    "is_gunu": "İş günü eksik; kalan günlerde günlük hedefi bu farkı kapatacak kadar yükseltin.",
+}
+SURE_ADVICE = ("Görüşmeler kısaldı: keşiften sonra sunuma geçmeden biten görüşmeleri kayıtlardan dinleyin; "
+               "nitelikli müşteride sunum ve fiyat konuşulmadan görüşme kapanmasın.")
+KATILIM_ADVICE = ("Toplantı katılımını yükseltin: saati görüşmede müşteriyle birlikte belirleyin, linki "
+                  "müşteriye bırakmayın, toplantıdan 1 saat önce WhatsApp hatırlatması gönderin.")
+MAX_ADVICE = 5
+
+
+def advice(bridge: dict[str, Any]) -> list[str]:
+    """Satışı artırmak için yapılacaklar: aleyhe etkenlerden, büyükten küçüğe. Saf."""
+    out: list[str] = []
+    scale = _scale(bridge)
+    neg = [f for f in bridge["factors"] if f["etki"] is not None and f["etki"] <= -MIN_SHARE * scale]
+    out += [ADVICE[f["key"]] for f in sorted(neg, key=lambda f: f["etki"])]
+    q = {r["key"]: r for r in bridge["kalite"]}
+    sure, kat = q.get("sure_ort") or {}, q.get("katilim_orani") or {}
+    if sure.get("degisim") is not None and sure["degisim"] <= -0.1:
+        out.append(SURE_ADVICE)
+    if kat.get("degisim") is not None and kat["degisim"] <= -5:
+        out.append(KATILIM_ADVICE)
+    down, up = _extremes(bridge["movers"])
+    people = []
+    if down:
+        people.append(f"{down['name']} ile bu hafta birebir kayıt dinleme yapın; düşüşün en büyük kısmı burada.")
+    if up and (out or down):
+        people.append(f"{up['name']} adlı temsilcinin iyi görüşmelerini ekip toplantısında dinletin.")
+    # Kişi önerileri sınıra takılmasın: genel önerilerden kesilir.
+    return out[: MAX_ADVICE - len(people)] + people
+
+
+def summary_line(bridge: dict[str, Any]) -> str:
+    """Kartın büyük satırı: Ciro %39 düştü."""
+    delta, rate = bridge["fark"], bridge["fark_orani"]
     if math.isclose(delta, 0, abs_tol=1):
-        return "Ciro iki dönemde aynı."
-    way = "düşük" if delta < 0 else "yüksek"
-    pct = f" %{abs(round(100 * delta / ciro_b))}" if ciro_b else ""
-    text = f"A dönemi B'ye göre{pct} {way} ({'−' if delta < 0 else '+'}{fmt_tl(abs(delta))})."
-    if not effects:
-        return text
-    labels = {k: label for k, label, _ in FACTORS}
-    # Farkla aynı yönde en büyük etken; ters yönde büyük bir etken de anılır.
-    same = sorted((v for v in effects.items() if (v[1] < 0) == (delta < 0)), key=lambda v: -abs(v[1]))
-    other = sorted((v for v in effects.items() if (v[1] < 0) != (delta < 0)), key=lambda v: -abs(v[1]))
-    if same:
-        k, v = same[0]
-        text += f" En büyük etken {labels[k].lower()} ({'−' if v < 0 else '+'}{fmt_tl(abs(v))})."
-    if other and abs(other[0][1]) >= 0.25 * abs(delta):
-        k, v = other[0]
-        text += f" {labels[k]} ters yönde {'+' if v > 0 else '−'}{fmt_tl(abs(v))} etkiledi."
-    return text
-
-
-def _mix_note(mix: Sequence[dict[str, Any]]) -> str:
-    """Ciro farkı en büyük paket; adet B → A."""
-    if not mix or math.isclose(mix[0]["fark"], 0, abs_tol=1):
-        return ""
-    top = mix[0]
-    return f" Paketlerde en büyük kayma {top['paket']}: {top['adet_b']} → {top['adet_a']} adet."
+        return "Ciro iki dönemde aynı"
+    way = "düştü" if delta < 0 else "arttı"
+    return f"Ciro %{abs(round(rate * 100))} {way}" if rate is not None else f"Ciro {_signed(delta)} {way}"
 
 
 def quality_rows(a_row: dict[str, Any], b_row: dict[str, Any]) -> list[dict[str, Any]]:
@@ -252,7 +365,8 @@ def build_bridge(
                 "etki": round(effects[key], 2) if effects else None,
             }
         )
-    return {
+    sa["label"], sb["label"] = period_label(*a), period_label(*b)
+    out = {
         "a": sa,
         "b": sb,
         "fark": round(delta, 2),
@@ -262,5 +376,8 @@ def build_bridge(
         "movers": movers(a_reps, b_reps),
         "paketler": list(mix),
         "kalite": quality_rows(a_row, b_row),
-        "headline": headline(delta, sb["ciro"], effects) + _mix_note(mix),
     }
+    out["ozet"] = summary_line(out)
+    out["tespitler"] = findings(out)
+    out["oneriler"] = advice(out)
+    return out

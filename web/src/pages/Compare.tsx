@@ -488,7 +488,9 @@ export function ComparePage({ me }: { me: Me }) {
         <div className="skeleton" style={{ height: 320 }} />
       ) : (
         <>
-          {mode === "donem" ? <SalesBridge query={bridgeQuery} /> : null}
+          {mode === "donem" ? (
+            <SalesBridge query={bridgeQuery} isAdmin={isAdmin} />
+          ) : null}
           <CompareBody
             data={data}
             rangeA={rangeA}
