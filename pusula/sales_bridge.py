@@ -33,7 +33,6 @@ FACTORS: tuple[tuple[str, str, str], ...] = (
     ("donusum", "Satışa dönüş", "oran"),
     ("ort_satis", "Ortalama satış", "tl"),
 )
-MOVERS = 4
 
 # Görüşme kalitesi: ciro kimliğinde yok, yanında okunur. Doluluk bilerek yok
 # (Kasım'da tanım/veri kayması şüphesi).
@@ -98,13 +97,13 @@ def decompose(fa: dict[str, float | None], fb: dict[str, float | None]) -> dict[
 
 
 def movers(a_reps: Sequence[dict[str, Any]], b_reps: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Ciro farkı en büyük temsilciler (mutlak), sıfır farklar atlanır."""
+    """Tüm temsilciler, en çok düşenden en çok artana. İki dönemde de cirosu olmayan atlanır."""
     b_by = {r["rep_id"]: r for r in b_reps}
     out = []
     for ra in a_reps:
         rb = b_by.get(ra["rep_id"]) or {}
         ciro_a, ciro_b = float(ra.get("ciro") or 0), float(rb.get("ciro") or 0)
-        if math.isclose(ciro_a, ciro_b):
+        if not ciro_a and not ciro_b:
             continue
         out.append(
             {
@@ -121,8 +120,8 @@ def movers(a_reps: Sequence[dict[str, Any]], b_reps: Sequence[dict[str, Any]]) -
                 "sure_b": rb.get("sure_ort"),
             }
         )
-    out.sort(key=lambda r: abs(r["fark"]), reverse=True)
-    return out[:MOVERS]
+    out.sort(key=lambda r: r["fark"])
+    return out
 
 
 def mix_rows(a: dict[str, tuple[int, float]], b: dict[str, tuple[int, float]]) -> list[dict[str, Any]]:

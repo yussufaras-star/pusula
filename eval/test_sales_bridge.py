@@ -53,13 +53,13 @@ def test_zero_side_is_not_decomposed() -> None:
     assert all(f["etki"] is None for f in out["factors"])
 
 
-def test_movers_sorted_by_absolute_change() -> None:
+def test_movers_list_everyone_biggest_drop_first() -> None:
     a_reps = [{"rep_id": "1", "name": "Ali", "ciro": 100.0}, {"rep_id": "2", "name": "Ayşe", "ciro": 50.0},
               {"rep_id": "3", "name": "Can", "ciro": 10.0}]
     b_reps = [{"rep_id": "1", "ciro": 90.0}, {"rep_id": "2", "ciro": 200.0}, {"rep_id": "3", "ciro": 10.0}]
     out = build_bridge((date(2026, 11, 1),) * 2, (date(2026, 10, 1),) * 2, row(1, 1, 1, 1, 1.0),
                        row(1, 1, 1, 1, 1.0), a_reps=a_reps, b_reps=b_reps)
-    assert [m["name"] for m in out["movers"]] == ["Ayşe", "Ali"]
+    assert [m["name"] for m in out["movers"]] == ["Ayşe", "Can", "Ali"]
 
 
 def test_package_mix_sorted_by_ciro_change() -> None:
