@@ -1,5 +1,5 @@
 import { usePolling } from "../api";
-import { int, num, pct, tl, tlShort } from "../format";
+import { duration, int, minutes, num, pct, tl, tlShort } from "../format";
 
 interface Factor {
   key: string;
@@ -21,6 +21,8 @@ interface Mover {
   satis_b: number;
   donusum_a: number | null;
   donusum_b: number | null;
+  sure_a: number | null;
+  sure_b: number | null;
 }
 
 interface BridgeSide {
@@ -39,7 +41,32 @@ interface Bridge {
   factors: Factor[];
   movers: Mover[];
   paketler: Mix[];
+  kalite: Quality[];
   headline: string;
+}
+
+interface Quality {
+  key: string;
+  label: string;
+  kind: "sure" | "sure_toplam" | "adet" | "yuzde";
+  a: number | null;
+  b: number | null;
+  degisim: number | null;
+}
+
+function showQuality(v: number | null, kind: Quality["kind"]): string {
+  if (v === null) return "—";
+  if (kind === "sure") return duration(v);
+  if (kind === "sure_toplam") return minutes(v / 60);
+  if (kind === "yuzde") return pct(v);
+  return int(v);
+}
+
+function qualityChange(q: Quality): string {
+  if (q.degisim === null) return "—";
+  const sign = q.degisim < 0 ? "−" : "+";
+  if (q.kind === "yuzde") return `${sign}${num(Math.abs(q.degisim))} puan`;
+  return `${sign}%${num(Math.abs(q.degisim * 100))}`;
 }
 
 interface Mix {
@@ -220,6 +247,36 @@ export function SalesBridge({ query }: { query: string }) {
           </>
         ) : null}
 
+        <h3 className="bridge-sub">Görüşme kalitesi</h3>
+        <div className="table-wrap">
+          <table className="board">
+            <thead>
+              <tr>
+                <th>Ölçü</th>
+                <th className="num">A</th>
+                <th className="num">B</th>
+                <th className="num">Değişim</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.kalite.map((q) => (
+                <tr key={q.key}>
+                  <td>{q.label}</td>
+                  <td className="num">{showQuality(q.a, q.kind)}</td>
+                  <td className="num">{showQuality(q.b, q.kind)}</td>
+                  <td className={`num ${tone(q.degisim)}`}>
+                    {qualityChange(q)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="muted cmp-note">
+          Ciro formülünde yer almaz; çarpanların arkasındaki görüşme davranışını
+          gösterir.
+        </p>
+
         {data.movers.length ? (
           <>
             <h3 className="bridge-sub">En çok değişen temsilciler</h3>
@@ -233,6 +290,7 @@ export function SalesBridge({ query }: { query: string }) {
                     <th className="num">Fark</th>
                     <th className="num">Satış A ↔ B</th>
                     <th className="num">Dönüş A ↔ B</th>
+                    <th className="num">Ort. süre A ↔ B</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -250,6 +308,9 @@ export function SalesBridge({ query }: { query: string }) {
                       <td className="num">
                         {showFactor(m.donusum_a, "oran")} ↔{" "}
                         {showFactor(m.donusum_b, "oran")}
+                      </td>
+                      <td className="num">
+                        {duration(m.sure_a)} ↔ {duration(m.sure_b)}
                       </td>
                     </tr>
                   ))}

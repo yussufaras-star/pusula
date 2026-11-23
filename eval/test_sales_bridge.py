@@ -85,3 +85,13 @@ def test_headline_mentions_biggest_package_shift() -> None:
     out = build_bridge((date(2026, 11, 1),) * 2, (date(2026, 10, 1),) * 2, row(1, 1, 1, 1, 1.0),
                        row(1, 1, 1, 1, 2.0), mix=mix)
     assert out["headline"].endswith("Paketlerde en büyük kayma Rexven-Premium: 48 → 29 adet.")
+
+
+def test_quality_rows_rate_change_in_points() -> None:
+    from pusula.sales_bridge import quality_rows
+
+    out = {r["key"]: r for r in quality_rows({"sure_ort": 224.0, "katilim_orani": 34.3, "randevu": 199},
+                                             {"sure_ort": 294.7, "katilim_orani": 46.3, "randevu": 240})}
+    assert round(out["sure_ort"]["degisim"], 2) == -0.24
+    assert round(out["katilim_orani"]["degisim"], 1) == -12.0
+    assert out["call_sec"]["degisim"] is None
