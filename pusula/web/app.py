@@ -68,7 +68,7 @@ from pusula.web.auth import (
     passwords,
     require_cron,
 )
-from pusula.sales_bridge import aligned_ranges, build_bridge, mix_rows, won_by_package
+from pusula.sales_bridge import aligned_ranges, build_bridge, mix_rows, sonar_stats, won_by_package
 from pusula.sales_report import REPORT_START, SOURCE_DIMS, build_sales_report, source_yield
 from pusula.web.ceo import router as ceo_router
 from pusula.web.conversations import router as conversations_router
@@ -762,6 +762,8 @@ def sales_bridge(
                 a_reps=pa["reps"] if show_reps else (),
                 b_reps=pb["reps"] if show_reps else (),
                 mix=mix,
+                sonar_a=sonar_stats(*a, owners),
+                sonar_b=sonar_stats(*b, owners),
             )
         )
 

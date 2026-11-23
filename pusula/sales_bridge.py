@@ -37,6 +37,7 @@ FACTORS: tuple[tuple[str, str, str], ...] = (
 # Görüşme kalitesi: ciro kimliğinde yok, yanında okunur. Doluluk bilerek yok
 # (Kasım'da tanım/veri kayması şüphesi).
 QUALITY: tuple[tuple[str, str, str], ...] = (
+    ("atanan", "Gelen lead (atanan)", "adet"),
     ("sure_ort", "Ort. görüşme süresi", "sure"),
     ("call_sec", "Toplam konuşma", "sure_toplam"),
     ("giden_temas", "Ulaşılan görüşme", "adet"),
@@ -219,8 +220,26 @@ def _extremes(reps: Sequence[dict[str, Any]]) -> tuple[dict[str, Any] | None, di
     return (down if down and down["fark"] < 0 else None), (up if up and up["fark"] > 0 else None)
 
 
+def _q(bridge: dict[str, Any], key: str) -> dict[str, Any]:
+    return next((r for r in bridge["kalite"] if r["key"] == key), {})
+
+
+def _fmt_int(v: float) -> str:
+    return f"{round(v):,}".replace(",", ".")
+
+
+def _score(v: float) -> str:
+    return f"{v:.2f}".replace(".", ",")
+
+
+LEAD_DROP = -0.05  # gelen lead %5 ve üstü düşüş
+MEETING_DROP = -0.10
+SURE_DROP = -0.10
+KATILIM_DROP = -5.0  # puan
+
+
 def findings(bridge: dict[str, Any]) -> list[dict[str, str]]:
-    """Okunur tespitler: önce aleyhe, sonra lehe etkenler; ton neg/pos. Saf."""
+    """Okunur tespitler; grup: ciro, lead, sonar, kisi (bu sırayla). Ton neg/pos. Saf."""
     out: list[dict[str, str]] = []
     scale = _scale(bridge)
     shown = [f for f in bridge["factors"] if f["etki"] is not None and abs(f["etki"]) >= MIN_SHARE * scale]
@@ -230,70 +249,184 @@ def findings(bridge: dict[str, Any]) -> list[dict[str, str]]:
             top = next((m for m in bridge["paketler"] if m["fark"] < 0), None)
             if top:
                 text += f" En çok düşen paket {top['paket']} ({top['adet_b']} → {top['adet_a']} adet)."
-        out.append({"ton": "neg" if f["etki"] < 0 else "pos", "metin": text})
-    q = {r["key"]: r for r in bridge["kalite"]}
-    sure = q.get("sure_ort")
-    if sure and sure["degisim"] is not None and abs(sure["degisim"]) >= 0.1:
-        way = "kısaldı" if sure["degisim"] < 0 else "uzadı"
+        out.append({"grup": "ciro", "ton": "neg" if f["etki"] < 0 else "pos", "metin": text})
+
+    lead = _q(bridge, "atanan")
+    if lead.get("degisim") is not None and abs(lead["degisim"]) >= -LEAD_DROP:
+        way = "azaldı" if lead["degisim"] < 0 else "arttı"
         out.append({
-            "ton": "neg" if sure["degisim"] < 0 else "pos",
-            "metin": f"Görüşmeler {way}: ortalama {_mmss(sure['b'])} → {_mmss(sure['a'])}.",
+            "grup": "lead",
+            "ton": "neg" if lead["degisim"] < 0 else "pos",
+            "metin": f"Gelen lead {way}: {_fmt_int(lead['b'])} → {_fmt_int(lead['a'])} "
+                     f"({'−' if lead['degisim'] < 0 else '+'}%{abs(round(lead['degisim'] * 100))}).",
         })
-    kat = q.get("katilim_orani")
-    if kat and kat["degisim"] is not None and abs(kat["degisim"]) >= 5:
+    meet = _q(bridge, "randevu")
+    if meet.get("degisim") is not None and meet["degisim"] <= MEETING_DROP:
+        out.append({"grup": "lead", "ton": "neg", "metin": f"Toplantı sayısı azaldı: {_fmt_int(meet['b'])} → {_fmt_int(meet['a'])}."})
+    kat = _q(bridge, "katilim_orani")
+    if kat.get("degisim") is not None and abs(kat["degisim"]) >= -KATILIM_DROP:
         way = "düştü" if kat["degisim"] < 0 else "arttı"
         out.append({
+            "grup": "lead",
             "ton": "neg" if kat["degisim"] < 0 else "pos",
             "metin": f"Toplantıya katılım {way}: %{kat['b']:.0f} → %{kat['a']:.0f}.",
         })
-    down, up = _extremes(bridge["movers"])
+    sure = _q(bridge, "sure_ort")
+    if sure.get("degisim") is not None and abs(sure["degisim"]) >= -SURE_DROP:
+        way = "kısaldı" if sure["degisim"] < 0 else "uzadı"
+        out.append({
+            "grup": "lead",
+            "ton": "neg" if sure["degisim"] < 0 else "pos",
+            "metin": f"Görüşmeler {way}: ortalama {_mmss(sure['b'])} → {_mmss(sure['a'])}.",
+        })
+
+    sonar = bridge.get("sonar")
+    if sonar:
+        if sonar["ort_a"] is not None and sonar["ort_b"] is not None and abs(sonar["ort_a"] - sonar["ort_b"]) >= 0.1:
+            up = sonar["ort_a"] > sonar["ort_b"]
+            out.append({
+                "grup": "sonar",
+                "ton": "pos" if up else "neg",
+                "metin": f"SONAR-41 genel ortalaması {'yükseldi' if up else 'geriledi'}: "
+                         f"{_score(sonar['ort_b'])} → {_score(sonar['ort_a'])} (5 üzerinden).",
+            })
+        for g in sonar["gerileyen"]:
+            out.append({
+                "grup": "sonar",
+                "ton": "neg",
+                "metin": f"SONAR-41'de belirgin gerileme — {g['ad']} ({g['kod']}): "
+                         f"{_score(g['b'])} → {_score(g['a'])}.",
+            })
+
+    down, up_ = _extremes(bridge["movers"])
     if down:
-        out.append({"ton": "neg", "metin": f"En çok düşen temsilci {down['name']}: {_signed(down['fark'])} "
+        out.append({"grup": "kisi", "ton": "neg", "metin": f"En çok düşen temsilci {down['name']}: {_signed(down['fark'])} "
                                            f"({down['satis_b']} → {down['satis_a']} satış)."})
-    if up:
-        out.append({"ton": "pos", "metin": f"En çok artan temsilci {up['name']}: {_signed(up['fark'])} "
-                                           f"({up['satis_b']} → {up['satis_a']} satış)."})
+    if up_:
+        out.append({"grup": "kisi", "ton": "pos", "metin": f"En çok artan temsilci {up_['name']}: {_signed(up_['fark'])} "
+                                           f"({up_['satis_b']} → {up_['satis_a']} satış)."})
     return out
 
 
+# Ekip dersleri: kişi adı yok; ekip okur ve Cliq'e gider.
 ADVICE: dict[str, str] = {
-    "ort_satis": "Premium sunumunu her nitelikli görüşmede sonuna kadar götürün: fiyatı temsilci kendisi "
-                 "söylesin, bütçe yetmezse Plus'tan Premium'a geçiş yolunu sunsun; indirimi ilk itirazda vermeyin.",
+    "ort_satis": "Premium sunumunu her nitelikli görüşmede sonuna kadar götürün: fiyatı kendiniz söyleyin, "
+                 "“siteden bakın” demeyin; bütçe yetmezse Plus'tan Premium'a geçiş yolunu sunun, indirimi ilk "
+                 "itirazda vermeyin.",
     "donusum": "“Düşüneyim” anında neyin tartıldığını sorun (fiyat mı, zaman mı, eş mi?) ve her görüşmeyi "
                "gün ve saati belli bir takiple bitirin; CRM'de tarihsiz takip bırakmayın.",
     "ulasma": "Ulaşmayı artırın: yeni lead'i ilk 5 dakikada arayın, ulaşılamayana aynı gün WhatsApp ile "
               "ikinci temas kurun, aramaları lead'in açtığı saatlere kaydırın.",
-    "gunluk_lead": "Arama hacmini geri getirin: temsilci başına günlük aranan lead hedefi koyun ve kayıp "
-                   "zamanı Canlı ekranından gün içinde takip edin.",
-    "is_gunu": "İş günü eksik; kalan günlerde günlük hedefi bu farkı kapatacak kadar yükseltin.",
+    "gunluk_lead": "Arama hacmini geri getirin: günlük aranan lead hedefini tutturun, kayıp zamanı Canlı "
+                   "ekranından gün içinde takip edin.",
 }
-SURE_ADVICE = ("Görüşmeler kısaldı: keşiften sonra sunuma geçmeden biten görüşmeleri kayıtlardan dinleyin; "
-               "nitelikli müşteride sunum ve fiyat konuşulmadan görüşme kapanmasın.")
+LEAD_ADVICE = ("Gelen lead azaldı; elimizdeki havuzu daha iyi işleyin: hiç aranmamış ve “ulaşılamadı”da kalan "
+               "lead'leri yeniden arayın, eski sıcak müşterilere yeni bir değerle dönün.")
+SURE_ADVICE = ("Görüşmeler kısaldı: keşiften sonra sunuma geçmeden görüşmeyi bitirmeyin; nitelikli müşteride "
+               "sunum ve fiyat konuşulmadan görüşme kapanmasın.")
 KATILIM_ADVICE = ("Toplantı katılımını yükseltin: saati görüşmede müşteriyle birlikte belirleyin, linki "
                   "müşteriye bırakmayın, toplantıdan 1 saat önce WhatsApp hatırlatması gönderin.")
-MAX_ADVICE = 5
+SONAR_ADVICE: dict[str, str] = {
+    "B05": "İhtiyacı netleştirin: müşterinin hedefini, ayırabileceği zamanı ve beklentisini sunumdan önce öğrenin.",
+    "B06": "Bütçeyi sunumdan önce sorun: “Başlangıç için ne kadarlık bir bütçe ayırmayı düşünüyorsunuz?” "
+           "Sermaye rakamını müşterinin bütçesini öğrenmeden vermeyin.",
+    "B07": "Kararı kimin vereceğini erken öğrenin: “Bu kararı tek başınıza mı vereceksiniz?” Eş ya da ortak "
+           "varsa toplantıya birlikte davet edin.",
+    "B10": "Paketi müşterinin ihtiyacına bağlayarak önerin; önce ihtiyaç, sonra paket.",
+    "B15": "Nitelikli müşteriye online toplantı ya da mentör görüşmesi teklif edin.",
+    "B19": "Gerçek itirazı ayırın: “Bu konu çözülse başlar mısınız?” diye sorun.",
+    "B20": "Fiyat itirazında önce değeri anlatın; indirime hemen geçmeyin.",
+    "B22": "Erteleme itirazında beklemenin müşteriye maliyetini dürüstçe gösterin.",
+    "B23": "Ödeme itirazında taksit ve ödeme seçeneklerini netleştirin.",
+    "B28": "“Düşüneyim” anında neyin düşünüleceğini sorun.",
+    "B29": "Her görüşmeyi net bir sonraki adımla bitirin.",
+    "B31": "Kapanış sorusunu açıkça sorun: “Bugün başlayalım mı?”",
+    "B34": "Her takibi gün ve saatle bitirin.",
+    "B35": "Takip aramasını önceki görüşmeye bağlayın: aramadan önce CRM notunu okuyun, geçen sefer konuşulan "
+           "engeli ve sözü hatırlatarak açın.",
+    "B36": "Takip aramasına yeni bir değer getirin (üye sonucu, canlı yayın, müşterinin sorusuna cevap); "
+           "“düşündünüz mü?” diye açmayın.",
+}
+# Ciro adımı önerisi zaten kapsıyorsa SONAR dersi tekrar edilmez.
+COVERED_BY = {"donusum": {"B28", "B34", "B29"}, "ort_satis": {"B20"}}
+MAX_ADVICE = 8
 
 
 def advice(bridge: dict[str, Any]) -> list[str]:
-    """Satışı artırmak için yapılacaklar: aleyhe etkenlerden, büyükten küçüğe. Saf."""
+    """Ekip dersleri: aleyhe ciro adımları, gelen lead, SONAR-41 gerilemeleri, görüşme. Kişi adı yok. Saf."""
     out: list[str] = []
     scale = _scale(bridge)
-    neg = [f for f in bridge["factors"] if f["etki"] is not None and f["etki"] <= -MIN_SHARE * scale]
-    out += [ADVICE[f["key"]] for f in sorted(neg, key=lambda f: f["etki"])]
-    q = {r["key"]: r for r in bridge["kalite"]}
-    sure, kat = q.get("sure_ort") or {}, q.get("katilim_orani") or {}
-    if sure.get("degisim") is not None and sure["degisim"] <= -0.1:
+    neg = [f for f in bridge["factors"]
+           if f["etki"] is not None and f["etki"] <= -MIN_SHARE * scale and f["key"] in ADVICE]
+    keys = [f["key"] for f in sorted(neg, key=lambda f: f["etki"])]
+    out += [ADVICE[k] for k in keys]
+    lead = _q(bridge, "atanan")
+    if lead.get("degisim") is not None and lead["degisim"] <= LEAD_DROP:
+        out.append(LEAD_ADVICE)
+    covered = set().union(*(COVERED_BY.get(k, set()) for k in keys))
+    for g in (bridge.get("sonar") or {}).get("gerileyen", []):
+        if g["kod"] in covered:
+            continue
+        out.append(SONAR_ADVICE.get(g["kod"]) or f"“{g['ad']}” davranışını haftalık koçlukta ekipçe çalışın.")
+    sure, kat = _q(bridge, "sure_ort"), _q(bridge, "katilim_orani")
+    if sure.get("degisim") is not None and sure["degisim"] <= SURE_DROP:
         out.append(SURE_ADVICE)
-    if kat.get("degisim") is not None and kat["degisim"] <= -5:
+    if kat.get("degisim") is not None and kat["degisim"] <= KATILIM_DROP:
         out.append(KATILIM_ADVICE)
-    down, up = _extremes(bridge["movers"])
-    people = []
-    if down:
-        people.append(f"{down['name']} ile bu hafta birebir kayıt dinleme yapın; düşüşün en büyük kısmı burada.")
-    if up and (out or down):
-        people.append(f"{up['name']} adlı temsilcinin iyi görüşmelerini ekip toplantısında dinletin.")
-    # Kişi önerileri sınıra takılmasın: genel önerilerden kesilir.
-    return out[: MAX_ADVICE - len(people)] + people
+    return out[:MAX_ADVICE]
+
+
+SONAR_MIN_N = 10  # iki dönemde de en az bu kadar puanlanmış an
+SONAR_DROP = 0.3  # 5'lik ölçekte belirgin gerileme
+SONAR_MAX = 3
+
+
+def sonar_changes(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any] | None:
+    """İki dönemin SONAR-41 özeti (conversations.aggregate çıktısı) → genel ortalama ve
+    belirgin gerileyen davranışlar (en çok gerileyen önce). Saf."""
+    if not a or not b or not a.get("analiz") or not b.get("analiz"):
+        return None
+    from pusula import sonar41
+
+    drops = []
+    for code, beh in sonar41.BEHAVIORS.items():
+        x, y = (a.get("davranislar") or {}).get(code) or {}, (b.get("davranislar") or {}).get(code) or {}
+        if x.get("ort") is None or y.get("ort") is None:
+            continue
+        if min(x.get("adet") or 0, y.get("adet") or 0) < SONAR_MIN_N:
+            continue
+        if y["ort"] - x["ort"] >= SONAR_DROP:
+            drops.append({"kod": code, "ad": beh["name"], "a": x["ort"], "b": y["ort"],
+                          "n_a": x["adet"], "n_b": y["adet"]})
+    drops.sort(key=lambda d: d["a"] - d["b"])
+    return {
+        "ort_a": a.get("puan_ort"),
+        "ort_b": b.get("puan_ort"),
+        "n_a": a["analiz"],
+        "n_b": b["analiz"],
+        "gerileyen": drops[:SONAR_MAX],
+    }
+
+
+def sonar_stats(first: date, last: date, rep_ids: Sequence[str]) -> dict[str, Any]:
+    """Dönemde analiz edilmiş görüşmelerin SONAR-41 özeti (haftalık akış; trend ile aynı süzgeç)."""
+    from datetime import datetime, time
+
+    from pusula.conversations import TZ, aggregate, weekly_only
+
+    start = datetime.combine(first, time.min, tzinfo=TZ)
+    end = datetime.combine(last + timedelta(days=1), time.min, tzinfo=TZ)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT kind, occurred_at, analysis FROM conv_items
+            WHERE org_id = %s AND status = 'analiz_edildi' AND rep_id = ANY(%s)
+              AND occurred_at >= %s AND occurred_at < %s
+              AND NOT coalesce((meta->>'talep')::boolean, false) AND {weekly_only("")}
+            """,
+            (get_org_id(), list(rep_ids), start, end),
+        ).fetchall()
+    return aggregate([{"kind": k, "occurred_at": o, "analysis": a} for k, o, a in rows])
 
 
 def summary_line(bridge: dict[str, Any]) -> str:
@@ -345,8 +478,10 @@ def build_bridge(
     a_reps: Sequence[dict[str, Any]] = (),
     b_reps: Sequence[dict[str, Any]] = (),
     mix: Sequence[dict[str, Any]] = (),
+    sonar_a: dict[str, Any] | None = None,
+    sonar_b: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Saf: iki tarafın Raporlar satırından köprü yükü."""
+    """Saf: iki tarafın Raporlar satırından köprü yükü. sonar_*: conversations.aggregate çıktısı."""
     sa, sb = side_payload(*a, a_row), side_payload(*b, b_row)
     effects = decompose(sa["factors"], sb["factors"])
     delta = sa["ciro"] - sb["ciro"]
@@ -375,6 +510,7 @@ def build_bridge(
         "movers": movers(a_reps, b_reps),
         "paketler": list(mix),
         "kalite": quality_rows(a_row, b_row),
+        "sonar": sonar_changes(sonar_a, sonar_b),
     }
     out["ozet"] = summary_line(out)
     out["tespitler"] = findings(out)

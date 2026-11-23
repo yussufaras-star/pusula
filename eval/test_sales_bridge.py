@@ -74,15 +74,23 @@ def test_package_mix_sorted_by_ciro_change() -> None:
 
 def kasim_ekim() -> dict:
     """Gerçek 1-22 Kasım ↔ 1-22 Ekim rakamlarına yakın senaryo."""
-    a_row = {**row(18, 2389, 1360, 52, 1507047.0), "sure_ort": 224.0, "katilim_orani": 34.3}
-    b_row = {**row(19, 2164, 1380, 57, 2461921.0), "sure_ort": 294.7, "katilim_orani": 46.3}
+    a_row = {**row(18, 2389, 1360, 52, 1507047.0), "sure_ort": 224.0, "katilim_orani": 34.3,
+             "atanan": 1288, "randevu": 199}
+    b_row = {**row(19, 2164, 1380, 57, 2461921.0), "sure_ort": 294.7, "katilim_orani": 46.3,
+             "atanan": 1413, "randevu": 240}
     mix = [{"paket": "Rexven-Premium", "adet_a": 29, "adet_b": 48, "fark": -919111.0},
            {"paket": "Kamp", "adet_a": 22, "adet_b": 5, "fark": 99825.0}]
     a_reps = [{"rep_id": "1", "name": "Abdullah", "ciro": 180643.0, "satis": 8},
               {"rep_id": "2", "name": "Serkan", "ciro": 468186.0, "satis": 14}]
     b_reps = [{"rep_id": "1", "ciro": 787087.0, "satis": 17}, {"rep_id": "2", "ciro": 292472.0, "satis": 8}]
+    sonar_a = {"analiz": 177, "puan_ort": 2.43, "davranislar": {
+        "B06": {"ort": 1.74, "adet": 43}, "B07": {"ort": 1.0, "adet": 13}, "B28": {"ort": 1.0, "adet": 30},
+        "B19": {"ort": 1.25, "adet": 8}, "B04": {"ort": 3.3, "adet": 60}}}
+    sonar_b = {"analiz": 118, "puan_ort": 2.33, "davranislar": {
+        "B06": {"ort": 2.09, "adet": 33}, "B07": {"ort": 1.43, "adet": 14}, "B28": {"ort": 1.6, "adet": 25},
+        "B19": {"ort": 1.5, "adet": 4}, "B04": {"ort": 3.0, "adet": 50}}}
     return build_bridge((date(2026, 11, 1), date(2026, 11, 22)), (date(2026, 10, 1), date(2026, 10, 22)),
-                        a_row, b_row, a_reps=a_reps, b_reps=b_reps, mix=mix)
+                        a_row, b_row, a_reps=a_reps, b_reps=b_reps, mix=mix, sonar_a=sonar_a, sonar_b=sonar_b)
 
 
 def test_period_labels() -> None:
@@ -106,15 +114,39 @@ def test_findings_lead_with_biggest_drop_and_name_package() -> None:
     assert any(t["ton"] == "pos" and t["metin"].startswith("Günde aranan lead") for t in out["tespitler"])
 
 
-def test_advice_follows_negative_drivers_and_keeps_people() -> None:
+def test_advice_is_team_lessons_without_names() -> None:
     out = kasim_ekim()
     tips = out["oneriler"]
-    assert len(tips) == 5
     assert tips[0].startswith("Premium sunumunu")
-    assert tips[-2].startswith("Abdullah ile bu hafta birebir")
-    assert tips[-1].startswith("Serkan adlı temsilcinin")
-    # Lehe etken için öneri çıkmaz.
-    assert not any(t.startswith("Arama hacmini") for t in tips)
+    assert not any("Abdullah" in t or "Serkan" in t for t in tips)
+    assert any(t.startswith("Gelen lead azaldı") for t in tips)
+    assert any(t.startswith("Bütçeyi sunumdan önce sorun") for t in tips)
+    # B28 (düşüneyim) dönüşüm önerisinde zaten var: tekrar edilmez.
+    assert sum("Düşüneyim" in t or "düşünüleceğini" in t for t in tips) == 1
+    # Lehe etken ve iş günü için öneri çıkmaz.
+    assert not any(t.startswith("Arama hacmini") or t.startswith("İş günü") for t in tips)
+    assert len(tips) <= 8
+
+
+def test_sonar_drop_needs_sample_and_threshold() -> None:
+    out = kasim_ekim()
+    sonar = out["sonar"]
+    # B19 örneklemi az (4), B04 iyileşti: listede yok. En çok geriliyen önce.
+    assert [g["kod"] for g in sonar["gerileyen"]] == ["B28", "B07", "B06"]
+    groups = {t["grup"] for t in out["tespitler"]}
+    assert groups == {"ciro", "lead", "sonar", "kisi"}
+    sonar_texts = [t["metin"] for t in out["tespitler"] if t["grup"] == "sonar"]
+    assert sonar_texts[0] == "SONAR-41 genel ortalaması yükseldi: 2,33 → 2,43 (5 üzerinden)."
+    assert any("(B06): 2,09 → 1,74" in t for t in sonar_texts)
+    lead_texts = [t["metin"] for t in out["tespitler"] if t["grup"] == "lead"]
+    assert lead_texts[0] == "Gelen lead azaldı: 1.413 → 1.288 (−%9)."
+    assert "Toplantı sayısı azaldı: 240 → 199." in lead_texts
+
+
+def test_no_sonar_without_analyses() -> None:
+    out = build_bridge((date(2026, 11, 1),) * 2, (date(2026, 10, 1),) * 2, row(1, 10, 6, 2, 100.0),
+                       row(1, 10, 5, 1, 50.0), sonar_a={"analiz": 0}, sonar_b=None)
+    assert out["sonar"] is None
 
 
 def test_no_advice_when_everything_improves() -> None:
