@@ -4477,3 +4477,170 @@ tr.muted td {
     min-width: 120px;
   }
 }
+
+/* Personel maliyeti */
+.pay-name {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pay-name:hover b {
+  text-decoration: underline;
+}
+.fin-table tr.pay-total td {
+  border-top: 2px solid var(--border);
+}
+.fin-table tr.pay-sub td {
+  background: var(--surface-2);
+  font-size: 13px;
+}
+
+/* Maaş ve prim pusulası */
+.cp-lead {
+  font-size: 13px;
+  max-width: 900px;
+  margin: 0 0 12px;
+}
+.fin-table tr.cp-hl td {
+  background: var(--warning-wash);
+}
+.fin-table tr.cp-group td {
+  background: var(--surface-2);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.cp-points {
+  margin: 12px 0 0;
+  padding-left: 20px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  max-width: 980px;
+}
+.cp-points li + li {
+  margin-top: 6px;
+}
+.cp-sub {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 18px 0 0;
+}
+.cp-rules {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.cp-rule {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.cp-rule label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cp-rule-title {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+.cp-rule-input {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.cp-rule-input input {
+  width: 150px;
+}
+.cp-rule p {
+  font-size: 12.5px;
+  margin: 6px 0 0;
+  line-height: 1.45;
+}
+.cp-cos {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+.cp-co {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.cp-co-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.cp-co-rate {
+  font-size: 26px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  margin-top: 6px;
+}
+.cp-co-cost {
+  margin-top: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.cp-co p {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 10px 0 0;
+}
+.cp-list td {
+  vertical-align: top;
+}
+.cp-why {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  min-width: 220px;
+  max-width: 340px;
+  white-space: normal !important;
+}
+.cp-flag {
+  color: var(--ink);
+  background: var(--warning-wash);
+  border-radius: 4px;
+  padding: 1px 4px;
+  margin-top: 2px;
+}
+.cp-list .badge {
+  margin-left: 6px;
+}
+.cp-bands {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.cp-bands > div {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  min-width: 110px;
+}
+.cp-bands b {
+  font-size: 20px;
+}
+details.cp-details > summary {
+  cursor: pointer;
+  list-style: none;
+}
+details.cp-details > summary::-webkit-details-marker {
+  display: none;
+}
+details.cp-details > summary h2::before {
+  content: "▸ ";
+  color: var(--muted);
+}
+details.cp-details[open] > summary h2::before {
+  content: "▾ ";
+}

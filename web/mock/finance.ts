@@ -732,6 +732,47 @@ export function mockFinance(method: string, url: string): unknown {
     };
   }
 
+  if (path === "/api/finance/compass") {
+    // Örnek kişiler; gerçek maaş verisi yalnız veritabanında.
+    const ln = (id: number, company_id: "llc" | "gmbh" | "tr", kind: "bordro" | "sozlesme", currency: string, amount: number, rate: number, cost_usd: number, cost27_usd: number, extra: Partial<{ basis: "net" | "brut"; asgari: boolean; label: string }> = {}) => ({
+      id, company_id, kind, currency, basis: extra.basis ?? "net", label: extra.label ?? null, amount, new_amount: r2(amount * (1 + rate)), rate, asgari: !!extra.asgari, net: amount, cost_usd, cost27_usd,
+    });
+    const person = (name: string, unit: string, start: string, kidem: string, years: number, lines: ReturnType<typeof ln>[], rate: number, reasons: string[], extra: Partial<{ c_level: boolean; bonus: number; flags: string[]; prim: number; r26: number }> = {}) => ({
+      person: name, unit, c_level: !!extra.c_level, start_date: start, kidem, kidem_years: years, kidem_bonus: extra.bonus ?? 0,
+      companies: [...new Set(lines.map((l) => l.company_id))], lines, rate,
+      cost_usd: r2(lines.reduce((s, l) => s + l.cost_usd, 0)), cost27_usd: r2(lines.reduce((s, l) => s + l.cost27_usd, 0)), value_usd: r2(lines.reduce((s, l) => s + l.cost_usd, 0) * 0.8),
+      reasons, flags: extra.flags, plan: { pct: null, adj: 0, note: "" }, germany: lines.every((l) => l.company_id === "gmbh"),
+      prim_2026_usd: extra.prim ?? null, raise_2026: extra.r26 === undefined ? null : { old: 50_000, new: 50_000 * (1 + extra.r26), rate: extra.r26 },
+    });
+    const people = [
+      person("Örnek Kurucu", "C-Level", "2022-04-07", "4 yıl 7 ay", 4, [ln(1, "tr", "bordro", "TRY", 28075.5, 0.3, 992, 1161, { asgari: true }), ln(2, "llc", "sozlesme", "USD", 4184, 0.062, 4184, 4443)], 0.089, ["Dövizle ödeniyor: TL karşılığı TÜFE kadar büyür → %8,9", "Asgari ücrete bağlı kısım yasal artışla (%30)"], { c_level: true, prim: 524, r26: 0.45 }),
+      person("Örnek Mentor", "Mentor-B", "2024-08-05", "2 yıl 3 ay", 2, [ln(3, "llc", "sozlesme", "TRY", 84000, 0.31, 1659, 1956)], 0.31, ["Türkiye tabanı %30 (TÜFE)", "Kıdem 2 yıl: +1 puan"], { bonus: 0.01, prim: 294, r26: 0.65 }),
+      person("Örnek Yeni Mentor", "Mentor-B", "2025-07-25", "1 yıl 3 ay", 1, [ln(4, "llc", "sozlesme", "TRY", 84000, 0.3, 1659, 1941)], 0.3, ["Türkiye tabanı %30 (TÜFE)"], { prim: 280, r26: 0.56 }),
+      person("Örnek Destek", "Support", "2022-04-10", "4 yıl 7 ay", 4, [ln(5, "gmbh", "bordro", "EUR", 4100, 0.07, 5535, 5923, { basis: "brut" })], 0.07, ["Almanya tabanı %4", "Kıdem 4 yıl: +3 puan"], { bonus: 0.03, prim: 362, r26: 0.4 }),
+      person("Örnek Yazılımcı", "Yazılım", "2025-02-03", "1 yıl 9 ay", 1, [ln(6, "tr", "bordro", "TRY", 102740, 0.3, 3996, 4675)], 0.3, ["Türkiye tabanı %30 (TÜFE)"], { prim: 280, r26: 0.23, flags: ["Daha kıdemsiz Örnek (1 yıl 4 ay) %29 daha fazla alıyor"] }),
+      person("Örnek Satış", "Satış", "2026-07-09", "4 ay", 0, [ln(7, "llc", "sozlesme", "TRY", 48000, 0.15, 948, 981)], 0.15, ["Türkiye tabanı %30 (TÜFE)", "07.2026'de girdi: taban 6/12 oranında"], { prim: 185 }),
+    ];
+    const q = (quarter: string, kar: number, havuz: number, satis: number, donation: number) => ({ quarter, months: 3, kar_usd: kar, havuz_prim_usd: havuz, satis_prim_usd: satis, prim_usd: havuz + satis, donation_usd: donation });
+    const quarters = [q("Q3 2025", 111_547, 13_386, 0, 5_577), q("Q4 2025", 249_502, 29_940, 0, 14_970), q("Q1 2026", 208_804, 24_096, 832, 12_528), q("Q2 2026", 269_571, 31_318, 3_017, 16_174), q("Q3 2026", 339_073, 39_152, 3_760, 16_153)];
+    const total = (k: "cost_usd" | "cost27_usd") => r2(people.reduce((s, p) => s + p[k], 0));
+    const coRow = (company_id: "llc" | "gmbh" | "tr") => {
+      const ls = people.flatMap((p) => p.lines).filter((l) => l.company_id === company_id);
+      const members = people.filter((p) => p.companies.includes(company_id));
+      return { company_id, headcount: members.length, staff: members.filter((p) => !p.c_level).length, cost_usd: r2(ls.reduce((s, l) => s + l.cost_usd, 0)), cost27_usd: r2(ls.reduce((s, l) => s + l.cost27_usd, 0)), rate_local: 0.25, median_rate: 0.3 };
+    };
+    return {
+      year: 2027, today: TODAY, fx_date: TODAY, missing_fx: [],
+      params: { tr: 0.3, de: 0.04, asgari: null, c_level_usd: null, kidem_step: 0.01, kidem_cap: 3, kur_artis: null }, plan_people: {},
+      derived: { kur_artis: 0.193, kur_artis_observed: 0.193, usdtry_now: 50.63, usdtry_27: 56.26, asgari: 0.3, fx_rule: 0.0894, asgari_net_27: 36498.15 },
+      people, companies: (["llc", "gmbh", "tr"] as const).map(coRow),
+      totals: { cost_usd: total("cost_usd"), cost27_usd: total("cost27_usd"), headcount: people.length, staff_rate_median: 0.3, staff_rate_local: 0.2, kidem_cost27_usd: 210 },
+      history: {
+        months: [], quarters, q4_2025: quarters[1], prim_2026_usd: 102_174, prim_2026_months: 9, donation_2026_usd: 44_856, kar_2026_usd: 817_448,
+        raise_2026_median: 0.54, raise_2026_count: 24, raise_2026_weighted: 0.42,
+      },
+    };
+  }
+
   if (path === "/api/finance/decisions") {
     const visible = DECISIONS.filter((d) => !d.company_id || ids.includes(d.company_id)).map((d) => ({
       ...d,

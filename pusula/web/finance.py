@@ -38,7 +38,7 @@ from pusula.db.models import (
     Money,
     SnapshotSection,
 )
-from pusula.finance import analytics, payroll, sheet, store, views, weekly
+from pusula.finance import analytics, compass, payroll, sheet, store, views, weekly
 from pusula.finance.fx import load_fx
 from pusula.finance.snapshot import (
     SECTION_BY_KEY,
@@ -813,6 +813,32 @@ def payroll_screen(company: str = views.ALL) -> Any:
             "missing_fx": sorted(fx.missing),
         }
     )
+
+
+# Prim geçmişinin başı: TL tutarlar o ayın kuruyla çevrilir
+COMPASS_FX_SINCE = date(2025, 6, 1)
+
+
+@router.get("/compass")
+def compass_screen(company: str = views.ALL) -> Any:
+    with connect() as conn:
+        payroll.ensure_schema(conn)
+        compass.ensure_schema(conn)
+        companies = store.load_companies(conn)
+        lines = payroll.load_payroll(conn)
+        history = compass.load_history(conn)
+        plan = compass.load_plan(conn)
+        fx = load_fx(conn, COMPASS_FX_SINCE)
+    view = compass.compass_view(lines, history, plan, fx, _scope(company, companies), _now().date())
+    return jsonable_encoder({**view, "fx_date": fx.latest_date(), "missing_fx": sorted(fx.missing)})
+
+
+@router.put("/compass/plan")
+def save_compass_plan(body: compass.CompPlan) -> Any:
+    with connect() as conn, db_errors():
+        compass.ensure_schema(conn)
+        compass.save_plan(conn, body)
+    return {"ok": True}
 
 
 def _payroll_ready() -> None:

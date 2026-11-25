@@ -8,7 +8,7 @@ import { FlowsTab } from "./FlowsTab";
 import { addDays, day, istanbulToday, SCOPES } from "./format";
 import { IntercompanyTab } from "./IntercompanyTab";
 import { OverviewTab } from "./OverviewTab";
-import { PayrollTab } from "./PayrollTab";
+import { CompassTab } from "./CompassTab";
 import { ProjectionTab } from "./ProjectionTab";
 import { RecurringTab } from "./RecurringTab";
 import { TaxTab } from "./TaxTab";
@@ -21,7 +21,7 @@ const TITLES: Record<FinanceTab, [string, string]> = {
   genel: ["Genel bakış", "Konsolide nakit, şirketler ve uyarılar"],
   akis: ["Nakit akışı", "Aylık giriş ve çıkış, kategoriler, hareketler"],
   duzenli: ["Düzenli ödemeler", "Abonelikler, üreticiler, ortak ve yüklenici ödemeleri; aylık ve yıllık maliyet"],
-  personel: ["Personel maliyeti", "Maaş yükü: net, vergi ve sigorta, işveren payı, yan hak; kişi başı maliyet"],
+  personel: ["Maaş ve prim pusulası", "2027 zam önerisi ve gerekçesi, kıdem, prim ve donation geçmişi"],
   projeksiyon: ["Projeksiyon", "Planlı alacak ve borçlarla kasa seyri"],
   "sirketler-arasi": ["Şirketler arası", "Transferler ve net pozisyon"],
   bilanco: ["Haftalık bilanço", "Şirket başına aktif ve pasif"],
@@ -147,7 +147,7 @@ export function FinancePage({ tab }: { tab: FinanceTab }) {
       ) : tab === "duzenli" ? (
         <RecurringTab {...props} meta={meta.data} />
       ) : tab === "personel" ? (
-        <PayrollTab {...props} meta={meta.data} />
+        <CompassTab {...props} meta={meta.data} />
       ) : tab === "projeksiyon" ? (
         <ProjectionTab {...props} meta={meta.data} />
       ) : tab === "sirketler-arasi" ? (
