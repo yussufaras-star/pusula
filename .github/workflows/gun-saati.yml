@@ -50,6 +50,17 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install -r requirements.txt
+      # Son block-ingest 19:07'de; dün akşam gelen lead'ler sayılmadan özet
+      # dünün gelen lead'ini ~10-18 eksik yazıyordu. Hata özeti durdurmaz.
+      - name: Gelen lead akışı (dünü tamamla)
+        continue-on-error: true
+        env:
+          ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
+          ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
+          ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
+          ZOHO_ACCOUNTS_DOMAIN: ${{ secrets.ZOHO_ACCOUNTS_DOMAIN }}
+          ZOHO_API_DOMAIN: ${{ secrets.ZOHO_API_DOMAIN }}
+        run: python scripts/lead_inflow.py
       - if: ${{ vars.CEO_OZET_KANAL != '' }}
         run: |
           python -m pip install playwright==1.48.0
