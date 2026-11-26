@@ -68,6 +68,7 @@ from pusula.web.auth import (
     passwords,
     require_cron,
 )
+from pusula.marketing import load_marketing
 from pusula.sales_bridge import aligned_ranges, build_bridge, mix_rows, sonar_stats, won_by_package
 from pusula.sales_report import REPORT_START, SOURCE_DIMS, build_sales_report, source_yield
 from pusula.web.ceo import router as ceo_router
@@ -754,18 +755,19 @@ def sales_bridge(
 
     def build() -> Any:
         mix = mix_rows(won_by_package(*a, owners), won_by_package(*b, owners))
-        return jsonable_encoder(
-            build_bridge(
-                a,
-                b,
-                *rows,
-                a_reps=pa["reps"] if show_reps else (),
-                b_reps=pb["reps"] if show_reps else (),
-                mix=mix,
-                sonar_a=sonar_stats(*a, owners),
-                sonar_b=sonar_stats(*b, owners),
-            )
+        bridge = build_bridge(
+            a,
+            b,
+            *rows,
+            a_reps=pa["reps"] if show_reps else (),
+            b_reps=pb["reps"] if show_reps else (),
+            mix=mix,
+            sonar_a=sonar_stats(*a, owners),
+            sonar_b=sonar_stats(*b, owners),
         )
+        # Lead kanalları ekip düzeyinde; tek temsilcide pazarlama kartı yok.
+        bridge["pazarlama"] = load_marketing(a, b, today) if subject in (TEAM, AVG) else None
+        return jsonable_encoder(bridge)
 
     key = ("sales-bridge", a, b, subject, show_reps, today.isoformat(), as_of)
     payload = cache.cached(key, REPORT_TTL if a[1] >= today or b[1] >= today else HISTORY_TTL, build)

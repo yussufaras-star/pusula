@@ -211,8 +211,15 @@ def build(leads: list[Lead], dim: str, weeks: int, today: date) -> dict[str, Any
 
 
 def load_lead_channels(dim: str, weeks: int, today: date) -> dict[str, Any]:
+    leads = load_leads(week_start(today) - timedelta(weeks=max(weeks, 2 * QUALITY_WEEKS)))
+    if leads is None:
+        return {"available": False, "dim": dim}
+    return build(leads, dim, weeks, today)
+
+
+def load_leads(first: date) -> list[Lead] | None:
+    """first gününden beri oluşturulan lead'ler (toplu içe aktarım günleri hariç); kolon yoksa None."""
     org_id = get_org_id()
-    first = week_start(today) - timedelta(weeks=max(weeks, 2 * QUALITY_WEEKS))
     with connect() as conn:
         has = conn.execute(
             """
@@ -221,7 +228,7 @@ def load_lead_channels(dim: str, weeks: int, today: date) -> dict[str, Any]:
             """
         ).fetchone()
         if not has:
-            return {"available": False, "dim": dim}
+            return None
         rows = conn.execute(
             """
             WITH base AS (
@@ -247,5 +254,4 @@ def load_lead_channels(dim: str, weeks: int, today: date) -> dict[str, Any]:
     # Toplu içe aktarım günleri akış değildir.
     _, imports = split_imports(dict(Counter(x.day for x in leads)))
     skip = {x["gun"] for x in imports}
-    leads = [x for x in leads if x.day not in skip]
-    return build(leads, dim, weeks, today)
+    return [x for x in leads if x.day not in skip]
