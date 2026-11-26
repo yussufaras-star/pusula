@@ -29,6 +29,7 @@ type FinanceRoute =
   | "finans/bilanco"
   | "finans/vergi"
   | "finans/kararlar"
+  | "finans/uyarilar"
   | "finans/hesaplar"
   | "finans/ozet";
 type Route = SalesRoute | FinanceRoute;
@@ -61,6 +62,7 @@ const NAV: Record<Area, NavItem[]> = {
     { route: "finans/bilanco", label: "Bilanço" },
     { route: "finans/vergi", label: "Vergi" },
     { route: "finans/kararlar", label: "Kararlar" },
+    { route: "finans/uyarilar", label: "Uyarılar" },
     { route: "finans/hesaplar", label: "Hesaplar" },
   ],
 };

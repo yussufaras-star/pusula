@@ -588,3 +588,31 @@ export interface CompassPayload {
     raise_2026_weighted: number | null;
   };
 }
+
+export type AlertKind = "uretici" | "abonelik" | "olagandisi";
+export type AlertStatus = "acik" | "guven" | "riskli" | "kapandi";
+
+export interface FinAlert {
+  id: number;
+  kind: AlertKind;
+  reason: string;
+  status: AlertStatus;
+  due: boolean;
+  remind_at: string | null;
+  decided_at: string | null;
+  created_at: string;
+  tx_id: number;
+  booked_at: string;
+  amount: number;
+  currency: string;
+  counterparty: string | null;
+  description: string;
+  company_id: CompanyId;
+  category_id: string | null;
+  account: string;
+}
+
+export interface Alerts {
+  alerts: FinAlert[];
+  remind_days: number[];
+}

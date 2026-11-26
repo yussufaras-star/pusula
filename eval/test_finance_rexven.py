@@ -172,6 +172,39 @@ def test_cuzdan_toplamlari_sayfalanir(store):
     assert skipped == 1
 
 
+def test_uretici_cuzdanlari_ayni_geciste_toplanir(store):
+    wallets = [
+        {"type": "supplier", "currency": "TRY", "balance": "1000.00", "walletId": 77, "userId": 186, "firstName": "Üretici", "lastName": ""},
+        {"type": "supplier", "currency": "USD", "balance": "0.00", "walletId": 9, "userId": 5},
+        {"type": "seller", "currency": "TRY", "balance": "50", "walletId": 3, "userId": 7},
+    ]
+
+    def routes(request, path):
+        return httpx.Response(200, json={"wallets": wallets, "pagination": {"page": 1, "limit": 1000, "total": 3}})
+
+    suppliers: list[rexven.SupplierWallet] = []
+    rexven.wallet_totals(_client(routes), suppliers)
+    assert suppliers == [rexven.SupplierWallet(77, 186, "Üretici", "TRY", D("1000.00"))]
+
+
+def test_uretici_odemeleri_yalniz_supplier_payout(store):
+    logs = [
+        {"id": 1, "walletId": 77, "userId": 186, "currency": "TRY", "transactionType": "productRevenue", "amount": "220",
+         "createdAt": "2026-10-29T10:00:00Z"},
+        {"id": 2, "walletId": 77, "userId": 186, "currency": "TRY", "transactionType": "supplierPayout", "amount": "100000.00",
+         "createdAt": "2026-10-30T05:35:00.000Z", "description": "Ekim ödemesi"},
+    ]
+    calls = []
+
+    def routes(request, path):
+        assert path == "/wallets/logs"
+        return httpx.Response(200, json={"logs": logs, "pagination": {"total": 2}})
+
+    [p] = rexven.supplier_payouts(_client(routes, calls), 77, date(2026, 10, 1), date(2026, 11, 1))
+    assert (p.log_id, p.amount, p.currency, p.paid_at.date(), p.description) == (2, D("100000.00"), "TRY", date(2026, 10, 30), "Ekim ödemesi")
+    assert calls[-1][2]["walletId"] == "77" and calls[-1][2]["startDate"] == "2026-10-01"
+
+
 def test_netbird_yoksa_erisilemez(monkeypatch):
     monkeypatch.delenv("REXVEN_NETBIRD", raising=False)
     assert not rexven.reachable()

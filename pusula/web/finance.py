@@ -38,7 +38,7 @@ from pusula.db.models import (
     Money,
     SnapshotSection,
 )
-from pusula.finance import analytics, compass, payroll, sheet, store, views, weekly
+from pusula.finance import alerts, analytics, compass, payroll, sheet, store, views, weekly
 from pusula.finance.fx import load_fx
 from pusula.finance.snapshot import (
     SECTION_BY_KEY,
@@ -1017,3 +1017,29 @@ def patch_line(line_id: int, payload: dict[str, Any] = Body(...)) -> Any:
 @router.delete("/snapshot-lines/{line_id}")
 def delete_line(line_id: int) -> Any:
     return _delete("fin_snapshot_lines", line_id)
+
+
+# --- uyarılar ----------------------------------------------------------------------------
+
+
+@router.get("/alerts")
+def alert_list(company: str = views.ALL) -> Any:
+    with connect() as conn:
+        companies = store.load_companies(conn)
+        rows = alerts.list_alerts(conn, _now(), _scope(company, companies))
+    return jsonable_encoder({"alerts": rows, "remind_days": alerts.REMIND_DAYS})
+
+
+class AlertDecision(BaseModel):
+    action: Literal["guven", "riskli"]
+    remind_days: int | None = None
+
+
+@router.patch("/alerts/{alert_id}")
+def decide_alert(alert_id: int, body: AlertDecision) -> Any:
+    if body.action == "riskli" and body.remind_days not in alerts.REMIND_DAYS:
+        raise HTTPException(status_code=422, detail="Hatırlatma aralığı seçin")
+    with connect() as conn:
+        if not alerts.decide(conn, alert_id, body.action, body.remind_days, _now()):
+            raise HTTPException(status_code=404, detail="Uyarı bulunamadı")
+    return {"id": alert_id}

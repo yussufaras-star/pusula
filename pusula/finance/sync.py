@@ -20,14 +20,14 @@ import os
 import re
 import time
 from collections.abc import Callable, MutableMapping, Sequence
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 import httpx
 
 from pusula.db.models import FinAccount, FinCompany, FinReceivable
-from pusula.finance import discover, fx, store
+from pusula.finance import alerts, discover, fx, store
 from pusula.finance.providers import ADAPTERS, rexven
 from pusula.finance.providers.base import HTTP_TIMEOUT, AdapterResult, ProviderError
 from pusula.metrics import TZ
@@ -171,16 +171,70 @@ def sync_fx(now: datetime, days: int | None = None) -> dict[str, Any]:
     return {"ok": True, "rows": count}
 
 
-def sync_wallets(http: httpx.Client, now: datetime) -> dict[str, Any]:
+def sync_wallets(
+    http: httpx.Client, now: datetime, suppliers: list[rexven.SupplierWallet] | None = None
+) -> dict[str, Any]:
     """Rexven platform cüzdan toplamları → fin_wallets (günde bir satır)."""
     try:
-        totals, skipped = rexven.wallet_totals(http)
+        totals, skipped = rexven.wallet_totals(http, suppliers)
         with connect() as conn:
             rows = store.save_platform_wallets(conn, totals, now.date())
     except Exception as exc:
         logger.warning("cuzdan senkronu basarisiz (%s)", type(exc).__name__)
         return {"ok": False, "error": short_error(exc)}
     return {"ok": True, "rows": rows, "skipped": skipped}
+
+
+def sync_payouts(http: httpx.Client, now: datetime, suppliers: Sequence[rexven.SupplierWallet]) -> dict[str, Any]:
+    """Üretici cüzdanlarından yapılan ödemeler → fin_producer_payouts.
+
+    Her cüzdan son taramasından (yoksa PRODUCER_LOOKBACK gün öncesinden) bir
+    gün geriye örtüşerek taranır. Bakiyesi sıfırlanan ama önceden taranan
+    cüzdanlar da taranır: yoksa en eski tarama tarihi takılı kalır.
+    """
+    with connect() as conn:
+        alerts.ensure_schema(conn)
+        starts = alerts.scan_starts(conn)
+    wallets = {w.wallet_id: w for w in suppliers}
+    for wid in starts.keys() - wallets.keys():
+        wallets[wid] = rexven.SupplierWallet(wid, 0, "", "", Decimal("0"))
+    first = now.date() - timedelta(days=alerts.PRODUCER_LOOKBACK + alerts.PAYOUT_BEFORE)
+    added = errors = 0
+    for wallet in wallets.values():
+        start = starts[wallet.wallet_id].date() - timedelta(days=1) if wallet.wallet_id in starts else first
+        try:
+            payouts = rexven.supplier_payouts(http, wallet.wallet_id, start, now.date() + timedelta(days=1))
+            with connect() as conn:
+                if not wallet.currency:  # bakiyesi sıfırlanmış: kayıtlı ad / para birimi kalır
+                    row = conn.execute("SELECT producer, currency FROM fin_payout_scans WHERE wallet_id = %s", (wallet.wallet_id,)).fetchone()
+                    wallet = rexven.SupplierWallet(wallet.wallet_id, 0, row[0], row[1], Decimal("0"))
+                added += alerts.save_payouts(conn, wallet, payouts, now)
+        except Exception as exc:
+            errors += 1
+            logger.warning("uretici odeme taramasi basarisiz (%s)", type(exc).__name__)
+    return {"ok": errors == 0, "wallets": len(wallets), "added": added, **({"errors": errors} if errors else {})}
+
+
+def refresh_alerts(now: datetime, send: Callable[[str, str], Any] | None = None) -> dict[str, Any]:
+    """Uyarıları yeniler ve bildirilmemişleri Cliq'e kişisel mesajla gönderir."""
+    since: date = now.date() - timedelta(days=alerts.HISTORY_DAYS + alerts.LOOKBACK_DAYS)
+    with connect() as conn:
+        txs = store.load_transactions(conn, since)
+        accounts = store.load_accounts(conn)
+        kinds = {c.id: c.kind for c in store.load_categories(conn)}
+        rates = fx.load_fx(conn, since)
+        report: dict[str, Any] = alerts.refresh(conn, txs, accounts, kinds, rates, now.date())
+    if send is None:
+        from pusula.block_share import post_cliq
+
+        send = post_cliq
+    try:
+        with connect() as conn:
+            report["notified"] = alerts.notify(conn, now, send)
+    except Exception as exc:
+        logger.warning("uyari bildirimi basarisiz (%s)", type(exc).__name__)
+        report["notify_error"] = short_error(exc)
+    return report
 
 
 def sync_receivables(http: httpx.Client, now: datetime) -> dict[str, Any]:
@@ -292,8 +346,10 @@ def run_finance_sync(
                 started,
             )
             platform = rexven.reachable() and account_id is None and provider in (None, "rexven")
-            wallets_report = sync_wallets(http, now) if platform else None
+            suppliers: list[rexven.SupplierWallet] = []
+            wallets_report = sync_wallets(http, now, suppliers) if platform else None
             receivables_report = sync_receivables(http, now) if platform else None
+            payouts_report = sync_payouts(http, now, suppliers) if platform and wallets_report and wallets_report["ok"] else None
         own = categorized = 0
         try:
             # Yeni gelenler eski hareketlerle de eşleşebilir: ilk senkron penceresi + pay
@@ -307,6 +363,13 @@ def run_finance_sync(
                 categorized += store.apply_category_rules(conn, since)
         except Exception as exc:
             logger.warning("hesap arasi / kategori kurali basarisiz (%s)", type(exc).__name__)
+        alerts_report = None
+        if account_id is None:
+            try:
+                alerts_report = refresh_alerts(now)
+            except Exception as exc:
+                logger.warning("uyari taramasi basarisiz (%s)", type(exc).__name__)
+                alerts_report = {"error": short_error(exc)}
         with connect() as conn:
             store.stamp_sync_run(conn, now)
     return {
@@ -318,5 +381,7 @@ def run_finance_sync(
         "categorized": categorized,
         **({"wallets": wallets_report} if wallets_report is not None else {}),
         **({"receivables": receivables_report} if receivables_report is not None else {}),
+        **({"payouts": payouts_report} if payouts_report is not None else {}),
+        **({"alerts": alerts_report} if alerts_report is not None else {}),
         **({"discovered": discovered} if discovered else {}),
     }
