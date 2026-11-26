@@ -2413,8 +2413,13 @@ table.meet-list {
   border-bottom: 1px solid var(--border);
 }
 
-.lf-channels tfoot td {
+.lf-channels tfoot td,
+.bridge tfoot td {
   font-weight: 600;
+}
+
+.bridge tfoot td {
+  border-top: 2px solid var(--border);
 }
 
 .lf-channels .lf-q {

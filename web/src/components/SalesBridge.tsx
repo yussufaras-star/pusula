@@ -527,6 +527,7 @@ function MarketingCard({
   b: BridgeSide;
   isAdmin: boolean;
 }) {
+  const totalSales = m.kanallar.reduce((sum, k) => sum + k.satis, 0);
   return (
     <section className="card bridge" data-share>
       <div className="card-head">
@@ -624,6 +625,26 @@ function MarketingCard({
                 </tr>
               ))}
             </tbody>
+            <tfoot>
+              <tr>
+                <td>Toplam</td>
+                <td className="num">{int(m.lead_b)}</td>
+                <td className="num">{int(m.lead_a)}</td>
+                <td className={`num ${tone(m.lead_degisim)}`}>
+                  {arrow(m.lead_degisim)}
+                  {change(m.lead_degisim)}
+                </td>
+                <td className="num">{int(totalSales)}</td>
+                <td className="num">
+                  {showFactor(
+                    m.lead_a + m.lead_b
+                      ? totalSales / (m.lead_a + m.lead_b)
+                      : null,
+                    "oran",
+                  )}
+                </td>
+              </tr>
+            </tfoot>
           </table>
         </div>
         <p className="muted cmp-note">
