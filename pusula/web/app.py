@@ -33,6 +33,7 @@ from pusula.commission import deals_sync_state, load_commission, load_rep_deals
 from pusula.churn import load_churn
 from pusula.config import get_org_id
 from pusula.paket import load_paket
+from pusula.kamp_premium import load_kamp_premium
 from pusula.reco import load_reco
 from pusula.hourly_nudges import run_hourly_nudges
 from pusula.lead_ciro import GRANS, load_lead_ciro
@@ -936,6 +937,19 @@ def paket(owner: str | None = None, user: AuthUser = Depends(admin_user)) -> Any
         ("paket", owner, today.isoformat(), data_as_of()),
         REPORT_TTL,
         lambda: jsonable_encoder(load_paket(today, owner or None)),
+    )
+
+
+@app.get("/api/kamp-premium")
+def kamp_premium(user: AuthUser = Depends(admin_user)) -> Any:
+    """Kamp ile kişiye dönüp sonra Premium alanlar: temsilci ve kişi bazında, almama nedeni."""
+    require_database()
+    today = _now().date()
+    names = {rep.rep_id: rep.full_name for rep in load_reps()}
+    return cache.cached(
+        ("kamp-premium", today.isoformat(), data_as_of()),
+        REPORT_TTL,
+        lambda: jsonable_encoder(load_kamp_premium(today, names)),
     )
 
 
