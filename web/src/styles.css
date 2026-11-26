@@ -1543,6 +1543,10 @@ table.spec {
   color: var(--critical-ink);
 }
 
+.good-text {
+  color: var(--good-ink);
+}
+
 table.meet-list {
   width: 100%;
   border-collapse: collapse;

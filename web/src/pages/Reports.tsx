@@ -5,6 +5,7 @@ import { Funnel } from "../components/Funnel";
 import { StatTile } from "../components/StatTile";
 import { ChurnBoard } from "../components/ChurnBoard";
 import { PaketBoard } from "../components/PaketBoard";
+import { KampPremium } from "../components/KampPremium";
 import { RecoBoard } from "../components/RecoBoard";
 import { SyncButton } from "../components/SyncButton";
 import { SourceYield } from "../components/SourceYield";
@@ -234,6 +235,18 @@ export function ReportsPage({ me }: { me: Me }) {
               </div>
               <div className="card-body">
                 <PaketBoard />
+              </div>
+            </section>
+          ) : null}
+
+          {isAdmin ? (
+            <section className="card">
+              <div className="card-head">
+                <h2>Kamp → Premium dönüşümü</h2>
+                <span className="hint">Kamp ile kişiye dönüp sonra Premium alanlar · son 5 ay · satıra tıkla: kişiler</span>
+              </div>
+              <div className="card-body">
+                <KampPremium />
               </div>
             </section>
           ) : null}
