@@ -40,3 +40,8 @@ def test_reason_prefers_objection_and_flags_no_call() -> None:
 def test_empty() -> None:
     out = build([], {}, TODAY)
     assert out["oran"] is None and out["temsilciler"] == []
+
+
+def test_after_sales_owner_named() -> None:
+    out = build([person("6847331000000615001", "Naci", date(2026, 10, 2))], {}, TODAY)
+    assert out["temsilciler"][0]["name"] == "Nihat Kemer"
