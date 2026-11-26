@@ -489,3 +489,102 @@ export interface PayrollPayload extends FxMeta {
   inactive: Omit<PayrollLine, "net" | "brut" | "employee" | "employer" | "benefits" | "severance" | "total" | "total_usd">[];
   params: { tr_sgk_isveren: number; tr_kidem_tavan: number; tr_asgari_brut: number; de_umlagen: number };
 }
+
+// --- maaş ve prim pusulası (/api/finance/compass) ---
+
+export interface CompassParams {
+  tr: number;
+  de: number;
+  asgari: number | null;
+  c_level_usd: number | null;
+  kidem_step: number;
+  kidem_cap: number;
+  kur_artis: number | null;
+}
+
+export interface CompassPersonPlan {
+  pct: number | null;
+  adj: number;
+  note: string;
+}
+
+export interface CompassLine {
+  id: number;
+  company_id: CompanyId;
+  kind: PayKind;
+  currency: string;
+  basis: PayBasis;
+  label: string | null;
+  amount: number;
+  new_amount: number;
+  rate: number;
+  asgari: boolean;
+  net: number;
+  cost_usd: number;
+  cost27_usd: number;
+}
+
+export interface CompassPerson {
+  person: string;
+  unit: string;
+  c_level: boolean;
+  start_date: string | null;
+  kidem: string;
+  kidem_years: number;
+  kidem_bonus: number;
+  companies: CompanyId[];
+  lines: CompassLine[];
+  rate: number;
+  cost_usd: number;
+  cost27_usd: number;
+  value_usd: number;
+  reasons: string[];
+  flags?: string[];
+  plan: CompassPersonPlan;
+  germany: boolean;
+  prim_2026_usd: number | null;
+  raise_2026: { old: number; new: number; rate: number } | null;
+}
+
+export interface CompassQuarter {
+  quarter: string;
+  months: number;
+  kar_usd: number;
+  havuz_prim_usd: number;
+  satis_prim_usd: number;
+  prim_usd: number;
+  donation_usd: number;
+}
+
+export interface CompassPayload {
+  year: number;
+  today: string;
+  fx_date: string | null;
+  missing_fx: string[];
+  params: CompassParams;
+  plan_people: Record<string, CompassPersonPlan>;
+  derived: {
+    kur_artis: number;
+    kur_artis_observed: number | null;
+    usdtry_now: number | null;
+    usdtry_27: number | null;
+    asgari: number;
+    fx_rule: number;
+    asgari_net_27: number;
+  };
+  people: CompassPerson[];
+  companies: { company_id: CompanyId; headcount: number; staff: number; cost_usd: number; cost27_usd: number; rate_local: number; median_rate: number | null }[];
+  totals: { cost_usd: number; cost27_usd: number; headcount: number; staff_rate_median: number | null; staff_rate_local: number | null; kidem_cost27_usd: number };
+  history: {
+    months: (Omit<CompassQuarter, "quarter" | "months"> & { month: string; quarter: string })[];
+    quarters: CompassQuarter[];
+    q4_2025: CompassQuarter | null;
+    prim_2026_usd: number;
+    prim_2026_months: number;
+    donation_2026_usd: number;
+    kar_2026_usd: number;
+    raise_2026_median: number | null;
+    raise_2026_count: number;
+    raise_2026_weighted: number | null;
+  };
+}

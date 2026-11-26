@@ -990,6 +990,26 @@ CREATE TABLE IF NOT EXISTS fin_payroll (
     CHECK (kind = 'sozlesme' OR company_id IN ('tr', 'gmbh'))
 );
 
+-- Maaş ve prim pusulası (pusula/finance/compass.py). Geçmiş prim tablosundan aylık:
+-- şirket geneli kar / havuz / donation (person NULL), kişi başı havuz_prim, satis_prim,
+-- paket (maaş + multinet). Plan: yıl başına zam kuralları ve kişiye özel kararlar.
+CREATE TABLE IF NOT EXISTS fin_comp_history (
+    id        bigserial PRIMARY KEY,
+    month     date NOT NULL CHECK (extract(day FROM month) = 1),
+    person    text,
+    kind      text NOT NULL CHECK (kind IN ('kar', 'havuz', 'donation', 'havuz_prim', 'satis_prim', 'paket')),
+    currency  text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    amount    numeric(18, 2) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS fin_comp_history_month ON fin_comp_history (month);
+
+CREATE TABLE IF NOT EXISTS fin_comp_plan (
+    year        integer PRIMARY KEY,
+    params      jsonb NOT NULL DEFAULT '{}',
+    people      jsonb NOT NULL DEFAULT '{}',
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
 -- Geçiş: Wise'ta iptal edilen giden transferin iade bacağı ayrı kimlik alır
 -- (referans + ':iade'); eskiden çıkış bacağı aynı referansa takılıp kayboluyordu.
 -- Yeniden senkron eksik çıkış bacaklarını ekler.
@@ -1042,7 +1062,7 @@ BEGIN
         'fin_companies', 'fin_accounts', 'fin_categories', 'fin_transactions', 'fin_fx_rates',
         'fin_planned_items', 'fin_snapshots', 'fin_snapshot_lines', 'fin_decisions',
         'fin_category_rules', 'fin_wallets', 'fin_tax_settings', 'fin_provider_tokens',
-        'fin_receivables', 'fin_payroll'
+        'fin_receivables', 'fin_payroll', 'fin_comp_history', 'fin_comp_plan'
     ]
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);

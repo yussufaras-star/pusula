@@ -55,7 +55,7 @@ const NAV: Record<Area, NavItem[]> = {
     { route: "finans/ozet", label: "Yönetici özeti" },
     { route: "finans/akis", label: "Nakit akışı" },
     { route: "finans/duzenli", label: "Düzenli" },
-    { route: "finans/personel", label: "Personel" },
+    { route: "finans/personel", label: "Maaş & prim" },
     { route: "finans/projeksiyon", label: "Projeksiyon" },
     { route: "finans/sirketler-arasi", label: "Şirketler arası" },
     { route: "finans/bilanco", label: "Bilanço" },
