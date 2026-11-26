@@ -5,6 +5,9 @@ sırasıyla) Kamp. Premium: ondan sonra oluşturulan, adında "Premium" geçen
 kazanılmış deal (Rexven-Premium, Re-Co-Premium, Plus'tan geçiş...). Premium ile
 gelip Kamp'ı sonradan alanlar ve Premium-Kamp paketi bu sayıya girmez.
 
+Satış ekibiyle birlikte satış sonrası (Nihat, Burcu) satışları da sayılır;
+deal sahibine göre gruplanır.
+
 Kamp satışından WAIT_DAYS gün geçmemişse kamp henüz yapılmamış olabilir:
 "süreçte" sayılır, orana girmez. Almayanın nedeni kamptan sonraki görüşmelerden:
 analiz edilmiş görüşmede itiraz varsa o; yoksa kamptan sonra kaç kez arandığı;
@@ -25,6 +28,11 @@ from pusula.sifir_satis import WON_STAGE
 MONTHS = 5
 WAIT_DAYS = 30
 UNKNOWN = "Diğer CRM kullanıcısı"
+# load_reps yalnız satış ekibini verir; satış sonrası adları sabit (panel_ciro.AFTER_SALES_IDS).
+AFTER_SALES_NAMES = {
+    "6847331000000615001": "Nihat Kemer",
+    "6847331000000653001": "Burcu Özkan",
+}
 
 DURUM = ("aldi", "almadi", "surecte")
 
@@ -63,7 +71,8 @@ def build(rows: Sequence[dict[str, Any]], names: dict[str, str], today: date) ->
         else:
             durum = "almadi"
         owner = str(r.get("owner") or "")
-        rep = reps.setdefault(owner, {"rep_id": owner, "name": names.get(owner, UNKNOWN),
+        name = names.get(owner) or AFTER_SALES_NAMES.get(owner, UNKNOWN)
+        rep = reps.setdefault(owner, {"rep_id": owner, "name": name,
                                       "giden": 0, "aldi": 0, "almadi": 0, "surecte": 0, "kisiler": []})
         rep["giden"] += 1
         rep[durum] += 1
