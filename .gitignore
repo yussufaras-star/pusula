@@ -21,3 +21,6 @@ public/
 tmp_*
 tmp_*.py
 *.tsbuildinfo
+
+# Revolut API özel anahtarı (scripts/revolut_setup.py)
+revolut-keys/

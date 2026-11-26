@@ -11,7 +11,7 @@
 #
 # Sağlayıcı anahtarları yalnız repo secrets'tan, tek tek verilir:
 # MERCURY_API_TOKEN, WISE_API_TOKEN, STRIPE_RESTRICTED_KEY, KUVEYT_TURK_*,
-# GARANTI_*. Bir şirketin
+# GARANTI_*, REVOLUT_*_GMBH (scripts/revolut_setup.py yazar). Bir şirketin
 # ayrı token'ı olursa (ör. WISE_TOKEN_GMBH) buraya bir satır eklenir.
 # Tanımsız secret boş gelir; o hesap "Eksik ortam değişkeni" hatası verir.
 name: finance-sync
@@ -80,6 +80,10 @@ jobs:
           GARANTI_UNIT_NUMBER: ${{ secrets.GARANTI_UNIT_NUMBER }}
           GARANTI_ACCOUNT_NUMBER: ${{ secrets.GARANTI_ACCOUNT_NUMBER }}
           GARANTI_IBAN: ${{ secrets.GARANTI_IBAN }}
+          REVOLUT_CLIENT_ID_GMBH: ${{ secrets.REVOLUT_CLIENT_ID_GMBH }}
+          REVOLUT_PRIVATE_KEY_GMBH: ${{ secrets.REVOLUT_PRIVATE_KEY_GMBH }}
+          REVOLUT_REFRESH_TOKEN_GMBH: ${{ secrets.REVOLUT_REFRESH_TOKEN_GMBH }}
+          REVOLUT_ISS_GMBH: ${{ secrets.REVOLUT_ISS_GMBH }}
           REXVEN_API_REFRESH_TOKEN: ${{ secrets.REXVEN_API_REFRESH_TOKEN }}
           DAYS: ${{ inputs.days }}
         run: python scripts/finance_sync.py ${DAYS:+--days "$DAYS"}

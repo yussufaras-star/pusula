@@ -215,8 +215,8 @@ bilanço ve stratejik kararlar. Üst barda "Finans operasyonu" geçişiyle açı
   "anahtar eki", `fin_accounts.credential_key`). Revolut:
   `REVOLUT_CLIENT_ID_<EK>` / `REVOLUT_PRIVATE_KEY_<EK>` (PKCS8 PEM) /
   `REVOLUT_REFRESH_TOKEN_<EK>` / `REVOLUT_ISS_<EK>`. Vercel'e ve GitHub
-  Actions secrets'a aynı adla eklenir.
-- **Ekstre:** Garanti, KuveytTürk, Vakıf vb. internet şubesinden CSV/XLSX
+  Actions secrets'a aynı adla eklenir. GmbH Revolut kurulumu: `scripts/revolut_setup.py`.
+- **Ekstre:** Garanti, KuveytTürk, Vakıf, Commerzbank (GmbH, Almanca sütunlar) vb. internet şubesinden CSV/XLSX
   indirilir, Hesaplar sekmesinden önizlemeyle yüklenir. Aynı dosya tekrar
   yüklenince çift kayıt oluşmaz.
 - **Senkron:** paneldeki "Hesapları güncelle" (`POST /api/finance/sync`,
