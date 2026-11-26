@@ -7,6 +7,15 @@ import type { CompanyId, Meta, PayBasis, PayKind, PayrollLine, PayrollPayload, P
 import { CompanyTag, Field, FxNote, Loading, Modal, useFin, type TabProps } from "./ui";
 
 const KIND_LABEL: Record<PayKind, string> = { bordro: "Bordro", sozlesme: "Sözleşme" };
+function tenure(start: string): string {
+  const [y, m, d] = start.split("-").map(Number);
+  const now = new Date();
+  const months = (now.getFullYear() - y) * 12 + now.getMonth() + 1 - m - (now.getDate() < d ? 1 : 0);
+  if (months < 1) return "<1 ay";
+  const yy = Math.floor(months / 12);
+  const mm = months % 12;
+  return [yy ? `${yy} yıl` : "", mm ? `${mm} ay` : ""].filter(Boolean).join(" ");
+}
 const pct = (v: number) => `%${new Intl.NumberFormat("tr-TR", { maximumFractionDigits: 2 }).format(v * 100)}`;
 
 export function PayrollTab({ scope, meta, tick }: TabProps) {
@@ -120,6 +129,7 @@ export function PayrollTab({ scope, meta, tick }: TabProps) {
                 <thead>
                   <tr>
                     <th>Kişi</th>
+                    <th>Kıdem</th>
                     <th>Ödeme</th>
                     <th className="num">Net</th>
                     <th className="num">Brüt</th>
@@ -188,6 +198,7 @@ function PersonRow({ p, open, onToggle, onEdit }: { p: PayrollPerson; open: bool
             {p.start_date ? ` · ${day(p.start_date)}` : ""}
           </div>
         </td>
+        <td style={{ whiteSpace: "nowrap" }}>{p.start_date ? tenure(p.start_date) : "—"}</td>
         <td>
           {p.lines.map((l) => (
             <div key={l.id}>{payLabel(l)}</div>
@@ -207,6 +218,7 @@ function PersonRow({ p, open, onToggle, onEdit }: { p: PayrollPerson; open: bool
               <td className="fin-desc">
                 <span className="muted">{l.notes || " "}</span>
               </td>
+              <td />
               <td>
                 <CompanyTag id={l.company_id} /> {l.label || KIND_LABEL[l.kind]}
               </td>
