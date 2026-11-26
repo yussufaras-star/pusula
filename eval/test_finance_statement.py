@@ -151,6 +151,20 @@ def test_ascii_and_uppercase_headers() -> None:
     )
 
 
+def test_commerzbank_german_csv() -> None:
+    text = (
+        "Buchungstag;Wertstellung;Umsatzart;Buchungstext;Betrag;Währung;IBAN Kontoinhaber;Kategorie\n"
+        '25.11.2026;25.11.2026;Gutschrift;"REXVEN LLC Invoice 112";12.500,00;EUR;DE00 0000;Einnahmen\n'
+        '24.11.2026;24.11.2026;Lastschrift;"DHL Paket";-1234,56;EUR;DE00 0000;Versand\n'
+    )
+    _, mapping, parsed = _parse(text)
+    assert mapping == StatementMapping(date=0, description=3, amount=4)
+    assert [(t.booked_at, t.amount) for t in parsed.txs] == [
+        (date(2026, 11, 25), D("12500.00")),
+        (date(2026, 11, 24), D("-1234.56")),
+    ]
+
+
 def test_no_date_column_returns_none_for_user_choice() -> None:
     assert guess_mapping(["Açıklama", "Tutar"]) is None
 

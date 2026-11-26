@@ -34,13 +34,17 @@ OLE2_MAGIC = b"\xd0\xcf\x11\xe0"
 ZIP_MAGIC = b"PK\x03\x04"
 
 # Öncelik sırası önemlidir: önce tam eşleşme, sonra içerme aranır.
+# Almanca adlar GmbH'nin Commerzbank "Umsätze" CSV'si için.
 KEYS: dict[str, tuple[str, ...]] = {
-    "date": ("işlem tarihi", "tarih", "date", "booking date", "valör"),
-    "description": ("açıklama", "aciklama", "işlem açıklaması", "description", "detay", "explanation"),
-    "amount": ("tutar", "işlem tutarı", "amount", "miktar"),
+    "date": ("işlem tarihi", "tarih", "date", "booking date", "valör", "buchungstag", "buchungsdatum", "wertstellung"),
+    "description": (
+        "açıklama", "aciklama", "işlem açıklaması", "description", "detay", "explanation",
+        "buchungstext", "verwendungszweck",
+    ),
+    "amount": ("tutar", "işlem tutarı", "amount", "miktar", "betrag"),
     "debit": ("borç", "borc", "debit", "çıkış"),
     "credit": ("alacak", "credit", "giriş"),
-    "balance": ("bakiye", "kalan bakiye", "balance"),
+    "balance": ("bakiye", "kalan bakiye", "balance", "saldo", "kontostand"),
 }
 
 
