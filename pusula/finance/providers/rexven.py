@@ -207,11 +207,24 @@ class WalletTotal:
     count: int  # bakiyesi sıfır olmayan cüzdan
 
 
-def wallet_totals(client: httpx.Client) -> tuple[list[WalletTotal], int]:
+@dataclass(frozen=True)
+class SupplierWallet:
+    wallet_id: int
+    user_id: int
+    name: str
+    currency: str
+    balance: Decimal
+
+
+def wallet_totals(
+    client: httpx.Client, suppliers: list[SupplierWallet] | None = None
+) -> tuple[list[WalletTotal], int]:
     """Tüm platform cüzdanları şirket / tür / para birimine göre toplanır.
 
     Her bileşim sıfır olsa da döner (bir önceki günün bakiyesi ezilsin).
     İkinci değer: tanınmayan tür / para birimindeki cüzdan sayısı.
+    suppliers verilirse bakiyesi sıfır olmayan üretici cüzdanları da eklenir
+    (ödeme denetimi aynı geçişten beslenir, liste ikinci kez çekilmez).
     """
     sums = {(c, k, cur): [Decimal("0"), 0] for cur, c in WALLET_COMPANY.items() for k in WALLET_KIND.values()}
     skipped = 0
@@ -229,6 +242,11 @@ def wallet_totals(client: httpx.Client) -> tuple[list[WalletTotal], int]:
                 continue
             sums[key][0] += balance
             sums[key][1] += balance != 0
+            if suppliers is not None and key[1] == "producer" and balance != 0 and w.get("walletId"):
+                name = f"{w.get('firstName') or ''} {w.get('lastName') or ''}".strip()
+                suppliers.append(
+                    SupplierWallet(int(w["walletId"]), int(w.get("userId") or 0), name or str(w.get("email") or ""), currency, balance)
+                )
         total = int((data.get("pagination") or {}).get("total") or 0)
         if not wallets or page * PAGE_LIMIT >= total:
             break
@@ -236,6 +254,56 @@ def wallet_totals(client: httpx.Client) -> tuple[list[WalletTotal], int]:
         raise ProviderError(f"{PROVIDER}: cüzdan sayfası sınırı aşıldı")
     totals = [WalletTotal(c, k, cur, bal, n) for (c, k, cur), (bal, n) in sums.items()]
     return totals, skipped
+
+
+# --- üretici ödemeleri ----------------------------------------------------------------
+
+PAYOUT_TYPE = "supplierPayout"
+
+
+@dataclass(frozen=True)
+class Payout:
+    log_id: int
+    wallet_id: int
+    user_id: int
+    currency: str
+    amount: Decimal
+    paid_at: datetime
+    description: str
+
+
+def supplier_payouts(client: httpx.Client, wallet_id: int, start: date, end: date) -> list[Payout]:
+    """Bir üretici cüzdanından yapılan ödemeler (supplierPayout).
+
+    Kayıt ucu tür filtresini yok saydığından cüzdanın tüm hareketleri gelir;
+    çağıran pencereyi kısa tutar (son taramadan bu yana).
+    """
+    out: list[Payout] = []
+    for page in range(1, MAX_PAGES + 1):
+        data = _get(
+            client, "/wallets/logs", startDate=start.isoformat(), endDate=end.isoformat(), page=page, limit=PAGE_LIMIT, walletId=wallet_id
+        )
+        logs = data.get("logs") if isinstance(data, dict) else None
+        if not isinstance(logs, list):
+            raise ProviderError(f"{PROVIDER}: cüzdan hareketleri okunamadı")
+        for log in logs:
+            if log.get("transactionType") != PAYOUT_TYPE or int(log.get("walletId") or 0) != wallet_id:
+                continue
+            out.append(
+                Payout(
+                    log_id=int(log["id"]),
+                    wallet_id=wallet_id,
+                    user_id=int(log.get("userId") or 0),
+                    currency=str(log.get("currency") or "").upper(),
+                    amount=num(log.get("amount")),
+                    paid_at=datetime.fromisoformat(str(log["createdAt"]).replace("Z", "+00:00")),
+                    description=str(log.get("description") or "")[:200],
+                )
+            )
+        total = int((data.get("pagination") or {}).get("total") or 0)
+        if not logs or page * PAGE_LIMIT >= total:
+            return out
+    raise ProviderError(f"{PROVIDER}: hareket sayfası sınırı aşıldı")
 
 
 # --- ödeme kuruluşlarında bekleyen tahsilat ----------------------------------------

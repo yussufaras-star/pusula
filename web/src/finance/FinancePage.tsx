@@ -12,10 +12,11 @@ import { CompassTab } from "./CompassTab";
 import { ProjectionTab } from "./ProjectionTab";
 import { RecurringTab } from "./RecurringTab";
 import { TaxTab } from "./TaxTab";
+import { AlertsTab } from "./AlertsTab";
 import type { Meta, Scope, SyncReport } from "./types";
 import { Loading, type TabProps } from "./ui";
 
-export type FinanceTab = "genel" | "akis" | "projeksiyon" | "sirketler-arasi" | "duzenli" | "personel" | "bilanco" | "vergi" | "kararlar" | "hesaplar";
+export type FinanceTab = "genel" | "akis" | "projeksiyon" | "sirketler-arasi" | "duzenli" | "personel" | "bilanco" | "vergi" | "kararlar" | "uyarilar" | "hesaplar";
 
 const TITLES: Record<FinanceTab, [string, string]> = {
   genel: ["Genel bakış", "Konsolide nakit, şirketler ve uyarılar"],
@@ -27,6 +28,7 @@ const TITLES: Record<FinanceTab, [string, string]> = {
   bilanco: ["Haftalık bilanço", "Şirket başına aktif ve pasif"],
   vergi: ["Cüzdan ve vergi", "LLC: satıcı ve üretici cüzdanları, yılın kârı ve yapıya göre ABD vergisi"],
   kararlar: ["Kararlar", "Stratejik kararlar ve takibi"],
+  uyarilar: ["Uyarılar", "Yeni abonelik, olağan dışı transfer ve Rexven'e işlenmemiş üretici ödemesi"],
   hesaplar: ["Hesaplar", "Banka bağlantıları ve ekstre yükleme"],
 };
 
@@ -158,6 +160,8 @@ export function FinancePage({ tab }: { tab: FinanceTab }) {
         <TaxTab {...props} meta={meta.data} />
       ) : tab === "kararlar" ? (
         <DecisionsTab {...props} meta={meta.data} />
+      ) : tab === "uyarilar" ? (
+        <AlertsTab {...props} meta={meta.data} />
       ) : (
         <AccountsTab {...props} meta={meta.data} />
       )}

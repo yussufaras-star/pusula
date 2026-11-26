@@ -791,6 +791,22 @@ export function mockFinance(method: string, url: string): unknown {
       },
     };
   }
+
+  if (path === "/api/finance/alerts") {
+    const alert = (id: number, kind: string, status: string, due: boolean, days: number, account: string, counterparty: string, amount: number, currency: string, reason: string, company_id = "llc") => ({
+      id, kind, status, due, reason, account, counterparty, amount, currency, company_id, tx_id: id,
+      booked_at: addDays(TODAY, -days), description: counterparty, category_id: null, created_at: `${TODAY}T09:00:00Z`,
+      decided_at: status === "acik" ? null : `${addDays(TODAY, -1)}T09:00:00Z`, remind_at: status === "riskli" ? `${addDays(TODAY, due ? -1 : 6)}T09:00:00Z` : null,
+    });
+    const alerts = [
+      alert(1, "uretici", "acik", true, 10, "Wise USD", "Örnek Üretici LLC", -12_000, "USD", "Bankadan çıktı, Rexven'de üretici cüzdanından düşülmedi"),
+      alert(2, "olagandisi", "acik", true, 3, "Wise USD", "Yeni Danışmanlık B.V.", -2_500, "USD", "Yeni alıcıya ilk ödeme (2.500 $)"),
+      alert(3, "abonelik", "riskli", true, 7, "Mercury IO kart", "Yeni SaaS", -12, "USD", "İlk kez çekilen abonelik / kart ödemesi"),
+      alert(4, "olagandisi", "riskli", false, 2, "KuveytTürk Ana Hesap", "Örnek Tedarikçi", -120_000, "TRY", "Alıcının normalinin 4.0 katı (ortanca 750 $)", "tr"),
+      alert(5, "olagandisi", "guven", false, 9, "Wise USD", "Büyük Ödeme Inc", -40_000, "USD", "Tek seferde büyük çıkış (40.000 $)"),
+    ];
+    return { alerts: alerts.filter((a) => ids.includes(a.company_id as CompanyId)), remind_days: [1, 3, 7, 14, 30] };
+  }
   return undefined;
 }
 
@@ -829,6 +845,7 @@ function mockWrite(method: string, path: string): unknown {
   if (path.startsWith("/api/finance/wallets") || path.startsWith("/api/finance/tax-settings")) return { id: 1 };
   if (path.startsWith("/api/finance/rules/")) return { id: 9, reverted: 6, reapplied: 0 };
   if (path.startsWith("/api/finance/transactions/")) return { id: 1, similar: 4 };
+  if (path.startsWith("/api/finance/alerts/")) return { id: 1 };
   if (method === "DELETE") return { id: 1 };
   if (path.endsWith("/lock")) {
     const s = SNAPSHOTS.find((x) => String(x.id) === path.split("/")[4]);

@@ -1053,6 +1053,54 @@ FROM (VALUES
 ) AS v(direction, match_type, pattern, category_id)
 ON CONFLICT DO NOTHING;
 
+-- Finans uyarıları (pusula.finance.alerts; tablo yoksa ilk istekte de kurulur).
+-- Rexven üretici ödemeleri (supplierPayout) NetBird'e bağlı senkrondan yazılır;
+-- banka çıkışı bu kayıtlarla eşleşmezse 'uretici' uyarısı açılır.
+CREATE TABLE IF NOT EXISTS fin_alerts (
+    id          bigserial PRIMARY KEY,
+    kind        text NOT NULL CHECK (kind IN ('uretici', 'abonelik', 'olagandisi')),
+    tx_id       bigint NOT NULL REFERENCES fin_transactions (id) ON DELETE CASCADE,
+    reason      text NOT NULL,
+    status      text NOT NULL DEFAULT 'acik' CHECK (status IN ('acik', 'guven', 'riskli', 'kapandi')),
+    remind_at   timestamptz,
+    decided_at  timestamptz,
+    notified_at timestamptz,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (kind, tx_id)
+);
+CREATE INDEX IF NOT EXISTS fin_alerts_status ON fin_alerts (status);
+
+CREATE TABLE IF NOT EXISTS fin_producer_payouts (
+    log_id      bigint PRIMARY KEY,
+    wallet_id   bigint NOT NULL,
+    user_id     bigint NOT NULL,
+    currency    text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    amount      numeric(18, 2) NOT NULL,
+    paid_at     timestamptz NOT NULL,
+    description text NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS fin_producer_payouts_paid ON fin_producer_payouts (paid_at);
+
+CREATE TABLE IF NOT EXISTS fin_payout_scans (
+    wallet_id     bigint PRIMARY KEY,
+    producer      text NOT NULL DEFAULT '',
+    currency      text NOT NULL,
+    scanned_until timestamptz NOT NULL
+);
+
+-- Kuveyt'ten giden Glozhen ve DKMN ödemeleri kategorisiz kalıyordu; üretici
+-- ödemesi denetimi kategoriden çalıştığı için kural eklenir ve geçmişe uygulanır.
+INSERT INTO fin_category_rules (direction, match_type, pattern, category_id, source)
+VALUES ('out', 'contains', 'glozhen', 'uretici', 'system'), ('out', 'contains', 'dkmn gumus', 'uretici', 'system')
+ON CONFLICT DO NOTHING;
+
+UPDATE fin_transactions t SET category_id = r.category_id, category_rule_id = r.id
+FROM fin_category_rules r
+WHERE r.source = 'system' AND r.match_type = 'contains' AND r.pattern IN ('glozhen', 'dkmn gumus')
+  AND t.amount < 0 AND t.category_id IS NULL AND t.user_edited_at IS NULL AND t.counterparty_company_id IS NULL
+  AND regexp_replace(lower(translate(coalesce(t.counterparty, '') || ' ' || t.description, 'çğıİIöşüÇĞÖŞÜâîû', 'cgiiiosucgosuaiu')), '\s+', ' ', 'g')
+      LIKE '%' || r.pattern || '%';
+
 -- RLS açık, politika yok: Supabase anon/authenticated rolleri finans
 -- tablolarını okuyamaz; uygulama tablo sahibi olarak bağlanır.
 DO $$
@@ -1062,7 +1110,8 @@ BEGIN
         'fin_companies', 'fin_accounts', 'fin_categories', 'fin_transactions', 'fin_fx_rates',
         'fin_planned_items', 'fin_snapshots', 'fin_snapshot_lines', 'fin_decisions',
         'fin_category_rules', 'fin_wallets', 'fin_tax_settings', 'fin_provider_tokens',
-        'fin_receivables', 'fin_payroll', 'fin_comp_history', 'fin_comp_plan'
+        'fin_receivables', 'fin_payroll', 'fin_comp_history', 'fin_comp_plan',
+        'fin_alerts', 'fin_producer_payouts', 'fin_payout_scans'
     ]
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
