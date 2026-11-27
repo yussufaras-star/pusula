@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { api, ApiError, usePolling } from "../api";
+import { CeoSummaryPage } from "../pages/CeoSummary";
 import { AccountsTab } from "./AccountsTab";
 import { BalanceTab } from "./BalanceTab";
 import { DecisionsTab } from "./DecisionsTab";
@@ -16,24 +17,24 @@ import { AlertsTab } from "./AlertsTab";
 import type { Meta, Scope, SyncReport } from "./types";
 import { Loading, type TabProps } from "./ui";
 
-export type FinanceTab = "genel" | "akis" | "projeksiyon" | "sirketler-arasi" | "duzenli" | "personel" | "bilanco" | "vergi" | "kararlar" | "uyarilar" | "hesaplar";
+// Sekmeler finans işinin ritmine göre: her gün Genel ve Uyarılar, her hafta Ödeme planı,
+// her ay Nakit akışı, Bilanço ve Vergi. Kararlar ve Cliq kartı Genel'de, düzenli ödemeler
+// Ödeme planı'nda (projeksiyonun altında), şirketler arası transferler Nakit akışı'nda.
+export type FinanceTab = "genel" | "akis" | "projeksiyon" | "personel" | "bilanco" | "vergi" | "uyarilar" | "hesaplar";
 
 const TITLES: Record<FinanceTab, [string, string]> = {
-  genel: ["Genel bakış", "Konsolide nakit, şirketler ve uyarılar"],
-  akis: ["Nakit akışı", "Aylık giriş ve çıkış, kategoriler, hareketler"],
-  duzenli: ["Düzenli ödemeler", "Abonelikler, üreticiler, ortak ve yüklenici ödemeleri; aylık ve yıllık maliyet"],
+  genel: ["Genel bakış", "Konsolide nakit, şirketler, uyarılar, kararlar ve Cliq'e giden özet"],
+  akis: ["Nakit akışı", "Aylık giriş ve çıkış, kategoriler, hareketler ve şirketler arası transferler"],
   personel: ["Maaş ve prim pusulası", "2027 zam önerisi ve gerekçesi, kıdem, prim ve donation geçmişi"],
-  projeksiyon: ["Projeksiyon", "Planlı alacak ve borçlarla kasa seyri"],
-  "sirketler-arasi": ["Şirketler arası", "Transferler ve net pozisyon"],
+  projeksiyon: ["Ödeme planı", "Planlı alacak ve borçlarla kasa seyri; geçmişte bulunan düzenli ödemeler ve abonelikler"],
   bilanco: ["Haftalık bilanço", "Şirket başına aktif ve pasif"],
   vergi: ["Cüzdan ve vergi", "LLC: satıcı ve üretici cüzdanları, yılın kârı ve yapıya göre ABD vergisi"],
-  kararlar: ["Kararlar", "Stratejik kararlar ve takibi"],
   uyarilar: ["Uyarılar", "Yeni abonelik, olağan dışı transfer ve Rexven'e işlenmemiş üretici ödemesi"],
   hesaplar: ["Hesaplar", "Banka bağlantıları ve ekstre yükleme"],
 };
 
-// Tarih aralığı yalnız geçmiş veriye bakan sekmeleri etkiler.
-const RANGED: FinanceTab[] = ["genel", "akis", "duzenli", "sirketler-arasi", "vergi"];
+// Tarih aralığı yalnız geçmiş veriye bakan bölümleri etkiler (Ödeme planı'nda düzenli ödemeler).
+const RANGED: FinanceTab[] = ["genel", "akis", "projeksiyon", "vergi"];
 
 type Preset = "3" | "6" | "12" | "yil" | "ozel";
 const PRESETS: { key: Preset; label: string }[] = [
@@ -143,28 +144,58 @@ export function FinancePage({ tab }: { tab: FinanceTab }) {
       {!meta.data ? (
         <Loading error={meta.error} />
       ) : tab === "genel" ? (
-        <OverviewTab {...props} meta={meta.data} />
+        <>
+          <OverviewTab {...props} meta={meta.data} />
+          <Part title="Kararlar">
+            <DecisionsTab {...props} meta={meta.data} />
+          </Part>
+          <CeoSummaryPage
+            embedded
+            endpoint="/api/finance-summary"
+            title="Cliq'e giden yönetici özeti"
+            sub="Her sabah son iş gününden beri nakit, giriş-çıkış ve uyarılar #headquarters kanalına gider · tutarlar USD"
+          />
+        </>
       ) : tab === "akis" ? (
-        <FlowsTab {...props} meta={meta.data} />
-      ) : tab === "duzenli" ? (
-        <RecurringTab {...props} meta={meta.data} />
+        <>
+          <FlowsTab {...props} meta={meta.data} />
+          <Part title="Şirketler arası">
+            <IntercompanyTab {...props} meta={meta.data} />
+          </Part>
+        </>
       ) : tab === "personel" ? (
         <CompassTab {...props} meta={meta.data} />
       ) : tab === "projeksiyon" ? (
-        <ProjectionTab {...props} meta={meta.data} />
-      ) : tab === "sirketler-arasi" ? (
-        <IntercompanyTab {...props} meta={meta.data} />
+        <>
+          <ProjectionTab {...props} meta={meta.data} />
+          <Part title="Düzenli ödemeler" sub="Geçmiş hareketlerden bulunur · seçili dönem">
+            <RecurringTab {...props} meta={meta.data} />
+          </Part>
+        </>
       ) : tab === "bilanco" ? (
         <BalanceTab {...props} meta={meta.data} />
       ) : tab === "vergi" ? (
         <TaxTab {...props} meta={meta.data} />
-      ) : tab === "kararlar" ? (
-        <DecisionsTab {...props} meta={meta.data} />
       ) : tab === "uyarilar" ? (
         <AlertsTab {...props} meta={meta.data} />
       ) : (
         <AccountsTab {...props} meta={meta.data} />
       )}
+    </>
+  );
+}
+
+/** Birleşik sekmede sonraki bölümün başlığı. */
+function Part({ title, sub, children }: { title: string; sub?: string; children: ReactNode }) {
+  return (
+    <>
+      <div className="page-head fin-part-head">
+        <div>
+          <h2>{title}</h2>
+          {sub ? <div className="sub">{sub}</div> : null}
+        </div>
+      </div>
+      {children}
     </>
   );
 }

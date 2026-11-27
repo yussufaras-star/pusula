@@ -44,8 +44,8 @@ export function OverviewTab({ scope, start, meta, tick }: TabProps) {
   if (a.stale.length) {
     alerts.push({
       tone: "warning",
-      title: "Güncel olmayan hesaplar",
-      text: a.stale.map((s) => `${s.name} (son: ${when(s.last_synced_at)})`).join(", "),
+      title: "Güncel olmayan bakiyeler",
+      text: a.stale.map((s) => `${s.name} (${s.as_of ? `son: ${s.as_of.length === 10 ? day(s.as_of) : when(s.as_of)}` : "hiç güncellenmedi"})`).join(", "),
       href: "#/finans/hesaplar",
     });
   }

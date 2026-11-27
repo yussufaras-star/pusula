@@ -22,7 +22,9 @@ from pusula.db.models import (
     FinCategoryRule,
     FinCompany,
     FinPlannedItem,
+    FinReceivable,
     FinTransaction,
+    FinWallet,
 )
 from pusula.finance.fx import FxTable
 from pusula.finance.tax import wallet_ref
@@ -36,8 +38,10 @@ MATCH_DAYS = 5
 MATCH_TOLERANCE = Decimal("0.02")
 # API hesabı 2 günden eski senkron = senkronize değil (günde 2 çalışır).
 API_STALE_DAYS = 2
-# Ekstre hesabı 7 günden eski yükleme = güncel değil.
+# Ekstre ve elle girilen hesap: bakiye 7 günden eskiyse güncel değil.
 STATEMENT_STALE_DAYS = 7
+WALLET_LABEL = {"seller": "satıcı cüzdanları", "producer": "üretici cüzdanları"}
+RECEIVABLE_LABEL = {"iyzico": "iyzico bekleyen tahsilat", "lidio": "Lidio bekleyen tahsilat"}
 
 
 def week_start(day: date) -> date:
@@ -688,15 +692,42 @@ class Alerts:
     stale: list[FinAccount]  # senkronu / ekstresi eski hesaplar
 
 
-def _is_stale(account: FinAccount, now: datetime) -> bool:
-    if account.provider == "manual":
-        return False
+def last_update(account: FinAccount) -> datetime | None:
+    """Bakiyenin doğru olduğu son an: API'de son senkron, ekstre ve elle girişte bakiye tarihi."""
     if account.provider in API_PROVIDERS:
-        limit, last = API_STALE_DAYS, account.last_synced_at
-    else:
-        # Ekstre hesabı: yükleme anı değil, ekstrenin kapsadığı son gün önemli
-        limit, last = STATEMENT_STALE_DAYS, account.balance_at or account.last_synced_at
+        return account.last_synced_at
+    return account.balance_at or account.last_synced_at
+
+
+def _is_stale(account: FinAccount, now: datetime) -> bool:
+    # Elle girilen bakiye de eskir; ekstrede yükleme anı değil, kapsadığı son gün önemli.
+    limit = API_STALE_DAYS if account.provider in API_PROVIDERS else STATEMENT_STALE_DAYS
+    last = last_update(account)
     return last is None or now - last > timedelta(days=limit)
+
+
+@dataclass(frozen=True)
+class StaleFeed:
+    company_id: str
+    label: str
+    as_of: date
+
+
+def stale_feeds(wallets: Iterable[FinWallet], receivables: Iterable[FinReceivable], today: date) -> list[StaleFeed]:
+    """Rexven'den günlük gelen cüzdan ve bekleyen tahsilat toplamlarından son günü eski kalanlar."""
+    latest: dict[tuple[str, str], date] = {}
+    for w in wallets:
+        if w.source == "rexven" and w.active:
+            key = (w.company_id, WALLET_LABEL[w.kind])
+            latest[key] = max(latest.get(key, w.as_of), w.as_of)
+    for r in receivables:
+        key = (r.company_id, RECEIVABLE_LABEL[r.source])
+        latest[key] = max(latest.get(key, r.as_of), r.as_of)
+    return [
+        StaleFeed(company_id=c, label=label, as_of=d)
+        for (c, label), d in sorted(latest.items())
+        if (today - d).days > API_STALE_DAYS
+    ]
 
 
 def overview_alerts(

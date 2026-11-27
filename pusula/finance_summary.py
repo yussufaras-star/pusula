@@ -37,6 +37,14 @@ def cash_on(accounts: list[Any], txs: list[Any], fx: Any, day: date) -> dict[str
     return out
 
 
+def short_day(day: date | datetime) -> str:
+    return f"{day.day} {_MONTHS[day.month - 1]}"
+
+
+def _stale_label(name: str, last: date | datetime | None) -> str:
+    return f"{name} ({short_day(last) if last else 'hiç güncellenmedi'})"
+
+
 def build_summary(conn: Any, today: date, now: datetime) -> dict[str, Any]:
     first = report_day(today)
     last = today - timedelta(days=1)
@@ -48,6 +56,7 @@ def build_summary(conn: Any, today: date, now: datetime) -> dict[str, Any]:
     categories = store.load_categories(conn)
     planned = store.load_planned(conn)
     decisions = store.load_decisions(conn)
+    feeds = analytics.stale_feeds(store.load_wallets(conn), store.load_receivables(conn), today)
     fx = load_fx(conn, since)
     kinds = analytics.category_kinds(categories)
     names = {c.id: c.name for c in categories}
@@ -68,14 +77,15 @@ def build_summary(conn: Any, today: date, now: datetime) -> dict[str, Any]:
     rows = []
     for c in companies:
         own = [a for a in accounts if a.company_id == c.id]
-        if not own:
-            # Bağlı hesabı olmayan şirket de listede durur (ör. GmbH); tutarı boş.
+        if not own or all(analytics.last_update(a) is None for a in own):
+            # Bağlı hesabı ya da hiç bakiyesi olmayan şirket de listede durur (ör. GmbH); tutarı boş.
             rows.append({"id": c.id, "ad": c.name, "para": c.base_currency, "usd": None, "yerel": None,
-                         "degisim": None, "eski_veri": None, "hesap_yok": True})
+                         "degisim": None, "eski_veri": None, "eski_hesaplar": [], "hesap_yok": not own,
+                         "veri_yok": bool(own)})
             continue
         usd = analytics.cash_usd(own, fx)
-        stale = [a for a in alerts.stale if a.company_id == c.id]
-        oldest = min((a.balance_at or a.last_synced_at for a in stale if a.balance_at or a.last_synced_at), default=None)
+        stale = [(a.name, analytics.last_update(a)) for a in alerts.stale if a.company_id == c.id]
+        dated = sorted((last.date(), name) for name, last in stale if last)
         rows.append({
             "id": c.id,
             "ad": c.name,
@@ -83,7 +93,9 @@ def build_summary(conn: Any, today: date, now: datetime) -> dict[str, Any]:
             "usd": _usd(usd),
             "yerel": _usd(usd / fx.to_usd(Decimal("1"), c.base_currency)) if c.base_currency != "USD" else None,
             "degisim": _usd(usd - before.get(c.id, ZERO)),
-            "eski_veri": oldest.date().isoformat() if oldest else None,
+            "eski_veri": dated[0][0].isoformat() if dated else None,
+            # Bakiyesi eski kalan her hesap tarihiyle; tarihsiz (hiç yüklenmemiş) olan tarihsiz.
+            "eski_hesaplar": [{"ad": name, "tarih": last.date().isoformat() if last else None} for name, last in stale],
         })
     total_before = sum(before.values(), ZERO)
     return {
@@ -119,7 +131,8 @@ def build_summary(conn: Any, today: date, now: datetime) -> dict[str, Any]:
             "geciken": len(alerts.overdue),
             "geciken_usd": _usd(alerts.overdue_usd),
             "hata": [a.name for a in alerts.sync_errors],
-            "eski": [a.name for a in alerts.stale],
+            "eski": [_stale_label(a.name, analytics.last_update(a)) for a in alerts.stale]
+            + [_stale_label(f"{company_names.get(f.company_id, f.company_id)} {f.label}", f.as_of) for f in feeds],
             "aksiyon": sum(1 for d in decisions if d.status == "aksiyon"),
         },
         "kur_eksik": sorted(fx.missing),
@@ -142,6 +155,19 @@ def usd(value: float | None, sign: bool = False) -> str:
     return f"{prefix}${v:.0f}"
 
 
+def no_data(r: dict[str, Any]) -> str:
+    return "veri yok (bağlı hesap yok)" if r.get("hesap_yok") else "veri yok (bakiye hiç yüklenmedi)"
+
+
+def stale_note(r: dict[str, Any]) -> str:
+    """Şirket satırında bakiyesi eski kalan hesaplar; eski kayıtlarda yalnız en eski tarih vardı."""
+    items = r.get("eski_hesaplar")
+    if items:
+        parts = [f"{i['ad']} {short_day(date.fromisoformat(i['tarih'])) if i['tarih'] else 'hiç güncellenmedi'}" for i in items]
+        return "eski bakiye: " + ", ".join(parts)
+    return f"veri {r['eski_veri']} tarihli" if r.get("eski_veri") else ""
+
+
 def period_label(s: dict[str, Any]) -> str:
     first = date.fromisoformat(str(s["first"])[:10])
     last = date.fromisoformat(str(s["last"])[:10])
@@ -156,11 +182,11 @@ def render(s: dict[str, Any]) -> str:
     lines.append(f"*Toplam nakit:* {usd(s['nakit'])} ({usd(s['nakit_degisim'], sign=True)})")
     lines.append(f"*Giriş / çıkış:* {usd(s['giris'])} / {usd(s['cikis'])}")
     for r in s["sirketler"]:
-        if r.get("hesap_yok"):
-            lines.append(f"• {r['ad']}: veri yok (bağlı hesap yok)")
+        if r.get("hesap_yok") or r.get("veri_yok"):
+            lines.append(f"• {r['ad']}: {no_data(r)}")
             continue
-        lines.append(f"• {r['ad']}: {usd(r['usd'])} ({usd(r['degisim'], sign=True)})"
-                     + (f" · veri {r['eski_veri']} tarihli" if r["eski_veri"] else ""))
+        note = stale_note(r)
+        lines.append(f"• {r['ad']}: {usd(r['usd'])} ({usd(r['degisim'], sign=True)})" + (f" · {note}" if note else ""))
     ay = s["ay"]
     lines.append(f"*{ay['ad']}:* giriş {usd(ay['giris'])} · çıkış {usd(ay['cikis'])} · net {usd(ay['net'], sign=True)}")
     p = s["projeksiyon"]
