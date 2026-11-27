@@ -2,8 +2,8 @@ import { useState } from "react";
 
 import { api, ApiError } from "../api";
 import { StatTile } from "../components/StatTile";
-import { day, money } from "./format";
-import type { AlertKind, Alerts, FinAlert } from "./types";
+import { day, money, when } from "./format";
+import type { AlertKind, Alerts, FinAlert, WaitingPayment } from "./types";
 import { CompanyTag, Loading, useFin, type TabProps } from "./ui";
 
 const KIND_LABEL: Record<AlertKind, string> = {
@@ -69,8 +69,9 @@ export function AlertsTab({ scope, tick }: TabProps) {
         </div>
         <div className="card-body">
           <p className="muted fin-note">
-            Güven: uyarı kapanır. Riskli: seçtiğin süre sonunda yeniden açılır ve Cliq'ten hatırlatılır. Üretici uyarısı, ödeme sonradan
-            Rexven'de üretici cüzdanından düşülürse kendiliğinden kapanır.
+            Son kontrol {when(data.checked_at)} · Rexven üretici cüzdanları {day(data.rexven_scanned_until)} tarihine kadar tarandı. Güven:
+            uyarı kapanır. Riskli: seçtiğin süre sonunda yeniden açılır ve Cliq'ten hatırlatılır. Üretici uyarısı, ödeme sonradan Rexven'de
+            üretici cüzdanından düşülürse kendiliğinden kapanır.
           </p>
           {err ? <div className="banner error">{err}</div> : null}
           {rows.length ? (
@@ -114,7 +115,51 @@ export function AlertsTab({ scope, tick }: TabProps) {
           )}
         </div>
       </section>
+
+      {data.waiting.length ? <WaitingCard rows={data.waiting} /> : null}
     </>
+  );
+}
+
+function WaitingCard({ rows }: { rows: WaitingPayment[] }) {
+  return (
+    <section className="card">
+      <div className="card-head">
+        <h2>Rexven kontrolü bekleyen üretici ödemeleri · {rows.length}</h2>
+      </div>
+      <div className="card-body">
+        <p className="muted fin-note">
+          Rexven'e işlenmesi birkaç gün sürebildiği için ödemeye 3 gün süre tanınır. Kontrol günü geldiğinde Rexven'de karşılığı yoksa uyarıya
+          dönüşür.
+        </p>
+        <div className="table-wrap">
+          <table className="board fin-table">
+            <thead>
+              <tr>
+                <th>Tarih</th>
+                <th>Hesap</th>
+                <th>Karşı taraf</th>
+                <th className="num">Tutar</th>
+                <th>Kontrol</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((w) => (
+                <tr key={w.tx_id}>
+                  <td>{day(w.booked_at)}</td>
+                  <td>
+                    <CompanyTag id={w.company_id} /> {w.account}
+                  </td>
+                  <td title={w.description}>{w.counterparty || w.description.slice(0, 60)}</td>
+                  <td className="num">{money(Math.abs(w.amount), w.currency, 2)}</td>
+                  <td>{day(w.check_on)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   );
 }
 

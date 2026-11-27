@@ -1026,8 +1026,20 @@ def delete_line(line_id: int) -> Any:
 def alert_list(company: str = views.ALL) -> Any:
     with connect() as conn:
         companies = store.load_companies(conn)
-        rows = alerts.list_alerts(conn, _now(), _scope(company, companies))
-    return jsonable_encoder({"alerts": rows, "remind_days": alerts.REMIND_DAYS})
+        scope = _scope(company, companies)
+        now = _now()
+        rows = alerts.list_alerts(conn, now, scope)
+        waiting, scanned_until = alerts.waiting_producer(conn, now.date(), scope)
+        checked_at = store.last_sync_run(conn)
+    return jsonable_encoder(
+        {
+            "alerts": rows,
+            "remind_days": alerts.REMIND_DAYS,
+            "checked_at": checked_at,
+            "rexven_scanned_until": scanned_until,
+            "waiting": waiting,
+        }
+    )
 
 
 class AlertDecision(BaseModel):

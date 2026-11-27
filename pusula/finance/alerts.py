@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import statistics
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
@@ -298,6 +299,29 @@ def list_alerts(conn: psycopg.Connection, now: datetime, scope: Sequence[str]) -
     return [r | {"due": due(r, now)} for r in rows]
 
 
+def waiting_producer(conn: psycopg.Connection, today: date, scope: Sequence[str]) -> tuple[list[dict[str, Any]], date | None]:
+    """Henüz Rexven'le karşılaştırılmamış üretici ödemeleri: bekleme süresi dolmadı ya da
+    Rexven taraması (yalnız NetBird'e bağlı bilgisayardan) o günü kapsamıyor."""
+    ensure_schema(conn)
+    scanned = conn.execute("SELECT min(scanned_until) FROM fin_payout_scans").fetchone()
+    until = scanned[0].date() if scanned and scanned[0] else None
+    with conn.cursor(row_factory=dict_row) as cur:
+        rows = cur.execute(
+            """
+            SELECT t.id AS tx_id, t.booked_at, t.amount, t.currency, t.counterparty, t.description, t.company_id,
+                   acc.name AS account
+            FROM fin_transactions t
+            JOIN fin_accounts acc ON acc.id = t.account_id
+            WHERE t.amount < 0 AND t.category_id = ANY(%s) AND t.company_id = ANY(%s)
+              AND t.booked_at >= %s AND (%s::date IS NULL OR t.booked_at > %s::date - %s)
+              AND NOT EXISTS (SELECT 1 FROM fin_alerts a WHERE a.tx_id = t.id)
+            ORDER BY t.booked_at DESC, t.id DESC
+            """,
+            (sorted(PRODUCER_CATEGORIES), list(scope), today - timedelta(days=PRODUCER_LOOKBACK), until, until, PRODUCER_GRACE),
+        ).fetchall()
+    return [r | {"check_on": r["booked_at"] + timedelta(days=PRODUCER_GRACE)} for r in rows], until
+
+
 def decide(conn: psycopg.Connection, alert_id: int, action: str, remind_days: int | None, now: datetime) -> bool:
     ensure_schema(conn)
     if action == "guven":
@@ -341,27 +365,54 @@ def _amount(row: Mapping[str, Any]) -> str:
     return f"{value} {row['currency']}"
 
 
-def notice_text(rows: Sequence[Mapping[str, Any]], panel_url: str) -> str:
-    lines = [f"Finans uyarısı: {len(rows)} hareket karar bekliyor"]
-    for r in rows[:NOTIFY_MAX]:
-        who = r["counterparty"] or (r["description"] or "")[:40]
-        again = " (hatırlatma)" if r["status"] == "riskli" else ""
-        lines.append(f"• {KIND_LABEL[r['kind']]}{again}: {r['booked_at']:%d.%m} {r['account']} → {who}, {_amount(r)}. {r['reason']}")
+def _short_reason(row: Mapping[str, Any]) -> str:
+    """Kart hücresi için kısa neden: tutar parantezleri atılır (tutar zaten ayrı sütunda)."""
+    if row["kind"] == "uretici":
+        text = "Rexven'de düşülmemiş"
+    elif row["kind"] == "abonelik":
+        text = "İlk kez çekildi"
+    else:
+        text = re.sub(r" \([^)]*\)", "", row["reason"]).replace("Alıcının normalinin", "Normalin").replace("; ", " · ")
+    return f"Hatırlatma · {text}" if row["status"] == "riskli" else text
+
+
+def notice_card(
+    rows: Sequence[Mapping[str, Any]], panel_url: str, now: datetime
+) -> tuple[str, dict[str, Any], list[dict[str, Any]]]:
+    """Cliq kartı: (üst metin, kart başlığı, bölümler). Türe göre birer tablo."""
+    shown = rows[:NOTIFY_MAX]
+    slides: list[dict[str, Any]] = []
+    for kind, label in KIND_LABEL.items():
+        group = [r for r in shown if r["kind"] == kind]
+        if not group:
+            continue
+        table = [
+            {
+                "Tarih": f"{r['booked_at']:%d.%m}",
+                "Kime": (r["counterparty"] or (r["description"] or "")[:30]).strip(),
+                "Tutar": _amount(r),
+                "Neden": _short_reason(r),
+            }
+            for r in group
+        ]
+        slides.append({"type": "table", "title": f"{label} · {len(group)}", "data": {"headers": ["Tarih", "Kime", "Tutar", "Neden"], "rows": table}})
     if len(rows) > NOTIFY_MAX:
-        lines.append(f"…ve {len(rows) - NOTIFY_MAX} uyarı daha")
+        slides.append({"type": "text", "data": f"…ve {len(rows) - NOTIFY_MAX} uyarı daha panelde."})
+    text = f"*{len(rows)} finans uyarısı karar bekliyor*"
     if panel_url:
-        lines.append(f"Güven / Riskli: {panel_url.rstrip('/')}/#/finans/uyarilar")
-    return "\n".join(lines)
+        text += f" · [Güven / Riskli seç]({panel_url.rstrip('/')}/#/finans/uyarilar)"
+    return text, {"title": f"Finans uyarıları · {now:%d.%m.%Y}", "theme": "modern-inline"}, slides
 
 
 def notify(conn: psycopg.Connection, now: datetime, send: Any) -> int:
-    """send(text, userids): Cliq'e kişisel mesaj. Alıcı tanımlı değilse hiçbir şey yapmaz."""
+    """send(text, userids, card=, slides=): Cliq'e kişisel kart. Alıcı tanımlı değilse hiçbir şey yapmaz."""
     users = recipients()
     if not users:
         return 0
     rows = pending_notices(conn, now)
     if not rows:
         return 0
-    send(notice_text(rows, os.environ.get("PUSULA_PANEL_URL", "")), users)
+    text, card, slides = notice_card(rows, os.environ.get("PUSULA_PANEL_URL", ""), now)
+    send(text, users, card=card, slides=slides)
     conn.execute("UPDATE fin_alerts SET notified_at = %s WHERE id = ANY(%s)", (now, [r["id"] for r in rows]))
     return len(rows)

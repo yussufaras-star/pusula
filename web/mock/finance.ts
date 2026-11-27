@@ -805,7 +805,16 @@ export function mockFinance(method: string, url: string): unknown {
       alert(4, "olagandisi", "riskli", false, 2, "KuveytTürk Ana Hesap", "Örnek Tedarikçi", -120_000, "TRY", "Alıcının normalinin 4.0 katı (ortanca 750 $)", "tr"),
       alert(5, "olagandisi", "guven", false, 9, "Wise USD", "Büyük Ödeme Inc", -40_000, "USD", "Tek seferde büyük çıkış (40.000 $)"),
     ];
-    return { alerts: alerts.filter((a) => ids.includes(a.company_id as CompanyId)), remind_days: [1, 3, 7, 14, 30] };
+    const waiting = [
+      { tx_id: 90, booked_at: addDays(TODAY, -1), amount: -8_000, currency: "USD", counterparty: "Örnek Üretici LLC", description: "Örnek Üretici LLC", company_id: "llc", account: "Wise USD", check_on: addDays(TODAY, 2) },
+    ];
+    return {
+      alerts: alerts.filter((a) => ids.includes(a.company_id as CompanyId)),
+      remind_days: [1, 3, 7, 14, 30],
+      checked_at: `${TODAY}T06:30:00Z`,
+      rexven_scanned_until: addDays(TODAY, -1),
+      waiting: waiting.filter((w) => ids.includes(w.company_id as CompanyId)),
+    };
   }
   return undefined;
 }
