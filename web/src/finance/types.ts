@@ -83,7 +83,7 @@ export interface Overview extends FxMeta {
     cash_gap: WeekClose | null;
     overdue: { count: number; usd: number };
     sync_errors: { id: number; name: string; error: string }[];
-    stale: { id: number; name: string; last_synced_at: string | null }[];
+    stale: { id: number | null; name: string; as_of: string | null }[];
     warnings: { id: number; name: string; warning: string }[];
   };
   open_actions: number;
@@ -405,6 +405,7 @@ export interface RecurringItem {
   label: string;
   category_id: string | null;
   company_id: CompanyId | null;
+  planned: boolean;
   accounts: string[];
   count: number;
   months: number;

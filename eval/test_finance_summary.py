@@ -57,3 +57,13 @@ def test_card_shows_stale_company_and_warnings() -> None:  # ve hesapsız şirke
     assert "2 gecikmiş planlı kalem" in html and "Eski veri: KuveytTürk Ana Hesap" in html
     assert "Rexven GmbH" in html and "bağlı hesap yok" in html
     assert "En büyük hareketler" not in html  # hareket yoksa bölüm yok
+
+
+def test_card_names_each_stale_account_with_date() -> None:
+    row = {"id": "tr", "ad": "Rexven TR", "eski_veri": "2026-02-27",
+           "eski_hesaplar": [{"ad": "Garanti Cüzdan", "tarih": "2026-02-27"},
+                             {"ad": "Garanti Ana Hesap", "tarih": "2026-11-05"}]}
+    assert fs.stale_note(row) == "eski bakiye: Garanti Cüzdan 27 Şubat, Garanti Ana Hesap 5 Kasım"
+    assert fs.stale_note({"eski_hesaplar": [{"ad": "Commerzbank", "tarih": None}]}) == "eski bakiye: Commerzbank hiç güncellenmedi"
+    assert fs.stale_note({"eski_veri": None, "eski_hesaplar": []}) == ""
+    assert fs.no_data({"veri_yok": True}) == "veri yok (bakiye hiç yüklenmedi)"

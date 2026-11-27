@@ -7,7 +7,7 @@ from html import escape
 from typing import Any
 
 from pusula.ceo_card import BAD, GOOD, INK, MUTED, WIDTH, render_png  # noqa: F401 — render_png dışarı açılır
-from pusula.finance_summary import TITLE, period_label, usd
+from pusula.finance_summary import TITLE, no_data, period_label, stale_note, usd
 
 HEAD = "linear-gradient(120deg, #0d3b36 0%, #12806f 100%)"
 
@@ -28,7 +28,7 @@ def _week(iso: str | None) -> str:
 
 def render_html(s: dict[str, Any]) -> str:
     companies = "".join(
-        f"""<tr><td>{escape(r["ad"])}{f'<div class="sub warn">veri {escape(r["eski_veri"])} tarihli</div>' if r.get("eski_veri") else ""}{'<div class="sub">veri yok · bağlı hesap yok</div>' if r.get("hesap_yok") else ""}</td>
+        f"""<tr><td>{escape(r["ad"])}{f'<div class="sub warn">{escape(stale_note(r))}</div>' if stale_note(r) else ""}{f'<div class="sub">{escape(no_data(r))}</div>' if r.get("hesap_yok") or r.get("veri_yok") else ""}</td>
         <td class="num"><b>{usd(r["usd"])}</b>{f'<div class="sub">{r["yerel"]:,.0f} {escape(r["para"])}</div>'.replace(",", ".") if r.get("yerel") else ""}</td>
         <td class="num">{_signed(r["degisim"])}</td></tr>"""
         for r in s["sirketler"]

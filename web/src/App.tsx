@@ -22,16 +22,12 @@ type SalesRoute = "canli" | "karsilastir" | "pano" | "raporlar" | "gorusmeler" |
 type FinanceRoute =
   | "finans/genel"
   | "finans/akis"
-  | "finans/duzenli"
   | "finans/personel"
   | "finans/projeksiyon"
-  | "finans/sirketler-arasi"
   | "finans/bilanco"
   | "finans/vergi"
-  | "finans/kararlar"
   | "finans/uyarilar"
-  | "finans/hesaplar"
-  | "finans/ozet";
+  | "finans/hesaplar";
 type Route = SalesRoute | FinanceRoute;
 
 interface NavItem {
@@ -53,16 +49,12 @@ const NAV: Record<Area, NavItem[]> = {
   ],
   finans: [
     { route: "finans/genel", label: "Genel" },
-    { route: "finans/ozet", label: "Yönetici özeti" },
+    { route: "finans/uyarilar", label: "Uyarılar" },
     { route: "finans/akis", label: "Nakit akışı" },
-    { route: "finans/duzenli", label: "Düzenli" },
-    { route: "finans/personel", label: "Maaş & prim" },
-    { route: "finans/projeksiyon", label: "Projeksiyon" },
-    { route: "finans/sirketler-arasi", label: "Şirketler arası" },
+    { route: "finans/projeksiyon", label: "Ödeme planı" },
     { route: "finans/bilanco", label: "Bilanço" },
     { route: "finans/vergi", label: "Vergi" },
-    { route: "finans/kararlar", label: "Kararlar" },
-    { route: "finans/uyarilar", label: "Uyarılar" },
+    { route: "finans/personel", label: "Maaş & prim" },
     { route: "finans/hesaplar", label: "Hesaplar" },
   ],
 };
@@ -76,9 +68,18 @@ function areaOf(route: Route): Area {
   return route.startsWith("finans/") ? "finans" : "satis";
 }
 
+// Birleştirilen eski sekmelerin adresleri (yer imleri, Cliq bağlantıları) yeni yerine gider.
+const MOVED: Record<string, FinanceRoute> = {
+  finans: "finans/genel",
+  "finans/ozet": "finans/genel",
+  "finans/kararlar": "finans/genel",
+  "finans/sirketler-arasi": "finans/akis",
+  "finans/duzenli": "finans/projeksiyon",
+};
+
 function readRoute(): Route {
   const hash = window.location.hash.replace(/^#\/?/, "");
-  if (hash === "finans") return "finans/genel";
+  if (MOVED[hash]) return MOVED[hash];
   const all = [...NAV.satis, ...NAV.finans];
   return all.find((n) => n.route === hash)?.route ?? "canli";
 }
@@ -214,12 +215,6 @@ export function App() {
           <CeoSummaryPage />
         ) : route === "kullanicilar" ? (
           me.role === "admin" ? <UsersPage /> : <LivePage me={me} />
-        ) : route === "finans/ozet" ? (
-          <CeoSummaryPage
-            endpoint="/api/finance-summary"
-            title="Finans operasyonu yönetici özeti"
-            sub="Her sabah son iş gününden beri nakit, giriş-çıkış ve uyarılar Cliq'te #headquarters kanalına gider · tutarlar USD"
-          />
         ) : (
           // Tek bileşen: sekme değişince şirket ve tarih seçimi korunur
           <FinancePage tab={route.slice("finans/".length) as FinanceTab} />

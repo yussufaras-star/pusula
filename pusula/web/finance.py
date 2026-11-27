@@ -345,6 +345,8 @@ def overview(company: str = views.ALL, start: str | None = None) -> Any:
     with connect() as conn:
         # Bakiye seyri başlangıç haftasının pazartesisinden bugüne hareket ister
         bundle = _bundle(conn, analytics.week_start(first))
+        bundle.wallets = store.load_wallets(conn)
+        bundle.receivables = store.load_receivables(conn)
     return jsonable_encoder(views.overview_view(bundle, _scope(company, bundle.companies), first, now))
 
 

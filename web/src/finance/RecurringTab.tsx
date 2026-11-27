@@ -1,15 +1,18 @@
 import { useState } from "react";
 
+import { api, ApiError } from "../api";
 import { StatTile } from "../components/StatTile";
 import { day, short, usd } from "./format";
-import type { RecurringPayload } from "./types";
+import type { RecurringItem, RecurringPayload } from "./types";
 import { categoryName, CompanyTag, FxNote, Loading, useFin, type TabProps } from "./ui";
 
 // Abonelik sayılan kategoriler (yazılım, reklam); diğerleri düzenli ödeme
 const SUBSCRIPTION = new Set(["yazilim", "reklam"]);
 
-export function RecurringTab({ scope, start, end, meta, tick }: TabProps) {
+export function RecurringTab({ scope, start, end, meta, tick, reload }: TabProps) {
   const [group, setGroup] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
   const { data, error } = useFin<RecurringPayload>(`/api/finance/recurring?company=${scope}&start=${start}&end=${end}`, tick);
   if (!data) return <Loading error={error} />;
 
@@ -17,6 +20,34 @@ export function RecurringTab({ scope, start, end, meta, tick }: TabProps) {
   const subs = data.items.filter((i) => i.category_id && SUBSCRIPTION.has(i.category_id));
   const subsMonthly = subs.reduce((s, i) => s + i.monthly_usd, 0);
   const stopped = data.items.filter((i) => i.stopped).length;
+
+  // Geçmişte bulunan düzenli ödeme, sonraki vadesiyle projeksiyona planlı çıkış olarak girer.
+  async function addToPlan(i: RecurringItem) {
+    setBusy(i.key);
+    setErr(null);
+    try {
+      await api("/api/finance/planned", {
+        method: "POST",
+        body: JSON.stringify({
+          company_id: i.company_id,
+          direction: "out",
+          title: i.label,
+          counterparty: i.label,
+          amount: i.median_usd,
+          currency: "USD",
+          due_date: i.next_due,
+          recurrence: i.cadence === "aylık" ? "monthly" : "none",
+          category_id: i.category_id,
+          notes: `Düzenli ödemelerden (${i.cadence})`,
+        }),
+      });
+      reload();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Eklenemedi");
+    } finally {
+      setBusy(null);
+    }
+  }
 
   return (
     <>
@@ -43,8 +74,10 @@ export function RecurringTab({ scope, start, end, meta, tick }: TabProps) {
         <div className="card-body">
           <p className="muted fin-note">
             Aynı karşı tarafa en az iki farklı ayda yapılan ödemeler. Aylık tutar, verinin başladığı günden bu yana ortalamadır. Hesaplar
-            arası aktarımlar ve satıcı cüzdan hareketleri hariç. Kategoriyi Nakit akışı'ndan düzeltirsen burada da değişir.
+            arası aktarımlar ve satıcı cüzdan hareketleri hariç. Kategoriyi Nakit akışı'ndan düzeltirsen burada da değişir. Plana ekle,
+            ödemeyi sonraki vadesiyle yukarıdaki kasa projeksiyonuna planlı çıkış olarak yazar (aylık olanlar her ay tekrarlar).
           </p>
+          {err ? <div className="banner error">{err}</div> : null}
           <div className="chips" role="group" aria-label="Kategori">
             <button className={`chip${group === null ? " on" : ""}`} aria-pressed={group === null} onClick={() => setGroup(null)}>
               Tümü · {short(data.monthly_usd)}/ay
@@ -69,6 +102,7 @@ export function RecurringTab({ scope, start, end, meta, tick }: TabProps) {
                     <th className="num">Yıllık</th>
                     <th>Son</th>
                     <th>Sonraki</th>
+                    <th>Plan</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -94,6 +128,17 @@ export function RecurringTab({ scope, start, end, meta, tick }: TabProps) {
                       <td className="num">{usd(i.yearly_usd)}</td>
                       <td>{day(i.last)}</td>
                       <td>{day(i.next_due)}</td>
+                      <td>
+                        {i.planned ? (
+                          <span className="badge good">planda</span>
+                        ) : i.company_id && i.next_due ? (
+                          <button className="btn sm" disabled={busy === i.key} onClick={() => addToPlan(i)}>
+                            {busy === i.key ? "Ekleniyor…" : "Plana ekle"}
+                          </button>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

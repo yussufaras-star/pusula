@@ -10,7 +10,9 @@ from pusula.db.models import (
     FinCompany,
     FinFxRate,
     FinPlannedItem,
+    FinReceivable,
     FinTransaction,
+    FinWallet,
 )
 from pusula.finance.analytics import (
     add_month,
@@ -21,12 +23,14 @@ from pusula.finance.analytics import (
     expand_planned,
     first_below,
     intercompany_matrix,
+    last_update,
     lowest_week,
     match_company,
     monthly_flows,
     overview_alerts,
     pair_positions,
     projection,
+    stale_feeds,
     unmatched_transfers,
     week_start,
 )
@@ -309,6 +313,7 @@ def test_overview_alerts() -> None:
         _account(id=4, provider="csv", last_synced_at=now - timedelta(days=5)),
         _account(id=5, provider="csv", last_synced_at=None),
         _account(id=6, provider="manual"),
+        _account(id=7, provider="manual", balance_at=now - timedelta(days=3)),
     ]
     planned = [
         _item(due_date=date(2026, 10, 1), amount=D("50")),
@@ -318,7 +323,8 @@ def test_overview_alerts() -> None:
     proj = projection(D("100"), planned, _fx(), now.date(), weeks=4)
     alerts = overview_alerts(accounts, planned, proj, _fx(), now)
     assert [a.id for a in alerts.sync_errors] == [2]
-    assert [a.id for a in alerts.stale] == [3, 5]
+    # elle girilen bakiye de eskir: hiç tarihi olmayan (6) eski, 3 günlük (7) güncel
+    assert [a.id for a in alerts.stale] == [3, 5, 6]
     assert len(alerts.overdue) == 1 and alerts.overdue_usd == D("50")
     assert alerts.cash_gap is not None and alerts.cash_gap.week == date(2026, 10, 26)
 
@@ -491,6 +497,34 @@ def test_statement_account_stale_by_statement_date_not_upload_time() -> None:
     fresh = _account(id=8, provider="csv", last_synced_at=now, balance_at=now - timedelta(days=2))
     alerts = overview_alerts([old_statement, fresh], [], [], _fx(), now)
     assert [a.id for a in alerts.stale] == [7]
+    assert last_update(old_statement) == datetime(2026, 6, 25, 23, 59, tzinfo=TZ)
+
+
+def test_manual_balance_goes_stale_after_a_week() -> None:
+    # Garanti ana hesap gibi elle girilen bakiye: 5 Kasım'da girildiyse 27 Kasım'da eski
+    now = datetime(2026, 11, 27, 9, 0, tzinfo=TZ)
+    manual = _account(id=9, provider="manual", balance_at=datetime(2026, 11, 5, 15, 47, tzinfo=TZ))
+    alerts = overview_alerts([manual], [], [], _fx(), now)
+    assert [a.id for a in alerts.stale] == [9]
+
+
+def test_stale_feeds_flags_rexven_totals_not_refreshed() -> None:
+    today = date(2026, 11, 27)
+    wallets = [
+        FinWallet(company_id="tr", kind="seller", name="Rexven platformu", as_of=date(2026, 11, 26), source="rexven"),
+        FinWallet(company_id="tr", kind="seller", name="Rexven platformu", as_of=date(2026, 11, 23), source="rexven"),
+        FinWallet(company_id="llc", kind="producer", name="Rexven platformu", as_of=date(2026, 11, 20), source="rexven"),
+        FinWallet(company_id="llc", kind="seller", name="Elle", as_of=date(2026, 1, 1)),  # elle girilen: bakılmaz
+    ]
+    receivables = [
+        FinReceivable(company_id="tr", source="iyzico", as_of=date(2026, 11, 26), amount=D("1")),
+        FinReceivable(company_id="tr", source="lidio", as_of=date(2026, 11, 23), amount=D("1")),
+    ]
+    feeds = stale_feeds(wallets, receivables, today)
+    assert [(f.company_id, f.label, f.as_of) for f in feeds] == [
+        ("llc", "üretici cüzdanları", date(2026, 11, 20)),
+        ("tr", "Lidio bekleyen tahsilat", date(2026, 11, 23)),
+    ]
 
 
 def test_card_purchase_and_ach_beneficiary_are_not_transfers() -> None:

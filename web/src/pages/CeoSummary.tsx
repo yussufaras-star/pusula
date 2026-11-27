@@ -20,10 +20,13 @@ export function CeoSummaryPage({
   endpoint = "/api/ceo-summary",
   title = "Yönetici özeti",
   sub = "Her sabah son iş gününün özeti Cliq'te #headquarters kanalına gider · ciro ve yeni müşteri tüm şirket, huni satış ekibi",
+  embedded = false,
 }: {
   endpoint?: string;
   title?: string;
   sub?: string;
+  // Başka bir sayfanın içinde: sayfa başlığı yerine bölüm başlığı
+  embedded?: boolean;
 }) {
   const { data, error } = usePolling<{ summaries: Summary[] }>(endpoint, 10 * 60_000);
   const [index, setIndex] = useState(0);
@@ -32,9 +35,9 @@ export function CeoSummaryPage({
 
   return (
     <div className="ceo-page">
-      <div className="page-head">
+      <div className={embedded ? "page-head fin-part-head" : "page-head"}>
         <div>
-          <h1>{title}</h1>
+          {embedded ? <h2>{title}</h2> : <h1>{title}</h1>}
           <div className="sub">{sub}</div>
         </div>
         {rows.length ? (

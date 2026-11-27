@@ -19,6 +19,7 @@ from pusula.db.models import (
     FinCompany,
     FinDecision,
     FinPlannedItem,
+    FinReceivable,
     FinSnapshot,
     FinSnapshotLine,
     FinTaxSettings,
@@ -44,6 +45,8 @@ class Bundle:
     transactions: list[FinTransaction] = field(default_factory=list)
     planned: list[FinPlannedItem] = field(default_factory=list)
     decisions: list[FinDecision] = field(default_factory=list)
+    wallets: list[FinWallet] = field(default_factory=list)
+    receivables: list[FinReceivable] = field(default_factory=list)
     fx: FxTable = field(default_factory=lambda: FxTable([]))
 
 
@@ -154,6 +157,7 @@ def overview_view(
     proj = analytics.projection(cash, planned, fx, today, weeks=13)
     low = analytics.lowest_week(proj)
     alerts = analytics.overview_alerts(accounts, planned, proj, fx, now)
+    names = {c.id: c.name for c in bundle.companies}
 
     cards = []
     for company in sorted(bundle.companies, key=lambda c: c.sort):
@@ -196,7 +200,12 @@ def overview_view(
             else None,
             "overdue": {"count": len(alerts.overdue), "usd": money(alerts.overdue_usd)},
             "sync_errors": [{"id": a.id, "name": a.name, "error": a.sync_error} for a in alerts.sync_errors],
-            "stale": [{"id": a.id, "name": a.name, "last_synced_at": a.last_synced_at} for a in alerts.stale],
+            "stale": [{"id": a.id, "name": a.name, "as_of": analytics.last_update(a)} for a in alerts.stale]
+            + [
+                {"id": None, "name": f"{names.get(f.company_id, f.company_id)} {f.label}", "as_of": f.as_of}
+                for f in analytics.stale_feeds(bundle.wallets, bundle.receivables, now.date())
+                if f.company_id in scope
+            ],
             "warnings": [
                 {"id": a.id, "name": a.name, "warning": a.sync_warning}
                 for a in accounts
@@ -699,6 +708,11 @@ def recurring_view(bundle: Bundle, scope: Sequence[str], start: date, end: date)
     accounts = {a.id: a for a in bundle.accounts if a.id is not None}
     txs = [t for t in bundle.transactions if t.company_id in scope]
     rows = recurring.recurring(txs, bundle.fx, kinds, start, end)
+    # Projeksiyonda açık kalemi olan karşı taraf "planda" sayılır (Plana ekle iki kez eklemesin).
+    planned = {(p.company_id, (p.counterparty or p.title).casefold()) for p in bundle.planned if p.status == "open"}
+
+    def company_of(r: recurring.Recurring) -> str | None:
+        return accounts[r.accounts[0]].company_id if r.accounts and r.accounts[0] in accounts else None
     groups: dict[str, dict[str, Any]] = {}
     for r in rows:
         key = r.category_id or "_none"
@@ -718,7 +732,8 @@ def recurring_view(bundle: Bundle, scope: Sequence[str], start: date, end: date)
                 "key": r.key,
                 "label": r.label,
                 "category_id": r.category_id,
-                "company_id": accounts[r.accounts[0]].company_id if r.accounts and r.accounts[0] in accounts else None,
+                "company_id": company_of(r),
+                "planned": (company_of(r), r.label.casefold()) in planned,
                 "accounts": [accounts[a].name for a in r.accounts if a in accounts],
                 "count": r.count,
                 "months": r.months,
