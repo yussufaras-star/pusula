@@ -612,7 +612,22 @@ export interface FinAlert {
   account: string;
 }
 
+export interface WaitingPayment {
+  tx_id: number;
+  booked_at: string;
+  amount: number;
+  currency: string;
+  counterparty: string | null;
+  description: string;
+  company_id: CompanyId;
+  account: string;
+  check_on: string;
+}
+
 export interface Alerts {
   alerts: FinAlert[];
   remind_days: number[];
+  checked_at: string | null;
+  rexven_scanned_until: string | null;
+  waiting: WaitingPayment[];
 }

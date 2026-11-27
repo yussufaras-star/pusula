@@ -84,14 +84,20 @@ def test_each_payout_matches_one_payment() -> None:
     assert matched == {a.id} and set(found) == {("uretici", b.id)}
 
 
-def test_notice_text_lists_and_links() -> None:
-    row = {"kind": "uretici", "status": "riskli", "booked_at": date(2026, 11, 12), "account": "Wise USD", "counterparty": "Üretici LLC",
-           "description": "", "amount": D("-3000"), "currency": "USD", "reason": "Rexven'de düşülmedi"}
-    text = alerts.notice_text([row] * 10, "https://panel.example/")
-    assert text.startswith("Finans uyarısı: 10 hareket")
-    assert "Üretici ödemesi (hatırlatma): 12.11 Wise USD → Üretici LLC, 3.000,00 USD" in text
-    assert "…ve 2 uyarı daha" in text
-    assert text.endswith("https://panel.example/#/finans/uyarilar")
+def test_notice_card_groups_by_kind_and_links() -> None:
+    base = {"account": "Wise USD", "description": "", "currency": "USD"}
+    producer = base | {"kind": "uretici", "status": "riskli", "booked_at": date(2026, 11, 12), "counterparty": "Üretici LLC",
+                       "amount": D("-3000"), "reason": "Bankadan çıktı, Rexven'de üretici cüzdanından düşülmedi"}
+    unusual = base | {"kind": "olagandisi", "status": "acik", "booked_at": date(2026, 11, 13), "counterparty": "Yeni Alıcı",
+                      "amount": D("-30000"), "reason": "Yeni alıcıya ilk ödeme (30.000 $); Tek seferde büyük çıkış (30.000 $)"}
+    now = datetime(2026, 11, 27, 9, tzinfo=timezone.utc)
+    text, card, slides = alerts.notice_card([producer] * 3 + [unusual] * 7, "https://panel.example/", now)
+    assert text == "*10 finans uyarısı karar bekliyor* · [Güven / Riskli seç](https://panel.example/#/finans/uyarilar)"
+    assert card["title"] == "Finans uyarıları · 27.11.2026"
+    assert [s.get("title") for s in slides] == ["Üretici ödemesi · 3", "Olağan dışı transfer · 5", None]
+    assert slides[0]["data"]["rows"][0] == {"Tarih": "12.11", "Kime": "Üretici LLC", "Tutar": "3.000,00 USD", "Neden": "Hatırlatma · Rexven'de düşülmemiş"}
+    assert slides[1]["data"]["rows"][0]["Neden"] == "Yeni alıcıya ilk ödeme · Tek seferde büyük çıkış"
+    assert slides[2] == {"type": "text", "data": "…ve 2 uyarı daha panelde."}
 
 
 def test_due_includes_expired_reminders() -> None:
