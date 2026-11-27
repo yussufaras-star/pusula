@@ -129,8 +129,8 @@ function WaitingCard({ rows }: { rows: WaitingPayment[] }) {
       </div>
       <div className="card-body">
         <p className="muted fin-note">
-          Rexven'e işlenmesi birkaç gün sürebildiği için ödemeye 3 gün süre tanınır. Kontrol günü geldiğinde Rexven'de karşılığı yoksa uyarıya
-          dönüşür.
+          Rexven üretici cüzdanları bu günü henüz taramadı (tarama yalnız NetBird'e bağlı bilgisayardaki senkronla yapılır, günde iki
+          kez). Tarama gelince Rexven'de karşılığı yoksa hemen uyarıya dönüşür.
         </p>
         <div className="table-wrap">
           <table className="board fin-table">
@@ -140,7 +140,6 @@ function WaitingCard({ rows }: { rows: WaitingPayment[] }) {
                 <th>Hesap</th>
                 <th>Karşı taraf</th>
                 <th className="num">Tutar</th>
-                <th>Kontrol</th>
               </tr>
             </thead>
             <tbody>
@@ -152,7 +151,6 @@ function WaitingCard({ rows }: { rows: WaitingPayment[] }) {
                   </td>
                   <td title={w.description}>{w.counterparty || w.description.slice(0, 60)}</td>
                   <td className="num">{money(Math.abs(w.amount), w.currency, 2)}</td>
-                  <td>{day(w.check_on)}</td>
                 </tr>
               ))}
             </tbody>

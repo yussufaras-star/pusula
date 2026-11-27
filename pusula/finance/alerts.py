@@ -14,7 +14,8 @@ Karar:
 biriminde aynı tutarlı bir supplierPayout kaydıyla (banka gününden PAYOUT_BEFORE
 gün önce ile PAYOUT_AFTER gün sonrası arası) eşleşmeli. Rexven yalnız NetBird'e
 bağlı bilgisayardan okunur; ödemeler fin_producer_payouts'a oradan yazılır.
-Tarama, banka gününden PRODUCER_GRACE gün sonrasını kapsamadıkça uyarı açılmaz.
+Uyarı, Rexven taraması banka gününü kapsar kapsamaz açılır (bekleme yok: kayıt
+sonradan işlenirse uyarı kendiliğinden kapanır).
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ BIG_USD = Decimal("25000")
 SUBSCRIPTION_CATEGORIES = frozenset({"yazilim"})
 PRODUCER_CATEGORIES = frozenset({"uretici", "tedarikci"})
 PRODUCER_LOOKBACK = 45
-PRODUCER_GRACE = 3
+PRODUCER_GRACE = 0
 PAYOUT_BEFORE = 7
 PAYOUT_AFTER = 10
 PAYOUT_TOLERANCE = Decimal("0.005")  # tutar farkı (oran); en az 1 birim

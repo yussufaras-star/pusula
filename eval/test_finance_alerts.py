@@ -62,19 +62,20 @@ def test_unusual_transfers() -> None:
 def test_producer_payment_must_be_deducted_in_rexven() -> None:
     paid = tx(date(2026, 11, 9), "-5000", "Üretici LLC", "tedarikci")
     missing = tx(date(2026, 11, 12), "-3000", "Üretici LLC", "tedarikci")
-    recent = tx(date(2026, 11, 25), "-9000", "Üretici LLC", "tedarikci")  # Rexven'e işlenmesi için süre var
+    recent = tx(date(2026, 11, 25), "-9000", "Üretici LLC", "tedarikci")  # bekleme yok: hemen uyarı
     tl = tx(date(2026, 10, 30), "-100000", "ÜRETİCİ AŞ", "uretici", currency="TRY")
     payouts = [payout(date(2026, 11, 10), "5000"), payout(date(2026, 10, 30), "100000.00", "TRY"), payout(date(2026, 11, 12), "3000", "TRY")]
     found, matched = detect([paid, missing, recent, tl], payouts)
-    assert set(found) == {("uretici", missing.id)}  # para birimi farklı Rexven kaydı eşleşmez
+    assert set(found) == {("uretici", missing.id), ("uretici", recent.id)}  # para birimi farklı Rexven kaydı eşleşmez
     assert matched == {paid.id, tl.id}
 
 
 def test_producer_check_waits_for_rexven_scan() -> None:
     missing = tx(date(2026, 11, 12), "-3000", "Üretici LLC", "tedarikci")
     assert detect([missing], [], scanned=None)[0] == {}
-    # tarama bankadan 3 gün sonrasını kapsamıyor
-    assert detect([missing], [], scanned=date(2026, 11, 14))[0] == {}
+    # tarama banka gününe ulaşmadı; ulaşınca hemen uyarı
+    assert detect([missing], [], scanned=date(2026, 11, 11))[0] == {}
+    assert ("uretici", missing.id) in detect([missing], [], scanned=date(2026, 11, 12))[0]
 
 
 def test_each_payout_matches_one_payment() -> None:
